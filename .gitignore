@@ -1,0 +1,27 @@
+# Large build trees — tracked via kernel.config-* and patch files instead
+kernel-src/
+qemu-spitz/
+
+# Busybox source tarball (binary kept, source is upstream)
+initramfs/busybox-1.36.1/
+initramfs/busybox-1.36.1.tar.bz2
+
+# Built initramfs cpio archive (regenerated from rootfs/)
+initramfs/initramfs-minimal.cpio.gz
+
+# Flash scripts generate these
+flash/*.ko
+flash/modules/
+
+# Userspace tarballs (sources are upstream)
+userspace/*.tar.gz
+userspace/*.tar.bz2
+userspace/*.tar.xz
+
+# Compiled userspace build artifacts
+userspace/pcmciautils-018/
+userspace/sysfsutils-2.1.0/
+userspace/wpa_supplicant-2.11/
+
+# Kernel build output blobs (tracked separately as zImage-*)
+# zImage-* are small enough to track directly
