@@ -28,11 +28,15 @@
 #include <linux/i2c.h>
 #include <linux/platform_data/i2c-pxa.h>
 #include <linux/io.h>
+#include <linux/delay.h>
 #include <linux/regulator/machine.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/spi/corgi_lcd.h>
 #include <linux/mtd/sharpsl.h>
+#include <linux/pxa2xx_ssp.h>
+
+#include "irqs.h"
 #include <linux/input-event-codes.h>
 #include <linux/input/matrix_keypad.h>
 #include <linux/gpio_keys.h>
@@ -573,9 +577,24 @@ static struct gpiod_lookup_table corgi_udc_gpio_table = {
 };
 
 #if IS_ENABLED(CONFIG_SPI_PXA2XX)
+/*
+ * pxa2xx-spi shares the SSP port that the pxa25x-ssp core driver already
+ * enumerated (matched via pxa_ssp_request() on port id = pdev->id + 1).
+ * corgi_spi_device_info.id=1 -> port_id=1 -> pxa25x_device_ssp (SSP1).
+ * We must still tell the driver which SSP variant it is and how many chip
+ * selects exist, or pxa2xx_spi_init_pdata() bails with "missing platform
+ * data" / creates only one chip select.
+ */
+static const struct property_entry corgi_spi_properties[] = {
+	PROPERTY_ENTRY_U32("intel,spi-pxa2xx-type", PXA25x_SSP),
+	PROPERTY_ENTRY_U32("num-cs", 3),
+	{ }
+};
+
 static const struct platform_device_info corgi_spi_device_info = {
 	.name = "pxa2xx-spi",
 	.id = 1,	/* must match corgi_spi_devices[].bus_num below */
+	.properties = corgi_spi_properties,
 };
 
 static struct gpiod_lookup_table corgi_spi_gpio_table = {
@@ -626,7 +645,18 @@ static void corgi_bl_kick_battery(void)
 static struct gpiod_lookup_table corgi_lcdcon_gpio_table = {
 	.dev_id = "spi1.1",
 	.table = {
-		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_BACKLIGHT_CONT,
+		/*
+		 * BL_CONT is a SCOOP gpio (CORGI_GPIO_BACKLIGHT_CONT =
+		 * CORGI_SCOOP_GPIO_BASE + 7), not a PXA gpio. The old entry
+		 * named chip "gpio-pxa" with the scoop-absolute number
+		 * (PXA_NR_BUILTIN_GPIO + 7 = 199), so corgi-lcd's probe failed
+		 * with "requested GPIO 199 out of range [0..84] for gpio-pxa"
+		 * (-EINVAL) and there was no backlight/lcd device at all.
+		 * Look it up on the scoop chip by its relative offset, exactly
+		 * like corgi_audio_gpio_table does for the other scoop lines.
+		 */
+		GPIO_LOOKUP("sharp-scoop",
+			    CORGI_GPIO_BACKLIGHT_CONT - CORGI_SCOOP_GPIO_BASE,
 			    "BL_CONT", GPIO_ACTIVE_HIGH),
 		{ },
 	},
@@ -756,7 +786,6 @@ static struct platform_device *devices[] __initdata = {
 	&corgiled_device,
 	&corgi_audio_device,
 	&sharpsl_nand_device,
-	&sharpsl_rom_device,
 };
 
 static struct i2c_board_info __initdata corgi_i2c_devices[] = {
@@ -789,6 +818,70 @@ static void __init corgi_init(void)
 	PCFR |= PCFR_OPDE;
 
 	pxa2xx_mfp_config(ARRAY_AND_SIZE(corgi_pin_config));
+
+	/*
+	 * EARLY BOOT MARKER: drive the SCOOP green LED (PA11) high via a
+	 * raw ioremap + register write, before any driver probing. Uses
+	 * the green LED instead of the orange charge LED (GPIO13) because
+	 * the orange LED's circuit appears to require a charger physically
+	 * connected to have any power at all -- it doesn't light regardless
+	 * of GPIO state when running on battery only, making it useless as
+	 * a cold-boot signal. SCOOP lives on the static-memory/chip-select
+	 * bus, not the always-mapped peripheral bus GPIO13 is on, so it
+	 * needs an explicit ioremap() here rather than io_p2v(). Mirrors
+	 * scoop_probe()'s own init sequence (MCR/CPR then GPCR/GPWR).
+	 * If this lights on a cold boot, the kernel definitely reached
+	 * board init (.init_machine).
+	 */
+	{
+		void __iomem *scoop = ioremap(0x10800000, 0x30);
+		if (scoop) {
+			__raw_writew(0x0140, scoop + 0x00);	/* SCOOP_MCR */
+			__raw_writew(0x0000, scoop + 0x0C);	/* SCOOP_CPR */
+			__raw_writew(1 << 1, scoop + 0x20);	/* SCOOP_GPCR: PA11 = output */
+			__raw_writew(1 << 1, scoop + 0x24);	/* SCOOP_GPWR: PA11 high (green LED on) */
+		}
+	}
+
+	/*
+	 * COLD-BOOT W100 FRAMEBUFFER FIX (crystal warm-up).
+	 *
+	 * The W100 (ATI Imageon) framebuffer sits on nCS2 at 0x08000000. Its
+	 * static-memory timing (MSC1.CS2) is already VLIO from the bootloader,
+	 * so the bus is fine -- but on a genuine cold power-on the W100's
+	 * crystal oscillator starts from a dead stop and its register interface
+	 * returns garbage until the oscillator stabilises (a few ms to tens of
+	 * ms). w100fb_probe() reads mmCHIP_ID immediately and, on that garbage,
+	 * prints "Unknown imageon chip ID" and bails -> no fb -> dummy console
+	 * -> BLACK SCREEN. Warm boots never hit this because the crystal is
+	 * already running (which is why it "worked" before).
+	 *
+	 * Poll mmCHIP_ID here, early in machine init -- before any driver
+	 * (corgi_lcd, w100fb) touches the chip -- giving the oscillator time to
+	 * spin up. Once it reads back a valid Imageon id the chip stays clocked,
+	 * so w100fb's own read later succeeds and it binds. These reads are safe
+	 * at this early point (they return garbage, not a bus stall); the loop
+	 * bails after ~1s if the chip never answers.
+	 */
+	{
+		void __iomem *w100 = ioremap(0x08000000 + 0x10000, 0x1000);
+		if (w100) {
+			u32 id = 0;
+			int i;
+			for (i = 0; i < 200; i++) {
+				id = readl(w100 + 0x0000);	/* mmCHIP_ID */
+				if (id == 0x57411002 ||		/* W100  */
+				    id == 0x56441002)		/* W3200 */
+					break;
+				mdelay(5);
+			}
+			pr_info("w100-warmup: chip-id=0x%08x after %d ms%s\n",
+				id, i * 5,
+				(id == 0x57411002 || id == 0x56441002) ?
+					" (ready)" : " (TIMEOUT -- still no W100)");
+			iounmap(w100);
+		}
+	}
 
 	/* allow wakeup from various GPIOs */
 	gpio_set_wake(CORGI_GPIO_KEY_INT, 1);

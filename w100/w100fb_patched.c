@@ -33,6 +33,7 @@
 #include <asm/io.h>
 #include <linux/uaccess.h>
 #include <video/w100fb.h>
+
 #include "w100fb.h"
 
 /*
@@ -41,6 +42,7 @@
 static void w100_suspend(u32 mode);
 static void w100_vsync(void);
 static void w100_hw_init(struct w100fb_par*);
+static void w100_soft_reset(void);
 static void w100_pwm_setup(struct w100fb_par*);
 static void w100_init_clocks(struct w100fb_par*);
 static void w100_setup_memory(struct w100fb_par*);
@@ -659,15 +661,41 @@ static int w100fb_probe(struct platform_device *pdev)
 	if (remapped_regs == NULL)
 		goto out;
 
+	/*
+	 * ZAURUS COLD-BOOT WAKE: on a genuine cold power-on the W100 comes up
+	 * asleep and its register space (mmCHIP_ID et al) returns garbage. On a
+	 * normal Zaurus the bootloader wakes/resets the chip before Linux runs;
+	 * our boot path does not, so this probe used to read a bad chip id,
+	 * print "Unknown imageon chip ID" and bail -> no fb -> black screen.
+	 * Warm boots hid the bug because a previous boot had left the chip
+	 * awake. The chip's soft reset goes through the CFG space (remapped_base
+	 * + cfgSTATUS), which is reachable even while the core is asleep, so
+	 * issue it here -- before identifying the chip -- and retry a few times
+	 * to let the internal clock spin up after each reset. Harmless warm.
+	 */
+	{
+		int i;
+		for (i = 0; i < 10; i++) {
+			w100_soft_reset();
+			chip_id = readl(remapped_regs + mmCHIP_ID);
+			if (chip_id == CHIP_ID_W100 ||
+			    chip_id == CHIP_ID_W3200 ||
+			    chip_id == CHIP_ID_W3220)
+				break;
+			mdelay(10);
+		}
+		printk(KERN_INFO "w100fb: chip id 0x%08x after %d soft-reset(s)\n",
+		       chip_id, i + 1);
+	}
+
 	/* Identify the chip */
 	printk("Found ");
-	chip_id = readl(remapped_regs + mmCHIP_ID);
 	switch(chip_id) {
 		case CHIP_ID_W100:  printk("w100");  break;
 		case CHIP_ID_W3200: printk("w3200"); break;
 		case CHIP_ID_W3220: printk("w3220"); break;
 		default:
-			printk("Unknown imageon chip ID\n");
+			printk("Unknown imageon chip ID 0x%08x\n", chip_id);
 			err = -ENODEV;
 			goto out;
 	}
@@ -1130,6 +1158,17 @@ static int w100_pll_adjust(struct w100_pll_info *pll)
 static int w100_pll_calibration(struct w100_pll_info *pll)
 {
 	int status;
+
+	/*
+	 * ZAURUS: give the crystal oscillator real time to reach a stable
+	 * frequency before w100_pll_adjust() starts measuring it. The
+	 * existing reset pulse in w100_soft_reset() is only ~100us, tuned
+	 * for a warm SoC reset where the crystal is already oscillating;
+	 * on a genuine cold boot the crystal starts from a dead stop and
+	 * needs real settling time, or the test-count-based calibration
+	 * loop measures an unstable frequency and can fail to converge.
+	 */
+	mdelay(50);
 
 	status = w100_pll_adjust(pll);
 
