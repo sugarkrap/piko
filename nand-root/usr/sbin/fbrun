@@ -1,0 +1,7 @@
+#!/bin/sh
+# fbrun <program> [args...] -- run a framebuffer program, then
+# unconditionally restore the console to text mode afterward, however
+# it exits (clean exit, SIGTERM, or an uncatchable SIGKILL/crash).
+# No `exec`: this shell must survive the program so fbtext always runs.
+"$@"
+fbtext
