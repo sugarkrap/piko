@@ -1,0 +1,33 @@
+#!/bin/sh
+# wifiup -- one-word WiFi bring-up for the Prism2/hostap card. Encapsulates
+# the slash/colon-heavy iwconfig/ifconfig commands the device keyboard can't
+# type, and applies the workarounds for "associates but no data" on this old
+# driver. Edit the three values below for a different network.
+
+SSID="D6F7"
+IP="10.43.112.72"
+MASK="255.255.255.0"
+
+echo "bringing wlan0 up..."
+ifconfig wlan0 up
+
+# Kill any wpa_supplicant that may be holding the card (it fights iwconfig).
+if test -f /var/run/wpa_supplicant.pid; then
+	kill "$(cat /var/run/wpa_supplicant.pid)" 2>/dev/null
+	rm -f /var/run/wpa_supplicant.pid /var/run/wpa_supplicant/wlan0
+fi
+
+iwconfig wlan0 mode managed 2>/dev/null
+iwconfig wlan0 key off 2>/dev/null      # force fully open (no stale WEP privacy bit)
+iwconfig wlan0 power off 2>/dev/null    # disable power-save (drops broadcast/ARP)
+iwconfig wlan0 essid "$SSID"
+
+sleep 2
+ifconfig wlan0 "$IP" netmask "$MASK" up
+
+echo ""
+echo "=== wlan0 now ==="
+iwconfig wlan0
+ifconfig wlan0
+echo ""
+echo "configured $IP on $SSID -- try:  netinfo   (for full diagnostics)"

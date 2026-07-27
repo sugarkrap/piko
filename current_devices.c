@@ -332,9 +332,23 @@ struct platform_device pxa_device_asoc_ssp4 = {
 	.id		= 3,
 };
 
+static u64 pxa_pcm_audio_dma_mask = DMA_BIT_MASK(32);
+
+/*
+ * Missing .dev.dma_mask/.coherent_dma_mask here (found 2026-07-26 while
+ * bringing up the audio stack) made snd_pcm_set_managed_buffer_all() /
+ * preallocate_pages() fail with -EINVAL ("ASoC error (-22)... can't create
+ * pcm WM8731"), since it has no valid DMA mask to allocate coherent buffers
+ * against. Every other DMA-capable platform_device in this file sets this;
+ * this one just never did.
+ */
 struct platform_device pxa_device_asoc_platform = {
 	.name		= "pxa-pcm-audio",
 	.id		= -1,
+	.dev		= {
+		.dma_mask = &pxa_pcm_audio_dma_mask,
+		.coherent_dma_mask = DMA_BIT_MASK(32),
+	},
 };
 
 static struct resource pxa_rtc_resources[] = {

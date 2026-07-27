@@ -1,0 +1,14 @@
+#!/bin/sh
+# mdev hook for the SD card (/dev/mmcblk0p1). mdev sets $ACTION to
+# "add" (card inserted / coldplug) or "remove" (card pulled).
+#
+# Always lazy-unmount first: `umount -l` (MNT_DETACH) detaches the mount
+# from the namespace immediately WITHOUT a synchronous flush, so it never
+# blocks -- even when the backing card is already gone. A plain umount in
+# that situation wedges in uninterruptible D-state on mmc I/O that never
+# completes (Corgi's pxamci card-detect does not reliably signal removal),
+# which then hangs poweroff's `umount -a` and leaves the machine
+# semi-dead (found 2026-07-27). Re-mount only when a card is actually
+# present (add), not on removal.
+umount -l /mnt/card 2>/dev/null
+[ "$ACTION" = "remove" ] || mount /mnt/card 2>/dev/null

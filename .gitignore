@@ -1,27 +1,112 @@
-# Large build trees — tracked via kernel.config-* and patch files instead
+# =====================================================================
+#  zaurus-refresh .gitignore
+#
+#  Philosophy: track hand-written SOURCE (patched kernel .c files, board
+#  configs, rootfs config/scripts, flash tooling sources, docs) and the
+#  small tracked kernel blobs (zImage-*). Never track large build outputs,
+#  device dumps, upstream source trees, or copied-in binaries -- they are
+#  all regenerated from the tracked sources + documented build steps.
+# =====================================================================
+
+# --- Large upstream/build trees (rebuilt from configs + patch files) ---
 kernel-src/
 qemu-spitz/
 
-# Busybox source tarball (binary kept, source is upstream)
+# --- Editor / tool caches ---
+.cache/
+**/.cache/
+
+# =====================================================================
+#  initramfs/  -- busybox source + built cpio images
+# =====================================================================
 initramfs/busybox-1.36.1/
 initramfs/busybox-1.36.1.tar.bz2
+initramfs/*.cpio.gz
+# built minimal bootstrap rootfs tree (assembled, not source-of-truth)
+initramfs/rootfs-minimal/
 
-# Built initramfs cpio archive (regenerated from rootfs/)
-initramfs/initramfs-minimal.cpio.gz
-
-# Flash scripts generate these
+# =====================================================================
+#  flash/  -- track *.c / *.sh / *.py / *.md tooling + the small tracked
+#  bootstrap zImage; ignore built NAND images, device backups, recovery
+#  blobs, checksums, and compiled helper binaries (their sources ARE kept).
+# =====================================================================
 flash/*.ko
 flash/modules/
+flash/.cache/
+flash/*.cpio.gz
+flash/*.jffs2
+flash/*.jffs2.*
+flash/*.bin
+flash/*.img
+flash/*.sha256
+flash/*.enc
+flash/recovery-dbks/
+# kernel experiments/backups (the live flash/zImage bootstrap stays tracked)
+flash/zImage.bad-*
+flash/zImage.prev-*
+flash/zImage-minimal-bootstrap-*
+# compiled flash helpers -- the matching *.c sources are tracked
+flash/encsh
+flash/pico-smf-write
+flash/piko-backup
+flash/piko-install-mtd1
+flash/piko-install-mtd1-safe
+flash/piko-install-mtd2
+flash/piko-install-mtd3-safe
 
-# Userspace tarballs (sources are upstream)
+# =====================================================================
+#  nand-root/  -- the staged stage-2 rootfs. Track hand-written config
+#  and scripts only; the large copied-in artifacts (kernel modules, the
+#  full zImage, busybox/coreutils, zsh functions, terminfo) are rebuilt.
+# =====================================================================
+nand-root/lib/
+nand-root/boot/
+nand-root/bin/
+nand-root/sbin/
+nand-root/usr/bin/
+nand-root/usr/share/
+nand-root/home/
+nand-root/root/
+# usr/sbin is a mix of hand-written scripts and copied-in ELF binaries:
+# ignore everything, then re-include the scripts that ARE source-of-truth.
+nand-root/usr/sbin/*
+!nand-root/usr/sbin/audioon
+!nand-root/usr/sbin/audinfo
+!nand-root/usr/sbin/softreboot
+!nand-root/usr/sbin/sdcard
+!nand-root/usr/sbin/fbrun
+!nand-root/usr/sbin/fbtext
+!nand-root/usr/sbin/wifiup
+!nand-root/usr/sbin/netinfo
+!nand-root/usr/sbin/ver
+
+# =====================================================================
+#  userspace/  -- upstream source trees + tarballs + compiled test bins;
+#  our own small sources under userspace/src/*.c are tracked.
+# =====================================================================
 userspace/*.tar.gz
 userspace/*.tar.bz2
 userspace/*.tar.xz
-
-# Compiled userspace build artifacts
+userspace/src/*.tar.gz
+userspace/src/*.tar.bz2
+userspace/src/*.tar.xz
 userspace/pcmciautils-018/
 userspace/sysfsutils-2.1.0/
 userspace/wpa_supplicant-2.11/
+userspace/wireless_tools.29/
+userspace/bin/
+# upstream source trees vendored under userspace/src/
+userspace/src/dropbear-2025.88/
+userspace/src/kexec-tools-2.0.30/
+userspace/src/mtd-utils-2.2.0/
+userspace/src/microwindows/
+userspace/src/wireless_tools.29/
+userspace/src/wpa_supplicant-2.10/
+userspace/src/statusbar/
+# compiled host tools (built from the tracked .c next to them)
+userspace/src/md5sum
 
-# Kernel build output blobs (tracked separately as zImage-*)
-# zImage-* are small enough to track directly
+# --- misc vendored patch trees ---
+nand/hostap-patched/
+
+# Kernel build output blobs are tracked directly as zImage-* (small enough).

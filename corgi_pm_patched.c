@@ -41,7 +41,16 @@ static void corgi_charger_init(void)
 	gpio_request(CORGI_GPIO_ADC_TEMP_ON, "ADC Temp On");
 	gpio_direction_output(CORGI_GPIO_ADC_TEMP_ON, 0);
 	gpio_request(CORGI_GPIO_CHRG_ON, "Charger On");
-	gpio_direction_output(CORGI_GPIO_CHRG_ON, 0);
+	/*
+	 * CORGI_GPIO_CHRG_ON also gates the orange charge LED (GPIO13) in
+	 * hardware: closed (low), the LED never lights regardless of AC
+	 * state; open (high), the charger circuit lights/extinguishes it
+	 * automatically based on whether an adapter is actually plugged in.
+	 * Hold it open permanently from boot so the LED always tracks real
+	 * charging state -- see corgi_charge() below, which no longer
+	 * touches this line.
+	 */
+	gpio_direction_output(CORGI_GPIO_CHRG_ON, 1);
 	gpio_request(CORGI_GPIO_CHRG_UKN, "Charger Unknown");
 	gpio_direction_output(CORGI_GPIO_CHRG_UKN, 0);
 	gpio_request(CORGI_GPIO_AC_IN, "Charger Detection");
@@ -59,16 +68,18 @@ static void corgi_measure_temp(int on)
 
 static void corgi_charge(int on)
 {
+	/*
+	 * CORGI_GPIO_CHRG_ON is intentionally never toggled here -- it is
+	 * held permanently open by corgi_charger_init() so the orange charge
+	 * LED always works. Only CHRG_UKN (the suspend-time charge-bypass
+	 * line) is managed by this function now.
+	 */
 	if (on) {
-		if (machine_is_corgi() && (sharpsl_pm.flags & SHARPSL_SUSPENDED)) {
-			gpio_set_value(CORGI_GPIO_CHRG_ON, 0);
+		if (machine_is_corgi() && (sharpsl_pm.flags & SHARPSL_SUSPENDED))
 			gpio_set_value(CORGI_GPIO_CHRG_UKN, 1);
-		} else {
-			gpio_set_value(CORGI_GPIO_CHRG_ON, 1);
+		else
 			gpio_set_value(CORGI_GPIO_CHRG_UKN, 0);
-		}
 	} else {
-		gpio_set_value(CORGI_GPIO_CHRG_ON, 0);
 		gpio_set_value(CORGI_GPIO_CHRG_UKN, 0);
 	}
 }
@@ -141,8 +152,32 @@ static bool corgi_charger_wakeup(void)
 static unsigned long corgipm_read_devdata(int type)
 {
 	switch(type) {
-	case SHARPSL_STATUS_ACIN:
-		return !gpio_get_value(CORGI_GPIO_AC_IN);
+	case SHARPSL_STATUS_ACIN: {
+		int raw = gpio_get_value(CORGI_GPIO_AC_IN);
+		int acin;
+		/*
+		 * FIXED (2026-07-27): the previous unconditional `!raw` here
+		 * assumed AC_IN is active-low, matching mainline's Corgi/Shepherd
+		 * wiring (see spitz_pm.c's equivalent, also `!raw` -- same
+		 * convention). Live testing on this actual Husky board (charger
+		 * plugged in AND actively charging) showed raw=1 the whole time,
+		 * which `!raw` turned into acin=0 (offline) -- sharpsl_ac_isr()
+		 * then believed the charger had been removed and called
+		 * sharpsl_charge_off(), which explicitly forces the orange LED's
+		 * sharpsl-charge trigger to LED_OFF every time, even though real
+		 * charging kept happening (CORGI_GPIO_CHRG_ON is permanently held
+		 * open in corgi_charger_init(), so hardware charging wasn't
+		 * actually gated by this software mistake) -- this is what made
+		 * the LED appear to not light up all the time. Same class of
+		 * bug as the Husky SD write-protect polarity quirk in corgi.c's
+		 * husky_mci_gpio_table (GPIO_ACTIVE_HIGH override) -- Husky wiring
+		 * for this GPIO simply differs from stock Corgi/Shepherd. Only
+		 * flip polarity for Husky so real Corgi/Shepherd boards (if ever
+		 * used with this kernel) keep the mainline-correct behavior.
+		 */
+		acin = machine_is_husky() ? raw : !raw;
+		return acin;
+	}
 	case SHARPSL_STATUS_LOCK:
 		return gpio_get_value(sharpsl_pm.machinfo->gpio_batlock);
 	case SHARPSL_STATUS_CHRGFULL:
@@ -185,10 +220,21 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 	.bat_levels       = 40,
 	.bat_levels_noac  = sharpsl_battery_levels_noac,
 	.bat_levels_acin  = sharpsl_battery_levels_acin,
-	.status_high_acin = 188,
-	.status_low_acin  = 178,
-	.status_high_noac = 185,
-	.status_low_noac  = 175,
+	/*
+	 * Recalibrated 2026-07-26 for this specific (heavily aged) battery pack:
+	 * mainline's stock thresholds (188/178/185/175) assume a fresh battery
+	 * that peaks around raw ADC 213. This unit's real-world MAX1111 readings
+	 * top out around 140-145 even at/near full charge (confirmed against the
+	 * stock charger + Cacko, which does not treat this as low/critical) --
+	 * offset every threshold down by 40 to match. See sharpsl_pm_current.c's
+	 * battery_levels tables (offset by the same -40) and the disabled
+	 * critical-suspend trigger in sharpsl_battery_thread() for the rest of
+	 * this recalibration.
+	 */
+	.status_high_acin = 148,
+	.status_low_acin  = 138,
+	.status_high_noac = 145,
+	.status_low_noac  = 135,
 };
 
 static struct platform_device *corgipm_device;

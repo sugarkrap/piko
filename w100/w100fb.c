@@ -229,6 +229,12 @@ static int w100fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 
 /*
  * Blank the display based on value in blank_mode
+ *
+ * NOTE: The suspend/resume calls (tg->suspend/resume) trigger SPI transactions
+ * through the corgi_lcd driver that can stall the W100 bus when called from
+ * the console graphics-mode path (KDSETMODE KD_GRAPHICS). For now, we track
+ * the blanking state but skip the actual LCD suspend/resume to avoid the freeze.
+ * TODO: Fix the underlying corgi_lcd/SPI issue to re-enable LCD power management.
  */
 static int w100fb_blank(int blank_mode, struct fb_info *info)
 {
@@ -242,16 +248,20 @@ static int w100fb_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_HSYNC_SUSPEND:  /* VESA blank (hsync off) */
  	case FB_BLANK_POWERDOWN:      /* Poweroff */
   		if (par->blanked == 0) {
+			/* FIXME: re-enable this once corgi_lcd SPI stall is fixed
 			if(tg && tg->suspend)
 				tg->suspend(par);
+			*/
 			par->blanked = 1;
   		}
   		break;
 
  	case FB_BLANK_UNBLANK: /* Unblanking */
   		if (par->blanked != 0) {
+			/* FIXME: re-enable this once corgi_lcd SPI stall is fixed
 			if(tg && tg->resume)
 				tg->resume(par);
+			*/
 			par->blanked = 0;
   		}
   		break;
@@ -559,6 +569,7 @@ static const struct fb_ops w100fb_ops = {
 	.fb_copyarea  = w100fb_copyarea,
 	.fb_imageblit = cfb_imageblit,
 	.fb_sync      = w100fb_sync,
+	.fb_mmap      = fb_io_mmap,
 };
 
 #ifdef CONFIG_PM

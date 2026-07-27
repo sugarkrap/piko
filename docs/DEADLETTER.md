@@ -2,6 +2,16 @@
 
 *Everything you need to pick this up cold. Written 2026-07-21.*
 
+> **2026-07-26 update:** Project 1's "Flashing" section below (Cacko
+> `updater.sh`/`kernel-flash.sh` over CF/SD) describes the *original*,
+> now-superseded deployment method from before the two-stage kexec boot
+> and WiFi/SSH existed. **For the current stage-2 kernel, use
+> `flash/build-and-deploy.sh` instead — see
+> `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`.** The SD-card/NAND flash procedure
+> (`flash/FLASH-MTD1-MTD3-SAFE.md`) is now reserved for recovery
+> (device unreachable/unbootable) or bootstrap-partition (`mtd1`/`smf`)
+> changes only.
+
 ---
 
 ## Hardware
@@ -117,6 +127,11 @@ QEMU 9.1.0 is the **last version with `spitz` machine** (removed in 9.2). Built
 from source in `qemu-spitz/`.
 
 ### Flashing
+
+*(Historical — this was the deployment method before the two-stage kexec
+boot existed. Superseded by `flash/build-and-deploy.sh` for routine
+stage-2 updates once WiFi/SSH is up; see the 2026-07-26 note at the top
+of this file and `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`.)*
 
 Flash via Cacko's `updater.sh` mechanism over CF/SD. See `flash/kernel-flash.sh`.
 Flash kernel-only (zImage, no initrd.bin initially) to preserve existing Cacko
@@ -431,11 +446,10 @@ first Tab is pressed. This is zsh's standard autoload mechanism; it's what
 
 ## Project 4 — w100fb enhancements (pending)
 
-### Add FBIO_WAITFORVSYNC ioctl
+### Add FBIO_WAITFORVSYNC ioctl (done)
 
-`w100_vsync()` exists in `w100fb_patched.c` (lines 1590-1627, polls
-`GEN_INT_STATUS` bit 1) but is not exposed to userspace — `w100fb_ops` has no
-`.fb_ioctl`. To add:
+`w100_vsync()` is now exposed to userspace through `.fb_ioctl`, and
+`FBIO_WAITFORVSYNC` calls into the same wait path.
 
 ```c
 static int w100fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
@@ -451,10 +465,70 @@ static int w100fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long ar
 .fb_ioctl = w100fb_ioctl,
 ```
 
-DOSBox can then gate each frame on vsync via:
+DOSBox can gate each frame on vsync via:
 ```c
 ioctl(fb_fd, FBIO_WAITFORVSYNC, 0);
 ```
+
+Current runtime status on real hardware (kernel #151, 2026-07-24):
+
+- `FBIO_WAITFORVSYNC` is functional (`ok=300`, `fail=0` in probe runs).
+- Cadence is unstable and slow (`~39 ms` average wait, spikes to `~53 ms`).
+- The driver reports occasional `w100fb: vsync wait timed out`.
+
+Conclusion: userspace now has a proper vsync gate, but the underlying vblank
+timing source in `w100_vsync()` is still jittery and needs deeper register-level
+tuning.
+
+Follow-up A/B (kernel #152, 2026-07-24):
+
+- Added runtime params:
+  - `vsync_mode` (`0=irq`, `1=frame-counter`)
+  - `vsync_debug` (`Y/N` diagnostics on timeout)
+- `vsync_mode=0` remains the only usable path:
+  - `ok=180`, `fail=0`, average wait `~39.1 ms`.
+- `vsync_mode=1` is invalid on Husky with current register programming:
+  - `ok=0`, `fail=180`, continuous `vsync(frame) wait timed out`.
+  - debug snapshot shows `CRTC_FRAME` stuck at `0x0` during waits.
+
+Implication: keep `vsync_mode=0` as default and investigate why `CRTC_FRAME`
+does not advance (likely not a live frame counter in this configuration).
+
+Resolution update (kernel #157, 2026-07-24):
+
+- Horizontal "fuzzy" rendering was confirmed to be temporal 1px left-right
+  jitter, not blur.
+- Deployed and validated the IRQ stale-edge guard in `w100_vsync()`.
+- Restored legacy default boot clocking (`fastpll_mode=0`) while preserving the
+  runtime toggle (`/sys/devices/platform/w100fb/fastpllclk`).
+- Best stable runtime profile:
+  - `fastpllclk=0`
+  - `force_fullrate=Y`
+  - `vsync_mode=0`
+  - `vsync_debug=N`
+- Long soak on real hardware with that profile:
+  - 20 consecutive runs of `/usr/sbin/fbwait_vsync 300` (`6000` waits total)
+  - `ok=6000`, `fail=0`
+  - no new `w100fb: vsync wait timed out` events (`timeout_delta=0`)
+- User visual verification: left-right jump eliminated.
+
+Persistence:
+
+- Stage-2 init now applies the stable W100 profile on every boot via
+  `nand-root/etc/init.d/rcS`.
+
+Bootstrap/SMF update resolution (2026-07-24 night):
+
+- Cold-boot failure after in-system SMF flashing was traced to the first
+  version of `flash/pico-smf-write.c`, which used raw `MEMERASE` + `write()` on
+  `/dev/mtd0` and therefore destroyed Sharp FTL metadata in NAND OOB.
+- The repaired writer uses `MEMWRITE` with `MTD_OPS_AUTO_OOB`, reconstructs the
+  logical-to-physical block mapping expected by `sharpslpart`, and writes the
+  logical block number redundantly into the first-page OOB of each SMF block.
+- Verified real-hardware result: after reflashing the SMF payload with the new
+  writer, **OpenEmbedded cold boots normally again**.
+- Keep the old rule in force: never use plain raw NAND write semantics on SMF;
+  only the FTL-aware path is safe.
 
 ---
 
@@ -501,7 +575,7 @@ the device's old OpenSSH — password auth only.
 - [ ] Verify w100fb actually rotates and displays correctly on real hardware
 - [ ] Initramfs: copy zsh + functions + repack + flash
 - [ ] DOSBox: confirm full landscape display works end-to-end
-- [ ] DOSBox: add vsync ioctl to w100fb
+- [x] DOSBox: add vsync ioctl to w100fb
 - [ ] DOSBox: strip all debug logging (ZDB markers, early init, Config::Init spam)
 - [ ] DOSBox: direct fb mmap instead of SDL's fbcon (remove shadow_fb, remove rotation code)
 - [ ] WiFi: any runtime test of hostap_cs module

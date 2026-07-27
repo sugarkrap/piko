@@ -1,0 +1,181 @@
+#!/bin/sh
+# zaurus-refresh stage-2 system init (run once by BusyBox init as sysinit).
+
+# ***********************************************************************
+# *  BUILD MARKER: STAGE2-BUILD-B  (ssh-key + MD5-shadow + noqueue-fix) *
+# *  If you see "STAGE2-BUILD-B" on boot, the LATEST mtd3 image is live.*
+# ***********************************************************************
+echo ""
+echo "########  STAGE2-BUILD-G  (ash default + editable shell)  ########"
+echo ""
+
+# --- console noise ---
+# Default console_loglevel (7) shows KERN_DEBUG messages too, which floods
+# the physical console with things like spi-pxa2xx's per-transfer "NNNN Hz
+# actual, PIO" dev_dbg() line (found 2026-07-27) -- harmless but makes the
+# console unreadable. Drop to KERN_INFO(6): keeps boot/driver notices
+# visible, silences debug-level chatter.
+echo "6 4 1 7" > /proc/sys/kernel/printk 2>/dev/null
+
+# --- virtual filesystems ---
+mount -t proc     proc     /proc            2>/dev/null
+mount -t sysfs    sysfs    /sys             2>/dev/null
+# devtmpfs is auto-mounted by the kernel (CONFIG_DEVTMPFS_MOUNT), but mount
+# again harmlessly in case it wasn't.
+mount -t devtmpfs devtmpfs /dev             2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts   devpts   /dev/pts  -o mode=0620,ptmxmode=0666  2>/dev/null
+# dropbear opens /dev/ptmx to allocate a pseudo-terminal, but devtmpfs does
+# NOT create it. It must point at THIS devpts instance's own clone device
+# (/dev/pts/ptmx, created by the ptmxmode= mount option above) via a symlink,
+# so the master (from /dev/ptmx) and the slave (from ptsname() -> /dev/pts/N)
+# live in the SAME instance and are actually paired. A plain "mknod ptmx c 5 2"
+# node allocates the master in the kernel's *default* devpts instance instead,
+# so the PTY is granted and the shell runs but its output never flows back
+# (SSH gets an interactive session that closes with no output). Symlink first,
+# fall back to a static node only if the instance ptmx is missing.
+if test -e /dev/pts/ptmx; then
+    ln -sf pts/ptmx /dev/ptmx
+else
+    test -e /dev/ptmx || mknod /dev/ptmx c 5 2
+    chmod 666 /dev/ptmx 2>/dev/null
+fi
+
+hostname zaurus
+
+# The mtd3 image is built with mkfs.jffs2 -q (everything squashed to root),
+# so piko's home ends up root-owned and piko's shell can't write its
+# history / completion dump. Give piko ownership of its own home at boot.
+chown -R piko:piko /home/piko 2>/dev/null
+chmod 700 /home/piko/.ssh 2>/dev/null
+chmod 600 /home/piko/.ssh/authorized_keys 2>/dev/null
+
+# --- hotplug / module auto-load manager ---
+# UEVENT_HELPER is off in this kernel, so run mdev as a netlink daemon
+# rather than via /proc/sys/kernel/hotplug. On card/device insertion it
+# consults /etc/mdev.conf and modprobes the matching driver.
+mdev -d 2>/dev/null &
+
+# --- hostap in CLIENT mode ---
+# hostap ("host AP") defaults the card to Master/AP mode (iw_mode 3).
+# Switching Master->Managed at runtime resets the firmware and misbehaves
+# (card associates + scans but passes no data initially, WARN_ON in
+# prism2_interrupt, two "Association failed" events before it finally
+# connects several seconds later -- this is the actual cause of the WiFi
+# flakiness seen vs. Cacko, not a hotplug/hardware issue).
+#
+# iw_mode is NOT a parameter of the "hostap" core module -- it's declared
+# in hostap_hw.c, which hostap_cs.c/hostap_pci.c/hostap_plx.c each
+# #include directly (confirmed via `modinfo hostap_cs`), so it only
+# exists on the bus-specific module actually bound to the card. An
+# earlier attempt applied it to "hostap" instead, which silently ignores
+# it ("hostap: unknown parameter 'iw_mode' ignored" in dmesg) and falls
+# back to the buggy runtime switch every single time the card comes up.
+# The real fix is in /etc/modprobe.d/hostap.conf (targets hostap_cs, so
+# it's applied whenever mdev auto-loads it for an inserted card). Loading
+# the core module here first is still required as a hostap_cs dependency.
+modprobe hostap 2>/dev/null
+
+# --- PCMCIA subsystem bring-up ---
+# The socket/platform driver stack must be loaded BEFORE a card is
+# inserted, so the kernel can actually detect insertion and fire the
+# uevent mdev's MODALIAS rule catches (which then auto-loads hostap_cs +
+# deps for the card itself). depmod's modules.dep doesn't show
+# pxa2xx_sharpsl depending on pxa2xx_base (likely resolved via platform
+# device registration, not a direct symbol call), so load both explicitly
+# rather than relying purely on automatic dependency resolution.
+modprobe pxa2xx_base 2>/dev/null
+modprobe pxa2xx_sharpsl 2>/dev/null
+
+# --- SPI bus (MAX1111 main-battery ADC, ads7846 touchscreen, corgi-lcd) ---
+# corgi.c registers spi_board_info for these unconditionally at boot, but
+# they only actually probe once the SPI_PXA2XX master driver loads and
+# registers the bus. Without it, /sys/bus/spi/devices stays empty and
+# sharpsl-pm logs "Warning: Cannot read main battery!" forever. These
+# modules were never part of the original mtd3 rootfs build, so modules.dep
+# has no entry for them -- modprobe-by-name would fail with "not found".
+# insmod with the explicit path works regardless of modules.dep.
+# ssp.ko MUST load first: spi-pxa2xx-platform.ko needs its exported
+# pxa_ssp_request()/pxa_ssp_free() symbols (insmod fails with "unknown
+# symbol" otherwise -- discovered 2026-07-26, battery ADC silently never
+# came up even though the SPI modules themselves loaded without error).
+KVER="$(uname -r)"
+insmod "/lib/modules/$KVER/kernel/drivers/soc/pxa/ssp.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-core.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-platform.ko" 2>/dev/null
+# ads7846 (touchscreen) is a module (CONFIG_TOUCHSCREEN_ADS7846=m) in the
+# current kernel config -- unlike max1111/corgi-lcd it is NOT built-in, so
+# it must be insmod'd explicitly once the SPI bus above is registered, or
+# the touchscreen silently has no driver at all (found 2026-07-27).
+insmod "/lib/modules/$KVER/kernel/drivers/input/touchscreen/ads7846.ko" 2>/dev/null
+# evdev/mousedev are the input-core handlers that create /dev/input/eventN
+# and /dev/input/mice respectively. Both are modules too
+# (CONFIG_INPUT_EVDEV=m, CONFIG_INPUT_MOUSEDEV=m) -- without evdev.ko in
+# particular, ads7846 registers its input device but no eventN node ever
+# appears, so the touchscreen is invisible to anything reading raw evdev.
+insmod "/lib/modules/$KVER/kernel/drivers/input/evdev.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/drivers/input/mousedev.ko" 2>/dev/null
+
+# --- MMC/SD + VFAT ---
+# MMC_PXA/MMC_BLOCK are modules. Without these explicit loads the board's
+# pxa2xx-mci.0 platform device remains unbound, so no host exists to detect an
+# already-inserted card or generate insertion hotplug events. FAT/VFAT and the
+# common Cacko-era codepages are modular too; ext4 is built into the kernel.
+insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_core.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_block.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/drivers/mmc/host/pxamci.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp850.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_iso8859-15.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/fat/fat.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
+
+# --- audio stack (WM8731 codec via I2S, ALSA OSS emulation) ---
+# Loads the same modules as the manual /usr/sbin/audioon helper (see
+# flash/chunked-deploy.sh step 7) so /dev/dsp + /dev/mixer are ready at
+# boot -- zplay and other OSS consumers no longer need "audioon" run by
+# hand first. audioon itself already no-ops any module already loaded
+# and creates the device nodes, so it's safe to just call it here.
+if test -x /usr/sbin/audioon; then
+	/usr/sbin/audioon 2>/dev/null
+fi
+
+# --- networking ---
+ifconfig lo 127.0.0.1 up 2>/dev/null
+# usb0 comes up once g_ether is loaded -- not wired up yet.
+# wlan0 comes up automatically via mdev (see /etc/mdev.conf + /etc/wifi-up.sh)
+# once a Prism2/hostap PCMCIA card is inserted.
+
+# --- w100 display stability profile ---
+# Keep conservative clocking defaults that eliminated 1px horizontal jitter.
+if test -w /sys/devices/platform/w100fb/fastpllclk; then
+	echo 0 > /sys/devices/platform/w100fb/fastpllclk
+fi
+if test -w /sys/module/w100fb/parameters/force_fullrate; then
+	echo Y > /sys/module/w100fb/parameters/force_fullrate
+fi
+if test -w /sys/module/w100fb/parameters/vsync_mode; then
+	echo 0 > /sys/module/w100fb/parameters/vsync_mode
+fi
+if test -w /sys/module/w100fb/parameters/vsync_debug; then
+	echo N > /sys/module/w100fb/parameters/vsync_debug
+fi
+
+# --- ssh ---
+mkdir -p /etc/dropbear
+# Generate host keys on first boot (persisted to the jffs2 root).
+if ! test -f /etc/dropbear/dropbear_ed25519_host_key; then
+	echo "generating dropbear host keys (first boot)..."
+	dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
+	dropbearkey -t rsa     -f /etc/dropbear/dropbear_rsa_host_key     2>/dev/null
+fi
+# -B: no fork-into-background management, -R: generate keys if missing.
+# Listens on all interfaces; only reachable once an interface is up.
+dropbear -R 2>/dev/null
+
+echo ""
+echo "=== zaurus-refresh stage 2 ready -- log in at the console ==="
+echo ""
+
+# --- console keymap: Zaurus C7x0 Fn=AltGr symbol layer (/ : [ ] | { } etc.) ---
+/bin/busybox loadkmap < /etc/zaurus.bmap 2>/dev/null

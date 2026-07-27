@@ -1,0 +1,33 @@
+#!/bin/sh
+# softreboot: kexec-based warm "reboot" for this two-stage kexec Zaurus.
+#
+# The kernel's own reboot path (corgi_restart() -> pxa_restart(REBOOT_HARD))
+# is a PXA watchdog hard reset -- indistinguishable from poweroff on this
+# hardware (both just toggle a GPIO before the same watchdog reset; see
+# docs/DEADLETTER-*.md). kexec bypasses that machine-restart path entirely:
+# it jumps straight to a freshly loaded kernel image in RAM without ever
+# going through arch_reset()/pm_power_off(), so it stays "alive" (screen
+# never goes dark) the whole time -- matching how OpenEmbedded/Sharp ROM
+# actually achieve a real reboot on this machine family. Found 2026-07-26.
+#
+# This does a bare re-kexec of the *same* running stage-2 kernel
+# (self-kexec) rather than the two-hop bootstrap->stage2 chain a real cold
+# boot does -- much lower risk (no mtd0/smf access needed at all, and no
+# dependency on the physical power button), at the cost of leaving the
+# machine "dirty" (no clean unmount of /).
+#
+# --atags is NOT optional here: this is an ATAG board (MACHINE_START(HUSKY),
+# no device tree). Without it, kexec hands the new kernel no ATAG_MEM at
+# all, so it hangs in early setup before the framebuffer console even
+# exists -- a silent freeze right after the kernel's own "Bye!" print in
+# machine_kexec(). This exact failure mode (and fix) is already documented
+# in docs/DEADLETTER-KEXEC-ATAGS.md from the stage1->stage2 bring-up; hit
+# again 2026-07-26 because this script initially omitted the flag.
+set -eu
+
+KERNEL=/boot/zImage-full
+CMDLINE="$(cat /proc/cmdline)"
+
+kexec -l "$KERNEL" --atags --append="$CMDLINE"
+sync
+exec kexec -e

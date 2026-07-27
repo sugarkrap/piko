@@ -40,7 +40,7 @@
  * Prototypes
  */
 static void w100_suspend(u32 mode);
-static void w100_vsync(void);
+static int w100_vsync(void);
 static void w100_hw_init(struct w100fb_par*);
 static void w100_soft_reset(void);
 static void w100_pwm_setup(struct w100fb_par*);
@@ -53,6 +53,47 @@ static void w100_update_disable(void);
 static void calc_hsync(struct w100fb_par *par);
 static void w100_init_graphic_engine(struct w100fb_par *par);
 struct w100_pll_info *w100_get_xtal_table(unsigned int freq);
+
+/* 0: vline IRQ status wait, 1: CRTC frame counter change wait */
+static int w100_vsync_mode;
+module_param_named(vsync_mode, w100_vsync_mode, int, 0644);
+MODULE_PARM_DESC(vsync_mode, "w100 vsync wait mode (0=irq,1=frame)");
+
+static bool w100_vsync_debug;
+module_param_named(vsync_debug, w100_vsync_debug, bool, 0644);
+MODULE_PARM_DESC(vsync_debug, "enable extra vsync timeout diagnostics");
+
+/*
+ * Force full-rate panel fetch path (disable low-power/request-frequency hints)
+ * to test perceived sharpness without changing the default legacy behavior.
+ */
+static bool w100_force_fullrate;
+MODULE_PARM_DESC(force_fullrate, "force full-rate panel fetch (may increase power)");
+
+static struct w100fb_par *w100_primary_par;
+
+static int w100_set_force_fullrate(const char *val, const struct kernel_param *kp)
+{
+	bool old = w100_force_fullrate;
+	int ret;
+
+	ret = param_set_bool(val, kp);
+	if (ret)
+		return ret;
+
+	if (old != w100_force_fullrate && w100_primary_par)
+		w100_set_dispregs(w100_primary_par);
+
+	return 0;
+}
+
+static const struct kernel_param_ops w100_force_fullrate_ops = {
+	.set = w100_set_force_fullrate,
+	.get = param_get_bool,
+};
+
+module_param_cb(force_fullrate, &w100_force_fullrate_ops,
+		&w100_force_fullrate, 0644);
 
 /* Pseudo palette size */
 #define MAX_PALETTES      16
@@ -231,11 +272,14 @@ static int w100fb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 
 /*
  * Blank the display based on value in blank_mode
+ *
+ * NOTE: On this platform, triggering tg->suspend/resume from the console
+ * graphics-mode transition can wedge the W100 path. Keep state tracking but
+ * skip the LCD suspend/resume callbacks until that path is fixed.
  */
 static int w100fb_blank(int blank_mode, struct fb_info *info)
 {
 	struct w100fb_par *par = info->par;
-	struct w100_tg_info *tg = par->mach->tg;
 
 	switch(blank_mode) {
 
@@ -244,16 +288,14 @@ static int w100fb_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_HSYNC_SUSPEND:  /* VESA blank (hsync off) */
  	case FB_BLANK_POWERDOWN:      /* Poweroff */
   		if (par->blanked == 0) {
-			if(tg && tg->suspend)
-				tg->suspend(par);
+			/* Intentionally disabled: see note above. */
 			par->blanked = 1;
   		}
   		break;
 
  	case FB_BLANK_UNBLANK: /* Unblanking */
   		if (par->blanked != 0) {
-			if(tg && tg->resume)
-				tg->resume(par);
+			/* Intentionally disabled: see note above. */
 			par->blanked = 0;
   		}
   		break;
@@ -290,6 +332,11 @@ static int w100fb_sync(struct fb_info *info)
 	}
 	printk(KERN_ERR "w100fb: Graphic engine timeout!\n");
 	return -EBUSY;
+}
+
+static int w100fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+{
+	return vm_iomap_memory(vma, info->fix.smem_start, info->fix.smem_len);
 }
 
 
@@ -476,6 +523,8 @@ static struct w100_mode *w100fb_get_mode(struct w100fb_par *par, unsigned int *x
 static int w100fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct w100fb_par *par=info->par;
+	unsigned long available;
+	unsigned long virtual_size;
 
 	if(!w100fb_get_mode(par, &var->xres, &var->yres, 1))
 		return -EINVAL;
@@ -488,6 +537,16 @@ static int w100fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 
 	var->xres_virtual = max(var->xres_virtual, var->xres);
 	var->yres_virtual = max(var->yres_virtual, var->yres);
+	if (var->xres_virtual != var->xres)
+		return -EINVAL;
+
+	available = par->mach->mem ? par->mach->mem->size + 1 : MEM_INT_SIZE + 1;
+	available = min_t(unsigned long, available, REMAPPED_FB_LEN + 1);
+	virtual_size = (unsigned long)var->xres_virtual * var->yres_virtual *
+		BITS_PER_PIXEL / 8;
+	if (virtual_size > available || var->xoffset != 0 ||
+	    var->yoffset + var->yres > var->yres_virtual)
+		return -EINVAL;
 
 	if (var->bits_per_pixel > BITS_PER_PIXEL)
 		return -EINVAL;
@@ -547,6 +606,54 @@ static int w100fb_set_par(struct fb_info *info)
 	return 0;
 }
 
+static unsigned long w100fb_scanout_offset(struct w100fb_par *par,
+					   unsigned int yoffset)
+{
+	unsigned long offset;
+
+	if (par->xres == par->mode->xres)
+		offset = par->flip ? (par->xres * par->yres) - 1 : 0;
+	else
+		offset = par->flip ? par->xres - 1 :
+			 par->xres * (par->yres - 1);
+
+	return offset + (unsigned long)yoffset * par->xres;
+}
+
+static int w100fb_pan_display(struct fb_var_screeninfo *var,
+			      struct fb_info *info)
+{
+	struct w100fb_par *par = info->par;
+	unsigned long offset;
+	int ret;
+
+	if (var->xoffset != 0 || var->yoffset + info->var.yres >
+				 info->var.yres_virtual)
+		return -EINVAL;
+
+	ret = w100_vsync();
+	if (ret)
+		return ret;
+
+	offset = w100fb_scanout_offset(par, var->yoffset);
+	writel(W100_FB_BASE + ((offset * BITS_PER_PIXEL / 8) & ~0x03UL),
+	       remapped_regs + mmGRAPHIC_OFFSET);
+	info->var.xoffset = var->xoffset;
+	info->var.yoffset = var->yoffset;
+
+	return 0;
+}
+
+static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
+			unsigned long arg)
+{
+	if (cmd == FBIO_WAITFORVSYNC) {
+		return w100_vsync();
+	}
+
+	return -EINVAL;
+}
+
 
 /*
  *  Frame buffer operations
@@ -557,10 +664,13 @@ static const struct fb_ops w100fb_ops = {
 	.fb_set_par   = w100fb_set_par,
 	.fb_setcolreg = w100fb_setcolreg,
 	.fb_blank     = w100fb_blank,
+	.fb_pan_display = w100fb_pan_display,
 	.fb_fillrect  = w100fb_fillrect,
 	.fb_copyarea  = w100fb_copyarea,
 	.fb_imageblit = cfb_imageblit,
+	.fb_ioctl     = w100fb_ioctl,
 	.fb_sync      = w100fb_sync,
+	.fb_mmap      = w100fb_mmap,
 };
 
 #ifdef CONFIG_PM
@@ -714,10 +824,12 @@ static int w100fb_probe(struct platform_device *pdev)
 
 	par = info->par;
 	platform_set_drvdata(pdev, info);
+	w100_primary_par = par;
 
 	inf = dev_get_platdata(&pdev->dev);
 	par->chip_id = chip_id;
 	par->mach = inf;
+	/* Keep legacy default; fast PLL remains available via runtime toggle. */
 	par->fastpll_mode = 0;
 	par->blanked = 0;
 
@@ -745,6 +857,7 @@ static int w100fb_probe(struct platform_device *pdev)
 	strcpy(info->fix.id, "w100fb");
 	info->fix.type = FB_TYPE_PACKED_PIXELS;
 	info->fix.type_aux = 0;
+	info->fix.ypanstep = 1;
 	info->fix.accel = FB_ACCEL_NONE;
 	info->fix.smem_start = mem->start+W100_FB_BASE;
 	info->fix.mmio_start = mem->start+W100_REG_BASE;
@@ -821,6 +934,9 @@ static void w100fb_remove(struct platform_device *pdev)
 {
 	struct fb_info *info = platform_get_drvdata(pdev);
 	struct w100fb_par *par=info->par;
+
+	if (w100_primary_par == par)
+		w100_primary_par = NULL;
 
 	unregister_framebuffer(info);
 
@@ -1520,6 +1636,11 @@ static void w100_set_dispregs(struct w100fb_par *par)
 					graphic_ctrl.f_w100.total_req_graphic=0xf0;
 					break;
 			}
+
+			if (w100_force_fullrate) {
+				graphic_ctrl.f_w100.low_power_on = 0;
+				graphic_ctrl.f_w100.req_freq = 0;
+			}
 			break;
 		case CHIP_ID_W3200:
 		case CHIP_ID_W3220:
@@ -1626,10 +1747,34 @@ static void w100_suspend(u32 mode)
 	}
 }
 
-static void w100_vsync(void)
+static int w100_vsync(void)
 {
+	u32 cntl, stat;
 	u32 tmp;
 	int timeout = 30000;  /* VSync timeout = 30[ms] > 16.8[ms] */
+
+	if (w100_vsync_mode == 1) {
+		u32 start = readl(remapped_regs + mmCRTC_FRAME);
+
+		while (timeout > 0) {
+			u32 cur = readl(remapped_regs + mmCRTC_FRAME);
+
+			if (cur != start)
+				return 0;
+			udelay(1);
+			timeout--;
+		}
+
+		if (w100_vsync_debug) {
+			cntl = readl(remapped_regs + mmGEN_INT_CNTL);
+			stat = readl(remapped_regs + mmGEN_INT_STATUS);
+			pr_warn_ratelimited("w100fb: vsync(frame) timeout start=%#x cur=%#x int_cntl=%#x int_stat=%#x\n",
+					   start, readl(remapped_regs + mmCRTC_FRAME), cntl, stat);
+		} else {
+			pr_warn_ratelimited("w100fb: vsync(frame) wait timed out\n");
+		}
+		return -ETIMEDOUT;
+	}
 
 	tmp = readl(remapped_regs + mmACTIVE_V_DISP);
 
@@ -1651,6 +1796,18 @@ static void w100_vsync(void)
 	/* clear vline irq status */
 	writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
 
+	/*
+	 * Wait for a clean edge: first ensure any stale pending status is gone,
+	 * then wait for the next assertion.
+	 */
+	while (timeout > 0) {
+		if (!(readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002))
+			break;
+		writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
+		udelay(1);
+		timeout--;
+	}
+
 	while(timeout > 0) {
 		if (readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002)
 			break;
@@ -1663,6 +1820,22 @@ static void w100_vsync(void)
 
 	/* clear vline irq status */
 	writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
+
+	if (timeout <= 0) {
+		if (w100_vsync_debug) {
+			cntl = readl(remapped_regs + mmGEN_INT_CNTL);
+			stat = readl(remapped_regs + mmGEN_INT_STATUS);
+			pr_warn_ratelimited("w100fb: vsync(irq) timeout int_cntl=%#x int_stat=%#x disp_int_cntl=%#x active_v=%#x frame=%#x\n",
+					   cntl, stat, readl(remapped_regs + mmDISP_INT_CNTL),
+					   readl(remapped_regs + mmACTIVE_V_DISP),
+					   readl(remapped_regs + mmCRTC_FRAME));
+		} else {
+			pr_warn_ratelimited("w100fb: vsync wait timed out\n");
+		}
+		return -ETIMEDOUT;
+	}
+
+	return 0;
 }
 
 static struct platform_driver w100fb_driver = {

@@ -70,89 +70,94 @@ DEFINE_LED_TRIGGER(sharpsl_charge_led_trigger);
 
 
 
+/*
+ * Recalibrated 2026-07-26: offset -40 from mainline's stock values (which
+ * assume a fresh battery peaking around raw ADC 213). See corgi_pm_patched.c
+ * for the accompanying status_high/low threshold changes and rationale.
+ */
 struct battery_thresh sharpsl_battery_levels_acin[] = {
-	{ 213, 100},
-	{ 212,  98},
-	{ 211,  95},
-	{ 210,  93},
-	{ 209,  90},
-	{ 208,  88},
-	{ 207,  85},
-	{ 206,  83},
-	{ 205,  80},
-	{ 204,  78},
-	{ 203,  75},
-	{ 202,  73},
-	{ 201,  70},
-	{ 200,  68},
-	{ 199,  65},
-	{ 198,  63},
-	{ 197,  60},
-	{ 196,  58},
-	{ 195,  55},
-	{ 194,  53},
-	{ 193,  50},
-	{ 192,  48},
-	{ 192,  45},
-	{ 191,  43},
-	{ 191,  40},
-	{ 190,  38},
-	{ 190,  35},
-	{ 189,  33},
-	{ 188,  30},
-	{ 187,  28},
-	{ 186,  25},
-	{ 185,  23},
-	{ 184,  20},
-	{ 183,  18},
-	{ 182,  15},
-	{ 181,  13},
-	{ 180,  10},
-	{ 179,   8},
-	{ 178,   5},
+	{ 173, 100},
+	{ 172,  98},
+	{ 171,  95},
+	{ 170,  93},
+	{ 169,  90},
+	{ 168,  88},
+	{ 167,  85},
+	{ 166,  83},
+	{ 165,  80},
+	{ 164,  78},
+	{ 163,  75},
+	{ 162,  73},
+	{ 161,  70},
+	{ 160,  68},
+	{ 159,  65},
+	{ 158,  63},
+	{ 157,  60},
+	{ 156,  58},
+	{ 155,  55},
+	{ 154,  53},
+	{ 153,  50},
+	{ 152,  48},
+	{ 152,  45},
+	{ 151,  43},
+	{ 151,  40},
+	{ 150,  38},
+	{ 150,  35},
+	{ 149,  33},
+	{ 148,  30},
+	{ 147,  28},
+	{ 146,  25},
+	{ 145,  23},
+	{ 144,  20},
+	{ 143,  18},
+	{ 142,  15},
+	{ 141,  13},
+	{ 140,  10},
+	{ 139,   8},
+	{ 138,   5},
 	{   0,   0},
 };
 
 struct battery_thresh sharpsl_battery_levels_noac[] = {
-	{ 213, 100},
-	{ 212,  98},
-	{ 211,  95},
-	{ 210,  93},
-	{ 209,  90},
-	{ 208,  88},
-	{ 207,  85},
-	{ 206,  83},
-	{ 205,  80},
-	{ 204,  78},
-	{ 203,  75},
-	{ 202,  73},
-	{ 201,  70},
-	{ 200,  68},
-	{ 199,  65},
-	{ 198,  63},
-	{ 197,  60},
-	{ 196,  58},
-	{ 195,  55},
-	{ 194,  53},
-	{ 193,  50},
-	{ 192,  48},
-	{ 191,  45},
-	{ 190,  43},
-	{ 189,  40},
-	{ 188,  38},
-	{ 187,  35},
-	{ 186,  33},
-	{ 185,  30},
-	{ 184,  28},
-	{ 183,  25},
-	{ 182,  23},
-	{ 181,  20},
-	{ 180,  18},
-	{ 179,  15},
-	{ 178,  13},
-	{ 177,  10},
-	{ 176,   8},
-	{ 175,   5},
+	{ 173, 100},
+	{ 172,  98},
+	{ 171,  95},
+	{ 170,  93},
+	{ 169,  90},
+	{ 168,  88},
+	{ 167,  85},
+	{ 166,  83},
+	{ 165,  80},
+	{ 164,  78},
+	{ 163,  75},
+	{ 162,  73},
+	{ 161,  70},
+	{ 160,  68},
+	{ 159,  65},
+	{ 158,  63},
+	{ 157,  60},
+	{ 156,  58},
+	{ 155,  55},
+	{ 154,  53},
+	{ 153,  50},
+	{ 152,  48},
+	{ 151,  45},
+	{ 150,  43},
+	{ 149,  40},
+	{ 148,  38},
+	{ 147,  35},
+	{ 146,  33},
+	{ 145,  30},
+	{ 144,  28},
+	{ 143,  25},
+	{ 142,  23},
+	{ 141,  20},
+	{ 140,  18},
+	{ 139,  15},
+	{ 138,  13},
+	{ 137,  10},
+	{ 136,   8},
+	{ 135,   5},
 	{   0,   0},
 };
 
@@ -258,13 +263,20 @@ static void sharpsl_battery_thread(struct work_struct *private_)
 	dev_dbg(sharpsl_pm.dev, "Battery: voltage: %d, status: %d, percentage: %d, time: %ld\n", voltage,
 			sharpsl_pm.battstat.mainbat_status, sharpsl_pm.battstat.mainbat_percent, jiffies);
 
-	/* Suspend if critical battery level */
+	/*
+	 * NOTE (2026-07-26): stock Cacko does not force an emergency suspend
+	 * for this aged battery pack/threshold combination, and the forced
+	 * APM_CRITICAL_SUSPEND here was causing a perpetual suspend/resume
+	 * loop (repeated "Fatal Off" every ~15s poll, effectively bricking
+	 * console/SSH access) even while on AC. Keep the warning for
+	 * visibility, but do not force a suspend -- match observed Cacko
+	 * behavior instead. See corgi_pm_patched.c / the battery_levels
+	 * tables above for the accompanying threshold recalibration.
+	 */
 	if ((sharpsl_pm.battstat.ac_status != APM_AC_ONLINE)
 	     && (sharpsl_pm.battstat.mainbat_status == APM_BATTERY_STATUS_CRITICAL)
 	     && !(sharpsl_pm.flags & SHARPSL_APM_QUEUED)) {
-		sharpsl_pm.flags |= SHARPSL_APM_QUEUED;
-		dev_err(sharpsl_pm.dev, "Fatal Off\n");
-		apm_queue_event(APM_CRITICAL_SUSPEND);
+		dev_err(sharpsl_pm.dev, "Critical battery (no forced suspend)\n");
 	}
 
 	schedule_delayed_work(&sharpsl_bat, SHARPSL_BATCHK_TIME);

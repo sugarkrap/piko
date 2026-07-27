@@ -13,6 +13,7 @@
 #include <linux/module.h>	/* symbol_get ; symbol_put */
 #include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
 #include <linux/major.h>
 #include <linux/fs.h>
 #include <linux/interrupt.h>
@@ -480,6 +481,19 @@ static struct platform_device corgi_gpio_keys_device = {
 
 /*
  * Corgi LEDs
+ *
+ * Amber/charge LED (GPIO13, direct PXA GPIO): its "sharpsl-charge" trigger
+ * only toggles the LED classdev's software state. The LED's actual physical
+ * ability to light up is additionally gated in hardware by
+ * CORGI_GPIO_CHRG_ON (see corgi_charger_init()/corgi_charge() in
+ * corgi_pm.c): that gate is now held open permanently at boot so the LED
+ * always reflects real charger presence.
+ *
+ * Green LED (SCOOP PA11, via CORGI_GPIO_LED_GREEN): originally a stock
+ * "mail" notification LED, repurposed here as a drive/flash-access
+ * indicator using the in-kernel "nand-disk" trigger (drivers/leds/trigger/
+ * ledtrig-mtd.c, fired from mtdcore.c on every MTD read/write/erase) --
+ * requires CONFIG_LEDS_TRIGGER_MTD=y.
  */
 static struct gpio_led corgi_gpio_leds[] = {
 	{
@@ -488,7 +502,7 @@ static struct gpio_led corgi_gpio_leds[] = {
 		.gpio			= CORGI_GPIO_LED_ORANGE,
 	},
 	{
-		.name			= "corgi:green:mail",
+		.name			= "corgi:green:drive",
 		.default_trigger	= "nand-disk",
 		.gpio			= CORGI_GPIO_LED_GREEN,
 	},
@@ -529,9 +543,26 @@ static struct gpiod_lookup_table corgi_audio_gpio_table = {
 /*
  * Corgi Audio
  */
+static u64 corgi_audio_dma_mask = DMA_BIT_MASK(32);
+
+/*
+ * pxa2xx_soc_pcm_new() (sound/arm/pxa2xx-pcm-lib.c) calls
+ * dma_coerce_mask_and_coherent() on rtd->card->snd_card->dev, which is
+ * *this* device (the "corgi-audio" card device registered by
+ * snd_soc_register_card(), not the "pxa-pcm-audio" platform device) --
+ * found 2026-07-26 after fixing pxa_device_asoc_platform's dma_mask in
+ * devices.c did NOT resolve the same -EINVAL(-22) "can't create pcm
+ * WM8731" error. Without a valid dma_mask here, dma_coerce_mask_and_coherent()
+ * fails and snd_soc_pcm_component_new() propagates -EINVAL up through
+ * snd_soc_register_card() / corgi_probe().
+ */
 static struct platform_device corgi_audio_device = {
 	.name	= "corgi-audio",
 	.id	= -1,
+	.dev	= {
+		.dma_mask = &corgi_audio_dma_mask,
+		.coherent_dma_mask = DMA_BIT_MASK(32),
+	},
 };
 
 /*
@@ -554,6 +585,29 @@ static struct gpiod_lookup_table corgi_mci_gpio_table = {
 		/* Write protect on GPIO 7 */
 		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_nSD_WP,
 			    "wp", GPIO_ACTIVE_LOW),
+		/* Power on GPIO 33 */
+		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_SD_PWR,
+			    "power", GPIO_ACTIVE_HIGH),
+		{ },
+	},
+};
+
+/*
+ * Husky boards can report inverted SD detect/write-protect levels compared
+ * to early Corgi wiring. Keep legacy polarity on Corgi/Shepherd and use a
+ * Husky-specific table so mmc core sees card-present correctly.
+ */
+static struct gpiod_lookup_table husky_mci_gpio_table = {
+	.dev_id = "pxa2xx-mci.0",
+	.table = {
+		/*
+		 * Husky CD wiring is unreliable with current mainline descriptor
+		 * handling. Intentionally omit "cd" so mmc core does not gate probe
+		 * on a potentially wrong card-detect level.
+		 */
+		/* Write protect on GPIO 7 (Husky quirk: active high) */
+		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_nSD_WP,
+			    "wp", GPIO_ACTIVE_HIGH),
 		/* Power on GPIO 33 */
 		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_SD_PWR,
 			    "power", GPIO_ACTIVE_HIGH),
@@ -899,7 +953,10 @@ static void __init corgi_init(void)
 	corgi_init_spi();
 
  	gpiod_add_lookup_table(&corgi_udc_gpio_table);
-	gpiod_add_lookup_table(&corgi_mci_gpio_table);
+	if (machine_is_husky())
+		gpiod_add_lookup_table(&husky_mci_gpio_table);
+	else
+		gpiod_add_lookup_table(&corgi_mci_gpio_table);
 	gpiod_add_lookup_table(&corgi_audio_gpio_table);
 	pxa_set_mci_info(&corgi_mci_platform_data, NULL);
 	pxa_set_i2c_info(NULL);
