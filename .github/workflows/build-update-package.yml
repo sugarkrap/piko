@@ -62,6 +62,14 @@ jobs:
         with:
           path: kernel-src
           key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'tools/setup-kernel-src.sh') }}
+          # actions/cache skips its post-job save step entirely whenever
+          # the job's overall conclusion is "failure" -- every run so far
+          # has failed somewhere after this point, so no run has ever
+          # actually saved a cache entry reflecting real build progress.
+          # save-always makes the (cheap, seconds-long) save unconditional
+          # so a run that gets further than the last one before failing
+          # still leaves a better starting point for the next one.
+          save-always: true
 
       - name: Reconstruct kernel-src (download + apply tracked patches)
         id: kernel_src
@@ -107,8 +115,16 @@ jobs:
           CROSS_COMPILE: arm-linux-gnueabi-
         run: |
           set +e
-          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" > /tmp/smoke.log 2>&1
-          rc=$?
+          # tee, not a plain redirect: this step's own console output is
+          # what get_job_logs (and the Actions UI's live step log) actually
+          # captures. A bare `> /tmp/smoke.log 2>&1` sends the boot log
+          # (and thus the actual failure reason -- panic, missing PASS
+          # marker, whatever) ONLY into GITHUB_STEP_SUMMARY, which isn't
+          # visible through the job-logs API at all -- hit exactly this
+          # diagnosing a real smoke-test failure with nothing but a bare
+          # "Process completed with exit code 1" to go on.
+          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" 2>&1 | tee /tmp/smoke.log
+          rc=${PIPESTATUS[0]}
           set -e
           {
             echo "### QEMU smoke test"

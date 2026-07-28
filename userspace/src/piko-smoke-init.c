@@ -80,7 +80,15 @@ static void find_modules(const char *dir)
     closedir(d);
 }
 
-static int init_module_file(const char *path)
+/* verbose=1 prints exactly why this specific attempt failed (open/fstat/
+ * malloc/read vs. the actual init_module() syscall) -- used only for the
+ * final, still-unloaded modules after the retry loop converges, so a
+ * genuine failure (missing file, bad ELF, real symbol/version mismatch)
+ * is distinguishable from "just hadn't loaded its dependency yet". Without
+ * this, every failure mode collapses into the same silent -1, and a file
+ * that's simply missing from the initramfs looks identical in the log to
+ * one that loaded fine on a later pass. */
+static int init_module_file(const char *path, int verbose)
 {
     int fd = open(path, O_RDONLY);
     struct stat st;
@@ -88,23 +96,36 @@ static int init_module_file(const char *path)
     ssize_t n;
     long rc;
 
-    if (fd < 0 || fstat(fd, &st) < 0) {
-        if (fd >= 0)
-            close(fd);
+    if (fd < 0) {
+        if (verbose)
+            printf("  %s: open failed: %s\n", path, strerror(errno));
+        return -1;
+    }
+    if (fstat(fd, &st) < 0) {
+        if (verbose)
+            printf("  %s: fstat failed: %s\n", path, strerror(errno));
+        close(fd);
         return -1;
     }
     buf = malloc((size_t)st.st_size);
     if (!buf) {
+        if (verbose)
+            printf("  %s: malloc(%lld) failed\n", path, (long long)st.st_size);
         close(fd);
         return -1;
     }
     n = read(fd, buf, (size_t)st.st_size);
     close(fd);
     if (n != st.st_size) {
+        if (verbose)
+            printf("  %s: read %zd of %lld bytes: %s\n", path, n,
+                   (long long)st.st_size, strerror(errno));
         free(buf);
         return -1;
     }
     rc = syscall(SYS_init_module, buf, (unsigned long)st.st_size, "");
+    if (verbose && rc != 0)
+        printf("  %s: init_module failed: %s\n", path, strerror(errno));
     free(buf);
     return rc == 0 ? 0 : -1;
 }
@@ -125,7 +146,7 @@ static int load_all_modules(void)
         for (i = 0; i < module_count; i++) {
             if (loaded[i])
                 continue;
-            if (init_module_file(module_paths[i]) == 0) {
+            if (init_module_file(module_paths[i], 0) == 0) {
                 printf("insmod OK   %s\n", module_paths[i]);
                 loaded[i] = 1;
                 remaining--;
@@ -140,6 +161,11 @@ static int load_all_modules(void)
             if (!loaded[i])
                 printf(" %s", module_paths[i]);
         printf("\n");
+        /* One verbose re-attempt per still-failed module so the log shows
+         * *why*, not just *that*. */
+        for (i = 0; i < module_count; i++)
+            if (!loaded[i])
+                init_module_file(module_paths[i], 1);
     }
     return remaining;
 }
@@ -150,7 +176,8 @@ static int run_piko_update_dry_run(void)
     int status;
 
     if (access("/usr/sbin/piko-update", X_OK) != 0) {
-        printf("piko-update FAILED: not present/executable at /usr/sbin/piko-update\n");
+        printf("piko-update FAILED: not present/executable at /usr/sbin/piko-update: %s\n",
+               strerror(errno));
         return -1;
     }
 
