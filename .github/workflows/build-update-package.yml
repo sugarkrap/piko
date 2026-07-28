@@ -92,10 +92,18 @@ jobs:
         env:
           CROSS_COMPILE: arm-linux-gnueabi-
         run: |
+          # flash/build-update-package.sh's own KERNEL_DIR default resolves
+          # to this exact path -- setup-kernel-src.sh leaves a real (if
+          # incomplete/unbuilt) directory there even on exit 2, so omitting
+          # the env var here would NOT actually fall back to rootfs-only,
+          # it would still find that directory and hard-fail on "no built
+          # zImage". Point KERNEL_DIR at something that can't exist instead,
+          # so the rootfs-only path is genuinely forced when reconstruction
+          # didn't fully succeed.
           if [ "${{ steps.kernel_src.outputs.rc }}" = "0" ]; then
             KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
           else
-            flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+            KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src-not-ready" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
           fi
 
       - name: QEMU smoke test (boot + insmod modules + piko-update dry-run)
