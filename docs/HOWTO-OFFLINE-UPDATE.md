@@ -34,12 +34,35 @@ locally (see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`) — also includes the
 stage-2 `zImage` and every module `chunked-deploy.sh` deploys. Every file
 gets an MD5 in a `MANIFEST` entry written into the package.
 
-**kernel-src/ is gitignored and local-only.** CI (`.github/workflows/
-build-update-package.yml`) can't build the actual kernel, so its packages
-are rootfs-only (piko-update + the full `etc`/`usr/sbin`/`init` overlay,
-no kernel bump). For a package that includes a new kernel + modules, run
-the script locally, from the same machine/toolchain `build-and-deploy.sh`
-uses, after building `zImage modules` there first.
+**kernel-src/ is gitignored and only reconstructed on demand.**
+`flash/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
+reconstruction procedure: download a pristine kernel.org tarball, apply
+every hand-patched file this repo tracks (Corgi board files, the W100
+driver, the sharpsl NAND driver, hostap_cs + lib80211 — all now under
+`modules/`), and apply the Kconfig/Makefile wiring patches under
+`patches/` — see `patches/README.md` if those don't exist yet (a known,
+temporary gap: full-file patches are all mechanical, but the wiring for
+`MACH_CORGI`/`SHEPHERD`/`HUSKY` and the `net/wireless`/`crypto`
+re-additions needs a real diff exported from an already-working local
+`kernel-src`, not something this script can invent). Until that gap is
+closed, `setup-kernel-src.sh` exits 2 (by design, not a failure) and both
+CI and `build-update-package.sh` fall back to a rootfs-only package. CI
+(`.github/workflows/build-update-package.yml`) runs this same script and
+caches the reconstructed tree, so once the wiring patches land, CI
+packages automatically start including a real kernel + modules with no
+further workflow changes needed.
+
+**Whenever CI does produce a full package, it's boot-tested before being
+uploaded.** `flash/qemu-smoke-test.sh` boots the built kernel under QEMU
+(`-M spitz`), insmod's every shipped kernel module, and runs
+`piko-update --dry-run` against the actual package — catching the same
+kernel/module ABI mismatch that broke this device for real once already
+(see `docs/DEADLETTER-WIFI-SSH.md`). A package that fails this is never
+uploaded. This only runs for full packages (nothing kernel-side to test
+in a rootfs-only one), and it validates the *shared* PXA2xx boot path —
+QEMU's spitz machine is PXA270 with no W100 chip, so `corgi.c`/
+`corgi_pm.c`/`w100fb.c` themselves never execute here. It is not a
+substitute for real hardware.
 
 ## Applying it on the device
 
