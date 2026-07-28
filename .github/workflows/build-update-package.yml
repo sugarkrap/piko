@@ -144,8 +144,16 @@ jobs:
           CROSS_COMPILE: arm-linux-gnueabi-
         run: |
           set +e
-          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" > /tmp/smoke.log 2>&1
-          rc=$?
+          # tee, not a plain redirect: this step's own console output is
+          # what get_job_logs (and the Actions UI's live step log) actually
+          # captures. A bare `> /tmp/smoke.log 2>&1` sends the boot log
+          # (and thus the actual failure reason -- panic, missing PASS
+          # marker, whatever) ONLY into GITHUB_STEP_SUMMARY, which isn't
+          # visible through the job-logs API at all -- hit exactly this
+          # diagnosing a real smoke-test failure with nothing but a bare
+          # "Process completed with exit code 1" to go on.
+          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" 2>&1 | tee /tmp/smoke.log
+          rc=${PIPESTATUS[0]}
           set -e
           {
             echo "### QEMU smoke test"
