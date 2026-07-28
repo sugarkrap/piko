@@ -30,14 +30,22 @@ board" constraint (scope every flash to only what changed).
 tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
-This does three things, in order, and stops immediately if any step fails:
+This does four things, in order, and stops immediately if any step fails:
 
 1. **Checks the device is reachable over SSH first** (fails fast with a
    pointer to the recovery doc if not — no point spending 15-25 minutes
    building if there's nothing to deploy to).
-2. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
+2. **Reconstructs `kernel-src/linux-7.1.4`** via `flash/setup-kernel-src.sh`
+   — downloads a pristine kernel.org tarball and applies every tracked
+   patch under `modules/` (Corgi board files, W100, sharpsl NAND,
+   hostap_cs + lib80211, and the mach-pxa/wireless/crypto Kconfig+Makefile
+   wiring). Idempotent — a marker file skips this once a tree is already
+   patched, so it's cheap on every run. Pass `--force-kernel-src` to
+   `build-and-deploy.sh` if you've changed a tracked patch file and need
+   it re-applied.
+3. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
    logging full (untruncated) output to `/tmp/kbuild-<timestamp>.log`.
-3. **Deploys** by calling `tools/chunked-deploy.sh`, which pushes (over a
+4. **Deploys** by calling `tools/chunked-deploy.sh`, which pushes (over a
    known-flaky WiFi link, chunked + retried + size-verified):
    - the new `zImage` → `/boot/zImage-full` (auto-backs up the old one to
      `/boot/zImage-full.bak`)
@@ -76,6 +84,7 @@ this script.
 ## Manual steps (if you need to do it by hand)
 
 ```sh
+flash/setup-kernel-src.sh   # only needed once per fresh clone / patch change
 cd kernel-src/linux-7.1.4
 export PATH="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin:$PATH"
 export ARCH=arm CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-
