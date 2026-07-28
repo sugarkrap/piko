@@ -32,7 +32,7 @@ set -eu
 # --adapter IFACE binds the SSH connection to a specific local network
 # interface (ssh -B), useful when the build machine has multiple network
 # adapters and the Zaurus is only reachable via one of them.
-# --force-kernel-src forces flash/setup-kernel-src.sh to re-apply every
+# --force-kernel-src forces tools/setup-kernel-src.sh to re-apply every
 # tracked patch even if kernel-src/ already looks patched -- use this if
 # you've changed one of the tracked patch files under modules/.
 
@@ -79,9 +79,9 @@ fi
 
 echo "==> reconstructing kernel-src (download + apply tracked patches)..."
 if [ "$FORCE_KERNEL_SRC" -eq 1 ]; then
-    "$REPO/flash/setup-kernel-src.sh" --force
+    "$REPO/tools/setup-kernel-src.sh" --force
 else
-    "$REPO/flash/setup-kernel-src.sh"
+    "$REPO/tools/setup-kernel-src.sh"
 fi
 
 echo "==> building zImage + modules with -j$JOBS (full log: $BUILD_LOG)..."

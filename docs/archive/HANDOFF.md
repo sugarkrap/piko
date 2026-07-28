@@ -219,7 +219,7 @@ before first just trying a clean rebuild with today's actual fixes
    `corgi_lcd.c`, plus `corgi.c` (which does have a tracked copy,
    `corgi_patched.c`, and had drifted from it — GPIO13 debug markers, an
    extra SPI properties struct, a missing `sharpsl_rom_device` line).
-   Reverted `spitz.c` to the pristine reference snapshot (`spitz_current.c`)
+   Reverted `spitz.c` to the pristine reference snapshot (`drivers/spitz.c`)
    as the most QEMU-relevant candidate — **still silent**. Downloaded a
    pristine `linux-7.1.4` tarball and diffed the other drifted files
    against it to inspect them (`pxa25x.c`'s and `spi-pxa2xx-platform.c`'s

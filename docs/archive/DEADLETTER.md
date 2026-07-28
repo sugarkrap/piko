@@ -37,7 +37,7 @@ The device runs **Cacko 1.23** (a Qtopia 1.x ROM). The display is physically por
 ```
 zaurus-refresh/
 ├── corgi_patched.c / corgi_pm_patched.c   ← board files, compile-verified vs 7.1.4
-├── corgi_v6.0.c / corgi_pm_v6.0.c        ← originals (v6.0, before mainline removal)
+├── drivers/*_current.c                    ← tracked current snapshots used by setup-kernel-src
 ├── corgi.h                                 ← GPIO/hardware constants header
 ├── kernel.config-corgi-7.1.4              ← .config that builds the working zImage
 ├── zImage-corgi-7.1.4                     ← built kernel (5.99 MB), ready to flash

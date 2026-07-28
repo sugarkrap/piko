@@ -35,7 +35,7 @@ stage-2 `zImage` and every module `chunked-deploy.sh` deploys. Every file
 gets an MD5 in a `MANIFEST` entry written into the package.
 
 **kernel-src/ is gitignored and only reconstructed on demand.**
-`flash/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
+`tools/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
 reconstruction procedure: download a pristine kernel.org tarball, then
 apply every hand-patched file this repo tracks under `modules/` — Corgi
 board files, the W100 driver, the sharpsl NAND driver, hostap_cs +

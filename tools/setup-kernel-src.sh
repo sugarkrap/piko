@@ -11,7 +11,7 @@ set -eu
 # is what makes it reproducible without vendoring it.
 #
 # Usage:
-#   flash/setup-kernel-src.sh [--force]
+#   tools/setup-kernel-src.sh [--force]
 #
 # --force re-applies everything even if kernel-src/ already looks patched
 # (the default is to skip all of this and exit 0 if a previous run's
@@ -60,7 +60,7 @@ if [ ! -d "$KERNEL_DIR" ]; then
 fi
 
 if [ ! -f "$KERNEL_DIR/Makefile" ]; then
-    echo "flash/setup-kernel-src.sh: $KERNEL_DIR doesn't look like a kernel tree (no Makefile)" >&2
+    echo "tools/setup-kernel-src.sh: $KERNEL_DIR doesn't look like a kernel tree (no Makefile)" >&2
     exit 1
 fi
 
@@ -69,7 +69,7 @@ copy_in() {
     src="$1"
     dest="$KERNEL_DIR/$2"
     if [ ! -f "$src" ]; then
-        echo "flash/setup-kernel-src.sh: missing tracked input: $src" >&2
+        echo "tools/setup-kernel-src.sh: missing tracked input: $src" >&2
         exit 1
     fi
     mkdir -p "$(dirname "$dest")"
@@ -80,6 +80,12 @@ echo "==> applying Corgi board files (see README.md 'What corgi_patched.c change
 copy_in "$REPO/corgi_patched.c"            arch/arm/mach-pxa/corgi.c
 copy_in "$REPO/modules/corgi_pm_patched.c" arch/arm/mach-pxa/corgi_pm.c
 copy_in "$REPO/corgi.h"                    arch/arm/mach-pxa/corgi.h
+
+echo "==> applying reference current-driver snapshots"
+copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
+copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c
+copy_in "$REPO/drivers/sharpsl_pm.c" arch/arm/mach-pxa/sharpsl_pm.c
+copy_in "$REPO/drivers/pxa25x_udc.c" drivers/usb/gadget/udc/pxa25x_udc.c
 
 echo "==> applying the W100 (Imageon) display driver"
 copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
@@ -130,7 +136,7 @@ copy_in "$REPO/kernel.config-corgi-$KERNEL_VERSION" .config
 
 echo "==> oldconfig (non-interactive, accepting defaults for anything new)"
 ( cd "$KERNEL_DIR" && yes "" | make ARCH=arm oldconfig >/tmp/piko-oldconfig.log 2>&1 ) || {
-    echo "flash/setup-kernel-src.sh: oldconfig failed, see /tmp/piko-oldconfig.log" >&2
+    echo "tools/setup-kernel-src.sh: oldconfig failed, see /tmp/piko-oldconfig.log" >&2
     exit 1
 }
 

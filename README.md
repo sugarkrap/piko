@@ -182,7 +182,6 @@ surfaced more API changes that a source read missed:
 
 ## Files here
 
-- `corgi_v6.0.c` — original board file, last mainline version (v6.0).
 - `corgi_patched.c` / `modules/corgi_pm_patched.c` — **compile-verified clean
   (zero warnings) against Linux 7.1.4**, kept in sync with the working
   copies under `kernel-src/linux-7.1.4/arch/arm/mach-pxa/`.
@@ -209,10 +208,12 @@ surfaced more API changes that a source read missed:
 - `modules/w100/Kconfig_fbdev`, `modules/w100/Makefile_fbdev` — the
   `FB_W100` Kconfig entry and Makefile wiring, for reference when
   re-adding it to a current tree.
-- `sharpsl_pm_v6.0.c` / `sharpsl_pm_current.c` — diffed for reference; this
-  shared power-management driver needed almost no changes (see below).
+- `drivers/spitz.c`, `drivers/spitz_pm.c`,
+  `drivers/sharpsl_pm.c`, `drivers/pxa25x_udc.c` — tracked
+  reference snapshots applied by `tools/setup-kernel-src.sh` when rebuilding
+  `kernel-src/linux-7.1.4/`.
 
-## What `corgi_patched.c` changes vs. `corgi_v6.0.c`, and why
+## What `corgi_patched.c` changes, and why
 
 1. **Dropped `.handle_irq = pxa25x_handle_irq` from all three
    `MACHINE_START` blocks** (Corgi/Shepherd/Husky). `struct machine_desc`

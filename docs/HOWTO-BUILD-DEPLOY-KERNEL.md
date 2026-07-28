@@ -35,7 +35,7 @@ This does four things, in order, and stops immediately if any step fails:
 1. **Checks the device is reachable over SSH first** (fails fast with a
    pointer to the recovery doc if not — no point spending 15-25 minutes
    building if there's nothing to deploy to).
-2. **Reconstructs `kernel-src/linux-7.1.4`** via `flash/setup-kernel-src.sh`
+2. **Reconstructs `kernel-src/linux-7.1.4`** via `tools/setup-kernel-src.sh`
    — downloads a pristine kernel.org tarball and applies every tracked
    patch under `modules/` (Corgi board files, W100, sharpsl NAND,
    hostap_cs + lib80211, and the mach-pxa/wireless/crypto Kconfig+Makefile
@@ -84,7 +84,7 @@ this script.
 ## Manual steps (if you need to do it by hand)
 
 ```sh
-flash/setup-kernel-src.sh   # only needed once per fresh clone / patch change
+tools/setup-kernel-src.sh   # only needed once per fresh clone / patch change
 cd kernel-src/linux-7.1.4
 export PATH="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin:$PATH"
 export ARCH=arm CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-

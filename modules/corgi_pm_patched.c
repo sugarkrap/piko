@@ -226,7 +226,7 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 	 * that peaks around raw ADC 213. This unit's real-world MAX1111 readings
 	 * top out around 140-145 even at/near full charge (confirmed against the
 	 * stock charger + Cacko, which does not treat this as low/critical) --
-	 * offset every threshold down by 40 to match. See sharpsl_pm_current.c's
+	 * offset every threshold down by 40 to match. See drivers/sharpsl_pm.c's
 	 * battery_levels tables (offset by the same -40) and the disabled
 	 * critical-suspend trigger in sharpsl_battery_thread() for the rest of
 	 * this recalibration.
