@@ -116,6 +116,15 @@ copy_in "$REPO/modules/wireless/Makefile" net/wireless/Makefile
 copy_in "$REPO/modules/crypto/Kconfig"    crypto/Kconfig
 copy_in "$REPO/modules/crypto/Makefile"   crypto/Makefile
 
+# The Corgi/Husky ASoC sound machine driver (SND_PXA2XX_SOC_CORGI, depends
+# on PXA_SHARP_C7xx + I2C, same board-removal history as corgi.c/corgi_pm.c/
+# w100fb.c above) -- also never existed in this repo until it was pulled
+# directly from the same already-working kernel-src.
+echo "==> applying the Corgi ASoC sound driver"
+copy_in "$REPO/modules/sound-pxa/corgi.c"   sound/soc/pxa/corgi.c
+copy_in "$REPO/modules/sound-pxa/Kconfig"   sound/soc/pxa/Kconfig
+copy_in "$REPO/modules/sound-pxa/Makefile"  sound/soc/pxa/Makefile
+
 echo "==> applying kernel.config-corgi-$KERNEL_VERSION"
 copy_in "$REPO/kernel.config-corgi-$KERNEL_VERSION" .config
 
