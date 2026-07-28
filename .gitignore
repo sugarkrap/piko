@@ -49,10 +49,19 @@ flash/zImage-minimal-bootstrap-*
 flash/encsh
 flash/pico-smf-write
 flash/piko-backup
+flash/piko-install
+flash/piko-install-final
+flash/piko-install-raw
 flash/piko-install-mtd1
 flash/piko-install-mtd1-safe
 flash/piko-install-mtd2
 flash/piko-install-mtd3-safe
+# compiled outputs for flash/src/ -- sources are tracked, binaries go to flash/bin/
+flash/src/*.o
+flash/src/piko-install
+# flash/bin/ holds compiled binaries; only .gitkeep is tracked
+flash/bin/*
+!flash/bin/.gitkeep
 
 # =====================================================================
 #  nand-root/  -- the staged stage-2 rootfs. Track hand-written config
