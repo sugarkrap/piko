@@ -143,6 +143,20 @@ For any new `updater.sh` swap:
    with the corrected values so the general-purpose tool works without
    needing this manual derivation every time.
 
+## Restoration note (2026-07-28)
+
+`flash/updater-encoded.sh` was accidentally deleted during an unrelated
+repo cleanup pass (a "remove all the other updater variants" sweep that
+didn't know this one was load-bearing, not a duplicate). Regenerated it
+by encoding `flash/updater-uncoded.sh`'s plaintext with the 21 confirmed
+mappings above via a one-off Python script — every byte in that plaintext
+falls within the confirmed set, and the result's first 10 bytes came out
+byte-for-byte identical to the `24 22 c7 03 a8 30 c7 6e 73 2f` documented
+above, confirming the regenerated file is correct. `tools/src/encsh.c`'s
+built-in `enctab[]` was NOT used for this (still wrong for this device,
+per above) — do not regenerate this file by running it through `encsh`
+until `enctab[]` is corrected.
+
 ## A process note, not just a technical one
 
 `WebFetch` passes fetched content through a summarization model before
