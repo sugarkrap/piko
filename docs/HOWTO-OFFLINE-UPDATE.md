@@ -36,21 +36,21 @@ gets an MD5 in a `MANIFEST` entry written into the package.
 
 **kernel-src/ is gitignored and only reconstructed on demand.**
 `flash/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
-reconstruction procedure: download a pristine kernel.org tarball, apply
-every hand-patched file this repo tracks (Corgi board files, the W100
-driver, the sharpsl NAND driver, hostap_cs + lib80211 — all now under
-`modules/`), and apply the Kconfig/Makefile wiring patches under
-`patches/` — see `patches/README.md` if those don't exist yet (a known,
-temporary gap: full-file patches are all mechanical, but the wiring for
-`MACH_CORGI`/`SHEPHERD`/`HUSKY` and the `net/wireless`/`crypto`
-re-additions needs a real diff exported from an already-working local
-`kernel-src`, not something this script can invent). Until that gap is
-closed, `setup-kernel-src.sh` exits 2 (by design, not a failure) and both
-CI and `build-update-package.sh` fall back to a rootfs-only package. CI
-(`.github/workflows/build-update-package.yml`) runs this same script and
-caches the reconstructed tree, so once the wiring patches land, CI
-packages automatically start including a real kernel + modules with no
-further workflow changes needed.
+reconstruction procedure: download a pristine kernel.org tarball, then
+apply every hand-patched file this repo tracks under `modules/` — Corgi
+board files, the W100 driver, the sharpsl NAND driver, hostap_cs +
+lib80211 + michael_mic, and the `mach-pxa`/`wireless`/`crypto`
+Kconfig+Makefile wiring for `MACH_CORGI`/`SHEPHERD`/`HUSKY` and the
+`lib80211`/`CRYPTO_MICHAEL_MIC` re-additions (`modules/mach-pxa/`,
+`modules/wireless/`, `modules/crypto/` — full working copies pulled
+directly from the machine that built `zImage-corgi-7.1.4`). This is
+everything needed; reconstruction should always succeed given kernel.org
+access. CI (`.github/workflows/build-update-package.yml`) runs this same
+script and caches the reconstructed tree, so a run where nothing
+kernel-related changed restores instantly instead of re-downloading. If
+reconstruction ever does fail for some other reason (a kernel.org hiccup,
+an `oldconfig` failure), both CI and `build-update-package.sh` fall back
+to a rootfs-only package rather than failing outright.
 
 **Whenever CI does produce a full package, it's boot-tested before being
 uploaded.** `flash/qemu-smoke-test.sh` boots the built kernel under QEMU
