@@ -1,7 +1,7 @@
 # How to build and deploy a new stage-2 kernel (+ modules)
 
 *Written 2026-07-26, right after fixing the WiFi/PCMCIA ABI-mismatch
-regression (`DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
+regression (`docs/archive/DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
 without its matching modules. This is now the canonical procedure —
 follow it exactly, especially the "always deploy everything together"
 rule.*
@@ -13,9 +13,9 @@ on whether the device is currently reachable over SSH:
 
 | Situation | Use |
 |---|---|
-| Device boots, WiFi/SSH work, you're updating the stage-2 kernel and/or modules | **`flash/build-and-deploy.sh`** (this doc) |
-| Device is unreachable over SSH / unbootable / bricked | SD-card recovery flash — `flash/FLASH-MTD1-MTD3-SAFE.md` |
-| You need to change the *bootstrap* partition itself (`mtd1`/`smf`, the tiny kexec loader) | SD-card recovery flash — `flash/FLASH-MTD1-MTD3-SAFE.md` |
+| Device boots, WiFi/SSH work, you're updating the stage-2 kernel and/or modules | **`tools/build-and-deploy.sh`** (this doc) |
+| Device is unreachable over SSH / unbootable / bricked | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
+| You need to change the *bootstrap* partition itself (`mtd1`/`smf`, the tiny kexec loader) | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
 
 The stage-2 kernel + rootfs live on `home` (`mtd3`), which is a normal
 writable filesystem while the device is running — that's why it can be
@@ -24,10 +24,10 @@ flashing via the Cacko recovery menu + SD card is now reserved for the
 bootstrap partition and true recovery, per `AGENTS.md`'s "last spare
 board" constraint (scope every flash to only what changed).
 
-## Normal path: `flash/build-and-deploy.sh`
+## Normal path: `tools/build-and-deploy.sh`
 
 ```sh
-flash/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
+tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
 This does three things, in order, and stops immediately if any step fails:
@@ -37,7 +37,7 @@ This does three things, in order, and stops immediately if any step fails:
    building if there's nothing to deploy to).
 2. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
    logging full (untruncated) output to `/tmp/kbuild-<timestamp>.log`.
-3. **Deploys** by calling `flash/chunked-deploy.sh`, which pushes (over a
+3. **Deploys** by calling `tools/chunked-deploy.sh`, which pushes (over a
    known-flaky WiFi link, chunked + retried + size-verified):
    - the new `zImage` → `/boot/zImage-full` (auto-backs up the old one to
      `/boot/zImage-full.bak`)
@@ -93,7 +93,7 @@ echo "exit: $?"
   board) and a full `zImage modules` build can consume several GB and
   15-25+ minutes. A build failing with a bare `Error 2` and no visible
   cause has been disk-space exhaustion before.
-- Once built, deploy with `flash/chunked-deploy.sh [user@host]` directly
+- Once built, deploy with `tools/chunked-deploy.sh [user@host]` directly
   (this is exactly what `build-and-deploy.sh` calls after a successful
   build).
 

@@ -1,7 +1,7 @@
 # How to update the ROM without WiFi (`piko-update`)
 
 *Written 2026-07-28. Every update path before this one
-(`flash/build-and-deploy.sh` / `chunked-deploy.sh`) needs the device
+(`tools/build-and-deploy.sh` / `tools/chunked-deploy.sh`) needs the device
 reachable over WiFi/SSH — a bar this hardware often can't clear (no CF
 WiFi card compatible with this kernel, or no subnet to join). `piko-update`
 removes that dependency: point it at a package file on the SD card and it
@@ -11,9 +11,9 @@ updates the running system directly, no network involved at all.*
 
 | Situation | Use |
 |---|---|
-| Device boots, WiFi/SSH work | `flash/build-and-deploy.sh` — see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md` |
+| Device boots, WiFi/SSH work | `tools/build-and-deploy.sh` — see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md` |
 | Device boots, but WiFi/SSH is unavailable or you'd rather not depend on it | **`piko-update`** (this doc) |
-| Device unreachable / unbootable, or the `smf`/mtd1 bootstrap partition itself needs to change | SD-card recovery flash — `flash/FLASH-MTD1-MTD3-SAFE.md` |
+| Device unreachable / unbootable, or the `smf`/mtd1 bootstrap partition itself needs to change | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
 
 `piko-update` only ever touches the `home` partition (mtd3) — the same
 territory `chunked-deploy.sh` already updates live over SSH (stage-2
@@ -27,7 +27,7 @@ flash/build-update-package.sh [output.tar]      # defaults to ./update.tar
 ```
 
 This cross-compiles `piko-update` itself, packages the entire
-`nand-root/` overlay (`etc/*`, `usr/sbin/*`, `init` — whatever's actually
+`rootfs/` overlay (`etc/*`, `usr/sbin/*`, `init` — whatever's actually
 committed there, so this can't drift out of sync with a hand-picked file
 list), and — if a built `kernel-src/linux-7.1.4` checkout is present
 locally (see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`) — also includes the

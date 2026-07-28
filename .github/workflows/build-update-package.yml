@@ -9,7 +9,7 @@ name: Build piko-update package
 # NOT vendored in this repo, so this workflow CANNOT build the stage-2
 # zImage or kernel modules. flash/build-update-package.sh detects that and
 # falls back to a "rootfs-only" package: piko-update itself (freshly
-# cross-compiled here) plus the full nand-root/ overlay (etc/, usr/sbin/,
+# cross-compiled here) plus the full rootfs/ overlay (etc/, usr/sbin/,
 # init). That is already a real, useful, completely offline update on its
 # own -- it just won't contain a kernel bump. For a full kernel+modules
 # package, run flash/build-update-package.sh locally with KERNEL_DIR
@@ -21,7 +21,7 @@ on:
     branches: [main]
     paths:
       - "userspace/src/**"
-      - "nand-root/**"
+      - "rootfs/**"
       - "flash/build-update-package.sh"
       - ".github/workflows/build-update-package.yml"
 

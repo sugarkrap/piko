@@ -2,7 +2,7 @@
  * md5sum.c -- minimal MD5 file-hashing tool for the Zaurus device rootfs.
  *
  * The device's busybox build has no md5sum/sha1sum/cksum/cmp applet, so
- * flash/chunked-deploy.sh can currently only verify transfers by byte
+ * tools/chunked-deploy.sh can currently only verify transfers by byte
  * count. This is a small, dependency-free CLI that mimics `md5sum FILE
  * [FILE...]` output ("<hex digest>  <filename>"), matching GNU/busybox
  * md5sum so it's a drop-in on both ends. The actual MD5 implementation

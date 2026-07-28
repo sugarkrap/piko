@@ -2,7 +2,7 @@
  * piko-update -- apply a piko-update package (kernel + modules + rootfs
  * overlay) to the running "home" partition (mtd3), entirely offline: no
  * WiFi, no SSH, no second computer. Point it at a package staged on the SD
- * card and it does what flash/chunked-deploy.sh does over SSH, but locally:
+ * card and it does what tools/chunked-deploy.sh does over SSH, but locally:
  *
  *   piko-update /mnt/card/update.tar [--dry-run] [--no-reboot]
  *
@@ -48,7 +48,7 @@
  *      the one path with an actual documented recovery story.
  *   4. A flock on LOCK_PATH refuses a second concurrent run, the same
  *      class of bug that corrupted JFFS2 once already (see
- *      flash/chunked-deploy.sh's own lock comment).
+ *      tools/chunked-deploy.sh's own lock comment).
  *   5. Reboots via /usr/sbin/softreboot (kexec self-jump), never a raw
  *      reboot() -- this hardware's normal restart path is indistinguishable
  *      from a hard poweroff (see softreboot's own comments).
