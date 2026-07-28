@@ -12,13 +12,15 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
 # --adapter IFACE binds the SSH connection to a specific local network
 # interface (ssh -B), useful when the build machine has multiple network
 # adapters and the Zaurus is only reachable via one of them.
+# --target user@host sets the SSH destination explicitly. A positional
+# user@host is also accepted for backwards compatibility.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -37,10 +39,34 @@ TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
+            if [ $# -lt 2 ]; then
+                echo "FAILED: --adapter requires an interface name" >&2
+                exit 1
+            fi
             ADAPTER="$2"
             shift 2
             ;;
+        --target)
+            if [ $# -lt 2 ]; then
+                echo "FAILED: --target requires user@host" >&2
+                exit 1
+            fi
+            TARGET="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [user@host]"
+            exit 0
+            ;;
+        --*)
+            echo "FAILED: unknown option: $1" >&2
+            exit 1
+            ;;
         *)
+            if [ -n "$TARGET" ]; then
+                echo "FAILED: multiple targets specified ($TARGET and $1)" >&2
+                exit 1
+            fi
             TARGET="$1"
             shift
             ;;
@@ -52,8 +78,20 @@ SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-n
 if [ -n "$ADAPTER" ]; then
     SSH_OPTS="$SSH_OPTS -B $ADAPTER"
 fi
-KERNEL_DIR="/home/makaron/Code/zaurus-refresh/kernel-src/linux-7.1.4"
-REPO="/home/makaron/Code/zaurus-refresh"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DEFAULT_REPO="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+REPO="${REPO:-$DEFAULT_REPO}"
+KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
+
+if [ ! -d "$REPO" ]; then
+    echo "FAILED: REPO does not exist: $REPO" >&2
+    exit 1
+fi
+if [ ! -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
+    echo "FAILED: expected built kernel image missing: $KERNEL_DIR/arch/arm/boot/zImage" >&2
+    echo "Run tools/build-and-deploy.sh first, or set KERNEL_DIR to the tree that contains your latest build." >&2
+    exit 1
+fi
 CHUNK_SIZE=524288   # 512 KiB
 MAX_ATTEMPTS=8
 RETRY_DELAY=2
@@ -127,6 +165,7 @@ send_file() {
     local_size=$(wc -c < "$local_path")
     chunk_dir="$STAGE/$name.chunks"
     remote_chunk_dir="$REMOTE_STAGE/$name.chunks"
+    file_attempt=1
 
     # Skip entirely if the remote target already has the right byte count
     # (and, when md5sum is available on both ends, the right content too) --
@@ -146,55 +185,70 @@ send_file() {
         fi
     fi
 
-    echo "==> $name: $local_size bytes, chunking at $CHUNK_SIZE"
-    rm -rf "$chunk_dir"
-    mkdir -p "$chunk_dir"
-    split -b "$CHUNK_SIZE" -d -a 5 "$local_path" "$chunk_dir/part."
-
-    ssh_do "mkdir -p '$remote_chunk_dir'"
-
-    for part in "$chunk_dir"/part.*; do
-        part_name="$(basename "$part")"
-        part_local_size=$(wc -c < "$part")
-        remote_part="$remote_chunk_dir/$part_name"
-
-        attempt=1
-        while :; do
-            existing=$(remote_size "$remote_part")
-            if [ "$existing" = "$part_local_size" ]; then
-                break
-            fi
-            if [ "$attempt" -gt "$MAX_ATTEMPTS" ]; then
-                echo "FAILED: $part_name would not transfer intact after $MAX_ATTEMPTS attempts" >&2
-                exit 1
-            fi
-            echo "  $part_name: attempt $attempt/$MAX_ATTEMPTS"
-            if ! cat "$part" | ssh $SSH_OPTS -i "$KEY" "$TARGET" "cat > '$remote_part'"; then
-                echo "  (connection dropped, retrying in ${RETRY_DELAY}s)"
-            fi
-            attempt=$((attempt + 1))
-            sleep "$RETRY_DELAY"
-        done
-    done
-
-    echo "==> $name: all chunks present, reassembling remotely"
-    remote_new="$remote_path.new"
-    ssh_do "cat '$remote_chunk_dir'/part.* > '$remote_new' && wc -c < '$remote_new'" > "$STAGE/$name.remote_size"
-    remote_total=$(cat "$STAGE/$name.remote_size")
-    if [ "$remote_total" != "$local_size" ]; then
-        echo "FAILED: $name reassembled to $remote_total bytes, expected $local_size" >&2
-        exit 1
-    fi
-
-    if [ "$HAVE_REMOTE_MD5" = 1 ] && [ -n "$MD5SUM_LOCAL" ]; then
-        remote_hash="$(remote_md5 "$remote_new")"
-        local_hash="$(local_md5 "$local_path")"
-        if [ "$remote_hash" != "$local_hash" ]; then
-            echo "FAILED: $name md5 mismatch after reassembly (local $local_hash, remote $remote_hash)" >&2
+    while :; do
+        if [ "$file_attempt" -gt "$MAX_ATTEMPTS" ]; then
+            echo "FAILED: $name would not reassemble correctly after $MAX_ATTEMPTS full-file attempts" >&2
             exit 1
         fi
-        echo "==> $name: md5 verified ($local_hash)"
-    fi
+
+        echo "==> $name: $local_size bytes, chunking at $CHUNK_SIZE (file attempt $file_attempt/$MAX_ATTEMPTS)"
+        rm -rf "$chunk_dir"
+        mkdir -p "$chunk_dir"
+        split -b "$CHUNK_SIZE" -d -a 5 "$local_path" "$chunk_dir/part."
+
+        ssh_do "rm -rf '$remote_chunk_dir' && mkdir -p '$remote_chunk_dir'"
+
+        for part in "$chunk_dir"/part.*; do
+            part_name="$(basename "$part")"
+            part_local_size=$(wc -c < "$part")
+            remote_part="$remote_chunk_dir/$part_name"
+
+            attempt=1
+            while :; do
+                existing=$(remote_size "$remote_part")
+                if [ "$existing" = "$part_local_size" ]; then
+                    break
+                fi
+                if [ "$attempt" -gt "$MAX_ATTEMPTS" ]; then
+                    echo "FAILED: $part_name would not transfer intact after $MAX_ATTEMPTS attempts" >&2
+                    exit 1
+                fi
+                echo "  $part_name: attempt $attempt/$MAX_ATTEMPTS"
+                if ! cat "$part" | ssh $SSH_OPTS -i "$KEY" "$TARGET" "cat > '$remote_part'"; then
+                    echo "  (connection dropped, retrying in ${RETRY_DELAY}s)"
+                fi
+                attempt=$((attempt + 1))
+                sleep "$RETRY_DELAY"
+            done
+        done
+
+        echo "==> $name: all chunks present, reassembling remotely"
+        remote_new="$remote_path.new"
+        ssh_do "cat '$remote_chunk_dir'/part.* > '$remote_new' && wc -c < '$remote_new'" > "$STAGE/$name.remote_size"
+        remote_total=$(cat "$STAGE/$name.remote_size")
+        if [ "$remote_total" != "$local_size" ]; then
+            echo "FAILED: $name reassembled to $remote_total bytes, expected $local_size" >&2
+            ssh_do "rm -rf '$remote_chunk_dir' '$remote_new'" || true
+            file_attempt=$((file_attempt + 1))
+            sleep "$RETRY_DELAY"
+            continue
+        fi
+
+        if [ "$HAVE_REMOTE_MD5" = 1 ] && [ -n "$MD5SUM_LOCAL" ]; then
+            remote_hash="$(remote_md5 "$remote_new")"
+            local_hash="$(local_md5 "$local_path")"
+            if [ "$remote_hash" != "$local_hash" ]; then
+                echo "FAILED: $name md5 mismatch after reassembly (local $local_hash, remote $remote_hash)" >&2
+                ssh_do "rm -rf '$remote_chunk_dir' '$remote_new'" || true
+                file_attempt=$((file_attempt + 1))
+                sleep "$RETRY_DELAY"
+                continue
+            fi
+            echo "==> $name: md5 verified ($local_hash)"
+        fi
+
+        break
+    done
 
     ssh_do "
         set -e

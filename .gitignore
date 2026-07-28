@@ -113,3 +113,5 @@ userspace/src/md5sum
 modules/nand/hostap-patched/
 
 # Kernel build output blobs are tracked directly as zImage-* (small enough).
+
+toolchain/

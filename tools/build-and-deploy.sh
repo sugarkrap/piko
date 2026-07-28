@@ -63,7 +63,7 @@ if [ -n "$ADAPTER" ]; then
 fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
-TOOLCHAIN="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin"
+TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
 BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
@@ -84,11 +84,33 @@ else
     "$REPO/tools/setup-kernel-src.sh"
 fi
 
+if [ -n "${TOOLCHAIN_BIN_DIR}" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
+    PATH="$TOOLCHAIN_BIN_DIR:$PATH"
+fi
+
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    for prefix in arm-buildroot-linux-uclibcgnueabi- arm-unknown-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
+        if command -v "${prefix}gcc" >/dev/null 2>&1; then
+            CROSS_COMPILE="$prefix"
+            break
+        fi
+    done
+fi
+
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    echo "FAILED: no ARM cross compiler found in PATH." >&2
+    echo "Expected one of: arm-buildroot-linux-uclibcgnueabi-gcc, arm-unknown-linux-uclibcgnueabi-gcc, arm-linux-gnueabi-gcc, arm-unknown-linux-gnueabi-gcc" >&2
+    echo "Set TOOLCHAIN_BIN_DIR to your toolchain bin path, or export CROSS_COMPILE explicitly." >&2
+    exit 1
+fi
+
+echo "==> using cross-compiler prefix: $CROSS_COMPILE"
+
 echo "==> building zImage + modules with -j$JOBS (full log: $BUILD_LOG)..."
 if ! (
     cd "$KERNEL_DIR"
-    export PATH="$TOOLCHAIN:$PATH"
-    export ARCH=arm CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-
+    export PATH
+    export ARCH=arm CROSS_COMPILE
     make -j"$JOBS" zImage modules
 ) > "$BUILD_LOG" 2>&1; then
     echo "FAILED: build did not complete. Last 40 lines of $BUILD_LOG:" >&2
@@ -106,4 +128,5 @@ set -- "$TARGET"
 if [ -n "$ADAPTER" ]; then
     set -- --adapter "$ADAPTER" "$TARGET"
 fi
+export REPO KERNEL_DIR
 exec "$REPO/tools/chunked-deploy.sh" "$@"

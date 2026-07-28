@@ -21,6 +21,8 @@ set -eu
 # Env overrides:
 #   KERNEL_VERSION   default 7.1.4 (matches the tracked .config/zImage)
 #   KERNEL_SRC_DIR   default <repo>/kernel-src (gitignored)
+#   TOOLCHAIN_BIN_DIR optional compiler bin dir prepended to PATH
+#   CROSS_COMPILE    optional explicit compiler prefix (e.g. arm-linux-gnueabi-)
 #
 # Exit codes:
 #   0   kernel-src/linux-$KERNEL_VERSION is ready to build
@@ -34,6 +36,7 @@ KERNEL_DIR="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION"
 TARBALL="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz"
 MARKER="$KERNEL_DIR/.piko-patched"
+TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
 
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
@@ -211,8 +214,30 @@ copy_in "$REPO/modules/sound-pxa/Makefile"  sound/soc/pxa/Makefile
 echo "==> applying kernel.config-corgi-$KERNEL_VERSION"
 copy_in "$REPO/kernel.config-corgi-$KERNEL_VERSION" .config
 
+if [ -n "${TOOLCHAIN_BIN_DIR}" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
+    PATH="$TOOLCHAIN_BIN_DIR:$PATH"
+fi
+
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    for prefix in arm-buildroot-linux-uclibcgnueabi- arm-unknown-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
+        if command -v "${prefix}gcc" >/dev/null 2>&1; then
+            CROSS_COMPILE="$prefix"
+            break
+        fi
+    done
+fi
+
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    echo "tools/setup-kernel-src.sh: no ARM cross compiler found in PATH." >&2
+    echo "Expected one of: arm-buildroot-linux-uclibcgnueabi-gcc, arm-unknown-linux-uclibcgnueabi-gcc, arm-linux-gnueabi-gcc, arm-unknown-linux-gnueabi-gcc" >&2
+    echo "Set TOOLCHAIN_BIN_DIR to your toolchain bin path, or export CROSS_COMPILE explicitly." >&2
+    exit 1
+fi
+
+echo "==> using cross-compiler prefix for oldconfig: $CROSS_COMPILE"
+
 echo "==> oldconfig (non-interactive, accepting defaults for anything new)"
-( cd "$KERNEL_DIR" && yes "" | make ARCH=arm oldconfig >/tmp/piko-oldconfig.log 2>&1 ) || {
+( cd "$KERNEL_DIR" && yes "" | make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" oldconfig >/tmp/piko-oldconfig.log 2>&1 ) || {
     echo "tools/setup-kernel-src.sh: oldconfig failed, see /tmp/piko-oldconfig.log" >&2
     exit 1
 }

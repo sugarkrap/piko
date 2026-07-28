@@ -30,6 +30,21 @@ board" constraint (scope every flash to only what changed).
 tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
+Toolchain selection is automatic: the script uses the first compiler it
+finds in `PATH` among `arm-buildroot-linux-uclibcgnueabi-gcc`,
+`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-linux-gnueabi-gcc`, and
+`arm-unknown-linux-gnueabi-gcc`. You can override this explicitly with:
+
+```sh
+CROSS_COMPILE=arm-linux-gnueabi- tools/build-and-deploy.sh [user@host]
+```
+
+If your compiler binaries are not in `PATH`, point the script at them:
+
+```sh
+TOOLCHAIN_BIN_DIR=/path/to/toolchain/bin tools/build-and-deploy.sh [user@host]
+```
+
 This does four things, in order, and stops immediately if any step fails:
 
 1. **Checks the device is reachable over SSH first** (fails fast with a
