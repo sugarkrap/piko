@@ -120,9 +120,17 @@ done
 # that was never produced (hit exactly this in CI).
 copy_in "$REPO/modules/hostap/Kconfig"  "$HOSTAP_DEST/Kconfig"
 copy_in "$REPO/modules/hostap/Makefile" "$HOSTAP_DEST/Makefile"
-for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; do
+for f in "$REPO"/modules/hostap/lib80211*.c; do
     copy_in "$f" "net/wireless/$(basename "$f")"
 done
+# lib80211.h is a public kernel header (every consumer includes it as
+# <net/lib80211.h>, confirmed via grep across modules/hostap/*.c) -- it
+# belongs in include/net/, not alongside the .c files in net/wireless/.
+# Got this wrong initially: putting it in net/wireless/ left the header
+# undiscoverable, so lib80211.c itself failed with "fatal error:
+# net/lib80211.h: No such file or directory" despite the file being
+# present on disk, just at the wrong path (hit exactly this in CI).
+copy_in "$REPO/modules/hostap/lib80211.h" include/net/lib80211.h
 copy_in "$REPO/modules/hostap/michael_mic.c" crypto/michael_mic.c
 
 # hostap/{Kconfig,Makefile} above restore the SYMBOL definitions, but that
