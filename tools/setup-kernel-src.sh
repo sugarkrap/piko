@@ -125,6 +125,57 @@ for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; 
 done
 copy_in "$REPO/modules/hostap/michael_mic.c" crypto/michael_mic.c
 
+# hostap/{Kconfig,Makefile} above restore the SYMBOL definitions, but that
+# alone isn't enough: the commit that removed hostap_cs from mainline also
+# deleted the lines in the *enclosing* drivers/net/wireless/intersil/
+# {Kconfig,Makefile} that source/build the hostap/ subdirectory at all
+# (other intersil drivers like orinoco/p54 are still upstream, so that
+# directory itself still exists -- it just no longer mentions hostap).
+# There's no pristine snapshot of these two files tracked anywhere in
+# modules/ (unlike the full-file copies elsewhere in this script), so
+# patch the missing wiring back in directly, idempotently -- this is the
+# actual root cause of "missing input file: .../hostap/hostap.ko" recurring
+# even with hostap's own Kconfig/Makefile correctly restored: without this,
+# CONFIG_HOSTAP has no Kconfig symbol anywhere in the tree, so oldconfig
+# silently drops it (same failure mode as every other Kconfig gap in this
+# script, just one directory level higher than hostap/ itself).
+ensure_kconfig_source() {
+    file="$1"; source_line="$2"
+    if [ ! -f "$file" ]; then
+        echo "tools/setup-kernel-src.sh: expected upstream file missing: $file" >&2
+        exit 1
+    fi
+    grep -qF "$source_line" "$file" && return 0
+    if grep -q '^endmenu' "$file"; then
+        marker='^endmenu'
+    elif grep -q '^endif' "$file"; then
+        marker='^endif'
+    else
+        marker=''
+    fi
+    if [ -n "$marker" ]; then
+        awk -v line="$source_line" -v marker="$marker" \
+            '!done && $0 ~ marker { print line; done=1 } { print }' \
+            "$file" > "$file.piko-tmp"
+        mv "$file.piko-tmp" "$file"
+    else
+        printf '%s\n' "$source_line" >> "$file"
+    fi
+}
+ensure_line_in_file() {
+    file="$1"; line="$2"
+    if [ ! -f "$file" ]; then
+        echo "tools/setup-kernel-src.sh: expected upstream file missing: $file" >&2
+        exit 1
+    fi
+    grep -qF "$line" "$file" || printf '%s\n' "$line" >> "$file"
+}
+INTERSIL_DIR=drivers/net/wireless/intersil
+ensure_kconfig_source "$KERNEL_DIR/$INTERSIL_DIR/Kconfig" \
+    'source "drivers/net/wireless/intersil/hostap/Kconfig"'
+ensure_line_in_file "$KERNEL_DIR/$INTERSIL_DIR/Makefile" \
+    'obj-$(CONFIG_HOSTAP) += hostap/'
+
 # Kconfig/Makefile wiring: MACH_CORGI/SHEPHERD/HUSKY + PXA_SHARP_C7xx
 # (arch/arm/mach-pxa), lib80211 + its crypt helpers (net/wireless), and
 # CRYPTO_MICHAEL_MIC (crypto). These are full working copies pulled

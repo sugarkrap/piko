@@ -69,6 +69,17 @@ jobs:
           key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'tools/setup-kernel-src.sh') }}
           restore-keys: |
             kernel-src-7.1.4-
+          # actions/cache skips its post-job save step entirely whenever the
+          # job's overall conclusion is "failure" -- every run so far has
+          # failed somewhere after this point (Kconfig gaps, a missing
+          # struct field, etc.), so no run has ever actually saved a cache
+          # entry reflecting real build progress; every restore-keys hit has
+          # been fuzzy-matching a stale entry from before those fixes
+          # existed. save-always makes the (cheap, seconds-long) save
+          # unconditional so a run that gets further than the last one
+          # before failing still leaves a better starting point for the
+          # next one.
+          save-always: true
 
       - name: Reconstruct kernel-src (download + apply tracked patches)
         id: kernel_src
