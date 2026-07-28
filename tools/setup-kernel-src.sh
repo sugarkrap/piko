@@ -86,6 +86,13 @@ copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
 copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c
 copy_in "$REPO/drivers/sharpsl_pm.c" arch/arm/mach-pxa/sharpsl_pm.c
 copy_in "$REPO/drivers/pxa25x_udc.c" drivers/usb/gadget/udc/pxa25x_udc.c
+# pxa25x_udc.c fetches the D+ pullup line via
+# devm_gpiod_get_index_optional(..., "pullup", ...) instead of the old
+# platform_data mach->gpio_pullup path, but the matching struct field
+# (pullup_gpio) doesn't exist in any pristine header -- caught by a real
+# CI build failing with "struct pxa25x_udc has no member named
+# pullup_gpio". See the PATCHED comment in drivers/pxa25x_udc.h itself.
+copy_in "$REPO/drivers/pxa25x_udc.h" drivers/usb/gadget/udc/pxa25x_udc.h
 
 echo "==> applying the W100 (Imageon) display driver"
 copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
@@ -102,10 +109,80 @@ HOSTAP_DEST=drivers/net/wireless/intersil/hostap
 for f in "$REPO"/modules/hostap/hostap*.c "$REPO"/modules/hostap/hostap*.h; do
     copy_in "$f" "$HOSTAP_DEST/$(basename "$f")"
 done
-for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; do
+# hostap's own Kconfig/Makefile -- the whole hostap/ directory was removed
+# from mainline, so unlike mach-pxa/net/wireless/crypto below (which are
+# full working copies of files that still exist upstream), there is no
+# pristine drivers/net/wireless/intersil/hostap/{Kconfig,Makefile} to
+# replace at all. Without these, CONFIG_HOSTAP/CONFIG_HOSTAP_CS in the
+# tracked .config have no matching symbol anywhere in the tree, so
+# oldconfig silently drops them instead of erroring -- hostap.ko then
+# never gets built, and nothing surfaces until packaging looks for a file
+# that was never produced (hit exactly this in CI).
+copy_in "$REPO/modules/hostap/Kconfig"  "$HOSTAP_DEST/Kconfig"
+copy_in "$REPO/modules/hostap/Makefile" "$HOSTAP_DEST/Makefile"
+for f in "$REPO"/modules/hostap/lib80211*.c; do
     copy_in "$f" "net/wireless/$(basename "$f")"
 done
+# lib80211.h is a public kernel header (every consumer includes it as
+# <net/lib80211.h>, confirmed via grep across modules/hostap/*.c) -- it
+# belongs in include/net/, not alongside the .c files in net/wireless/.
+# Got this wrong initially: putting it in net/wireless/ left the header
+# undiscoverable, so lib80211.c itself failed with "fatal error:
+# net/lib80211.h: No such file or directory" despite the file being
+# present on disk, just at the wrong path (hit exactly this in CI).
+copy_in "$REPO/modules/hostap/lib80211.h" include/net/lib80211.h
 copy_in "$REPO/modules/hostap/michael_mic.c" crypto/michael_mic.c
+
+# hostap/{Kconfig,Makefile} above restore the SYMBOL definitions, but that
+# alone isn't enough: the commit that removed hostap_cs from mainline also
+# deleted the lines in the *enclosing* drivers/net/wireless/intersil/
+# {Kconfig,Makefile} that source/build the hostap/ subdirectory at all
+# (other intersil drivers like orinoco/p54 are still upstream, so that
+# directory itself still exists -- it just no longer mentions hostap).
+# There's no pristine snapshot of these two files tracked anywhere in
+# modules/ (unlike the full-file copies elsewhere in this script), so
+# patch the missing wiring back in directly, idempotently -- this is the
+# actual root cause of "missing input file: .../hostap/hostap.ko" recurring
+# even with hostap's own Kconfig/Makefile correctly restored: without this,
+# CONFIG_HOSTAP has no Kconfig symbol anywhere in the tree, so oldconfig
+# silently drops it (same failure mode as every other Kconfig gap in this
+# script, just one directory level higher than hostap/ itself).
+ensure_kconfig_source() {
+    file="$1"; source_line="$2"
+    if [ ! -f "$file" ]; then
+        echo "tools/setup-kernel-src.sh: expected upstream file missing: $file" >&2
+        exit 1
+    fi
+    grep -qF "$source_line" "$file" && return 0
+    if grep -q '^endmenu' "$file"; then
+        marker='^endmenu'
+    elif grep -q '^endif' "$file"; then
+        marker='^endif'
+    else
+        marker=''
+    fi
+    if [ -n "$marker" ]; then
+        awk -v line="$source_line" -v marker="$marker" \
+            '!done && $0 ~ marker { print line; done=1 } { print }' \
+            "$file" > "$file.piko-tmp"
+        mv "$file.piko-tmp" "$file"
+    else
+        printf '%s\n' "$source_line" >> "$file"
+    fi
+}
+ensure_line_in_file() {
+    file="$1"; line="$2"
+    if [ ! -f "$file" ]; then
+        echo "tools/setup-kernel-src.sh: expected upstream file missing: $file" >&2
+        exit 1
+    fi
+    grep -qF "$line" "$file" || printf '%s\n' "$line" >> "$file"
+}
+INTERSIL_DIR=drivers/net/wireless/intersil
+ensure_kconfig_source "$KERNEL_DIR/$INTERSIL_DIR/Kconfig" \
+    'source "drivers/net/wireless/intersil/hostap/Kconfig"'
+ensure_line_in_file "$KERNEL_DIR/$INTERSIL_DIR/Makefile" \
+    'obj-$(CONFIG_HOSTAP) += hostap/'
 
 # Kconfig/Makefile wiring: MACH_CORGI/SHEPHERD/HUSKY + PXA_SHARP_C7xx
 # (arch/arm/mach-pxa), lib80211 + its crypt helpers (net/wireless), and
