@@ -41,27 +41,26 @@ flash/*.img
 flash/*.sha256
 flash/*.enc
 flash/recovery-dbks/
-# kernel experiments/backups (the live flash/zImage bootstrap stays tracked)
-flash/zImage.bad-*
-flash/zImage.prev-*
-flash/zImage-minimal-bootstrap-*
+# built kernel images are build artifacts, not tracked
+flash/zImage
+flash/zImage-*
+flash/zImage.*
 # compiled flash helpers -- the matching *.c sources are tracked
-flash/encsh
 flash/pico-smf-write
 flash/piko-backup
-flash/piko-install
-flash/piko-install-final
-flash/piko-install-raw
-flash/piko-install-mtd1
-flash/piko-install-mtd1-safe
-flash/piko-install-mtd2
-flash/piko-install-mtd3-safe
 # compiled outputs for flash/src/ -- sources are tracked, binaries go to flash/bin/
 flash/src/*.o
 flash/src/piko-install
 # flash/bin/ holds compiled binaries; only .gitkeep is tracked
 flash/bin/*
 !flash/bin/.gitkeep
+
+# =====================================================================
+#  tools/  -- track *.py / *.sh tooling + tools/src/*.c sources; ignore
+#  compiled binaries built from tools/src/.
+# =====================================================================
+tools/src/*.o
+tools/src/encsh
 
 # =====================================================================
 #  nand-root/  -- the staged stage-2 rootfs. Track hand-written config
