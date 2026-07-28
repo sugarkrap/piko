@@ -12,9 +12,13 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [user@host]
 # Example:
-#   tools/chunked-deploy.sh root@10.43.112.72
+#   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
+#
+# --adapter IFACE binds the SSH connection to a specific local network
+# interface (ssh -B), useful when the build machine has multiple network
+# adapters and the Zaurus is only reachable via one of them.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -28,9 +32,26 @@ set -eu
 # after a correct transfer). Falls back to size-only if either side is
 # missing md5sum.
 
-TARGET="${1:-root@10.43.112.72}"
+ADAPTER=""
+TARGET=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --adapter)
+            ADAPTER="$2"
+            shift 2
+            ;;
+        *)
+            TARGET="$1"
+            shift
+            ;;
+    esac
+done
+TARGET="${TARGET:-root@10.43.112.72}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new"
+if [ -n "$ADAPTER" ]; then
+    SSH_OPTS="$SSH_OPTS -B $ADAPTER"
+fi
 KERNEL_DIR="/home/makaron/Code/zaurus-refresh/kernel-src/linux-7.1.4"
 REPO="/home/makaron/Code/zaurus-refresh"
 CHUNK_SIZE=524288   # 512 KiB

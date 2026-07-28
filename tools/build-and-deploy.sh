@@ -16,13 +16,34 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [user@host]
 # Example:
-#   tools/build-and-deploy.sh root@10.43.112.72
+#   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
+#
+# --adapter IFACE binds the SSH connection to a specific local network
+# interface (ssh -B), useful when the build machine has multiple network
+# adapters and the Zaurus is only reachable via one of them.
 
-TARGET="${1:-root@10.43.112.72}"
+ADAPTER=""
+TARGET=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --adapter)
+            ADAPTER="$2"
+            shift 2
+            ;;
+        *)
+            TARGET="$1"
+            shift
+            ;;
+    esac
+done
+TARGET="${TARGET:-root@10.43.112.72}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new"
+if [ -n "$ADAPTER" ]; then
+    SSH_OPTS="$SSH_OPTS -B $ADAPTER"
+fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
 TOOLCHAIN="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin"
@@ -30,7 +51,7 @@ BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
 echo "==> checking $TARGET is reachable over SSH before spending time building..."
-if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a" 2>/dev/null; then
+if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a"; then
     echo "FAILED: $TARGET is not reachable over SSH." >&2
     echo "This script only handles the routine SSH-based redeploy path." >&2
     echo "If the device is unreachable/unbootable, or you need to change" >&2
@@ -57,4 +78,8 @@ fi
 echo "==> build OK"
 
 echo "==> deploying to $TARGET (zImage + sound + WiFi/PCMCIA modules)..."
-exec "$REPO/tools/chunked-deploy.sh" "$TARGET"
+set -- "$TARGET"
+if [ -n "$ADAPTER" ]; then
+    set -- --adapter "$ADAPTER" "$TARGET"
+fi
+exec "$REPO/tools/chunked-deploy.sh" "$@"
