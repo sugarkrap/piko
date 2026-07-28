@@ -86,6 +86,13 @@ copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
 copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c
 copy_in "$REPO/drivers/sharpsl_pm.c" arch/arm/mach-pxa/sharpsl_pm.c
 copy_in "$REPO/drivers/pxa25x_udc.c" drivers/usb/gadget/udc/pxa25x_udc.c
+# pxa25x_udc.c was already patched to fetch the D+ pullup line via
+# devm_gpiod_get_index_optional(..., "pullup", ...) instead of the old
+# platform_data mach->gpio_pullup path, but the matching struct field
+# (pullup_gpio) was never added to its header -- caught by a real CI
+# build failing with "struct pxa25x_udc has no member named
+# pullup_gpio". See the PATCHED comment in drivers/pxa25x_udc.h itself.
+copy_in "$REPO/drivers/pxa25x_udc.h" drivers/usb/gadget/udc/pxa25x_udc.h
 
 echo "==> applying the W100 (Imageon) display driver"
 copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
