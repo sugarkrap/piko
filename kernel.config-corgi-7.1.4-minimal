@@ -1677,8 +1677,9 @@ CONFIG_FB_CFB_IMAGEBLIT=y
 #
 # Backlight & LCD device support
 #
-# CONFIG_LCD_CLASS_DEVICE is not set
-# CONFIG_BACKLIGHT_CLASS_DEVICE is not set
+CONFIG_LCD_CLASS_DEVICE=y
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+CONFIG_LCD_CORGI=y
 # end of Backlight & LCD device support
 
 # CONFIG_LOGO is not set
