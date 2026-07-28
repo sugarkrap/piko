@@ -3,25 +3,23 @@ name: Build piko-update package
 # Builds the offline update.tar package for userspace/src/piko-update.c
 # (flash/build-update-package.sh) and uploads it as a workflow artifact.
 #
-# Two possible outcomes, both uploaded as the same artifact:
+# flash/setup-kernel-src.sh reconstructs kernel-src/ from a fresh
+# kernel.org download plus this repo's tracked patches (see
+# docs/HANDOFF.md) -- every file it needs (including the mach-pxa/
+# wireless/crypto Kconfig+Makefile wiring under modules/) is committed, so
+# this should always produce a full package: kernel + modules + rootfs
+# overlay. flash/qemu-smoke-test.sh then boots the result under QEMU,
+# insmod's every shipped module, and runs piko-update --dry-run against
+# the actual package -- the same kernel/module ABI mismatch that broke
+# this device for real once already (DEADLETTER-WIFI-SSH.md). A package
+# that fails this is never uploaded.
 #
-#   - Full package (kernel + modules + rootfs overlay): when
-#     flash/setup-kernel-src.sh can fully reconstruct kernel-src/ from a
-#     fresh kernel.org download plus this repo's tracked patches (see
-#     docs/HANDOFF.md and patches/README.md) and the subsequent
-#     `make zImage modules` succeeds. In this case flash/qemu-smoke-test.sh
-#     also boots the result under QEMU, insmod's every shipped module, and
-#     runs piko-update --dry-run against the actual package -- the same
-#     kernel/module ABI mismatch that broke this device for real once
-#     already (DEADLETTER-WIFI-SSH.md). A package that fails this is never
-#     uploaded.
-#   - Rootfs-only package (piko-update + rootfs/ overlay, no kernel bump):
-#     whenever the above isn't possible yet -- most notably, the
-#     Kconfig/Makefile wiring patches under patches/ don't exist yet (see
-#     patches/README.md), so setup-kernel-src.sh exits 2 by design. This
-#     is a known, temporary gap, not a CI failure -- the job still
-#     succeeds and produces a real, useful, offline update package (and
-#     the QEMU smoke test above is skipped -- nothing kernel-side to test).
+# If kernel-src reconstruction itself fails for some other reason (a
+# kernel.org hiccup, an oldconfig failure, etc.), the job falls back to a
+# rootfs-only package (piko-update + rootfs/ overlay, no kernel bump)
+# rather than failing outright -- still a real, useful, offline update on
+# its own, just without a kernel bump, and the QEMU smoke test is skipped
+# in that case (nothing kernel-side to test).
 #
 # The kernel-src/ reconstruction (download + patch + oldconfig, the
 # expensive and network-heavy part) is cached across runs keyed on the
@@ -38,7 +36,6 @@ on:
       - "flash/build-update-package.sh"
       - "flash/setup-kernel-src.sh"
       - "flash/qemu-smoke-test.sh"
-      - "patches/**"
       - "corgi_patched.c"
       - "corgi.h"
       - "modules/**"
@@ -64,7 +61,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel-src
-          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'patches/**', 'flash/setup-kernel-src.sh') }}
+          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'flash/setup-kernel-src.sh') }}
 
       - name: Reconstruct kernel-src (download + apply tracked patches)
         id: kernel_src
@@ -76,8 +73,6 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -eq 0 ]; then
             echo "kernel-src fully reconstructed and ready to build" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$rc" -eq 2 ]; then
-            echo "kernel-src reconstruction incomplete: Kconfig/Makefile wiring patches are not yet committed (see patches/README.md) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "kernel-src reconstruction failed (exit $rc) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -93,13 +88,13 @@ jobs:
           CROSS_COMPILE: arm-linux-gnueabi-
         run: |
           # flash/build-update-package.sh's own KERNEL_DIR default resolves
-          # to this exact path -- setup-kernel-src.sh leaves a real (if
-          # incomplete/unbuilt) directory there even on exit 2, so omitting
+          # to this exact path -- setup-kernel-src.sh can leave a real (if
+          # incomplete/unbuilt) directory there even on failure, so omitting
           # the env var here would NOT actually fall back to rootfs-only,
           # it would still find that directory and hard-fail on "no built
           # zImage". Point KERNEL_DIR at something that can't exist instead,
-          # so the rootfs-only path is genuinely forced when reconstruction
-          # didn't fully succeed.
+          # so the rootfs-only path is genuinely forced whenever
+          # reconstruction didn't fully succeed.
           if [ "${{ steps.kernel_src.outputs.rc }}" = "0" ]; then
             KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
           else

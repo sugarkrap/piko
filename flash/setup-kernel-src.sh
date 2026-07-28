@@ -25,13 +25,7 @@ set -eu
 # Exit codes:
 #   0   kernel-src/linux-$KERNEL_VERSION is ready to build
 #   1   a hard failure (download, extraction, an expected input file
-#       missing from this repo, etc.)
-#   2   everything mechanical succeeded, but the Kconfig/Makefile wiring
-#       for MACH_CORGI/SHEPHERD/HUSKY and the hostap net/wireless+crypto
-#       dependencies could not be applied because patches/*.patch aren't
-#       present yet -- see patches/README.md. Callers that only want a
-#       best-effort/rootfs-only fallback (e.g. CI, until those patches are
-#       committed) should treat this exit code as non-fatal.
+#       missing from this repo, oldconfig failing, etc.)
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_VERSION="${KERNEL_VERSION:-7.1.4}"
@@ -99,8 +93,7 @@ copy_in "$REPO/modules/nand/sharpsl.h"              include/linux/mtd/sharpsl.h
 
 echo "==> applying hostap_cs (PCMCIA WiFi) + lib80211 + michael_mic"
 HOSTAP_DEST=drivers/net/wireless/intersil/hostap
-for f in "$REPO"/modules/hostap/hostap*.c "$REPO"/modules/hostap/hostap*.h \
-         "$REPO/modules/hostap/Kconfig" "$REPO/modules/hostap/Makefile"; do
+for f in "$REPO"/modules/hostap/hostap*.c "$REPO"/modules/hostap/hostap*.h; do
     copy_in "$f" "$HOSTAP_DEST/$(basename "$f")"
 done
 for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; do
@@ -108,43 +101,20 @@ for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; 
 done
 copy_in "$REPO/modules/hostap/michael_mic.c" crypto/michael_mic.c
 
-# The pieces above are all full-file replacements/additions -- unambiguous,
-# nothing upstream to merge against. What's left is *incremental* edits to
-# upstream files that still exist (arch/arm/mach-pxa/{Kconfig,Makefile} for
-# the MACH_CORGI/SHEPHERD/HUSKY/PXA_SHARP_C7xx board entry, net/wireless/
-# {Kconfig,Makefile} and crypto/{Kconfig,Makefile} for the lib80211/
-# michael_mic re-additions) -- see README.md's "hostap_cs ... ported" section
-# for exactly what each needs. Those are captured as patches/*.patch, not
-# full-file copies, since only a few lines change in files this project
-# doesn't otherwise own.
-KCONFIG_INCOMPLETE=0
-apply_patch_if_present() {
-    patch_file="$1"
-    if [ ! -f "$patch_file" ]; then
-        KCONFIG_INCOMPLETE=1
-        return
-    fi
-    echo "==> applying $(basename "$patch_file")"
-    patch -p1 -d "$KERNEL_DIR" < "$patch_file"
-}
-
-apply_patch_if_present "$REPO/patches/mach-pxa-corgi-kconfig.patch"
-apply_patch_if_present "$REPO/patches/wireless-lib80211-kconfig.patch"
-
-if [ "$KCONFIG_INCOMPLETE" -eq 1 ]; then
-    echo "" >&2
-    echo "flash/setup-kernel-src.sh: Kconfig/Makefile wiring patches are missing (see patches/README.md)." >&2
-    echo "  Full-file sources (board files, w100, nand, hostap) are applied and correct." >&2
-    echo "  Still needed by hand, once per new kernel-src reconstruction, until the" >&2
-    echo "  patch files above are generated from a known-working local kernel-src tree:" >&2
-    echo "    - arch/arm/mach-pxa/{Kconfig,Makefile}: MACH_CORGI/SHEPHERD/HUSKY, PXA_SHARP_C7xx" >&2
-    echo "    - net/wireless/{Kconfig,Makefile}: lib80211 + its crypt helpers" >&2
-    echo "    - crypto/{Kconfig,Makefile}: CRYPTO_MICHAEL_MIC" >&2
-    echo "  (docs/HANDOFF.md steps 2/5, README.md 'hostap_cs ... ported' section)" >&2
-    echo "$KERNEL_DIR is otherwise ready; oldconfig/build will fail or silently" >&2
-    echo "produce a kernel missing this board's machine descriptor without them." >&2
-    exit 2
-fi
+# Kconfig/Makefile wiring: MACH_CORGI/SHEPHERD/HUSKY + PXA_SHARP_C7xx
+# (arch/arm/mach-pxa), lib80211 + its crypt helpers (net/wireless), and
+# CRYPTO_MICHAEL_MIC (crypto). These are full working copies pulled
+# directly from an already-built, confirmed-working kernel-src (the one
+# that produced zImage-corgi-7.1.4) -- not hand-derived diffs -- same
+# trust model as every other full-file copy above and modules/hostap/
+# {Kconfig,Makefile}'s existing precedent.
+echo "==> applying mach-pxa/wireless/crypto Kconfig+Makefile wiring"
+copy_in "$REPO/modules/mach-pxa/Kconfig"  arch/arm/mach-pxa/Kconfig
+copy_in "$REPO/modules/mach-pxa/Makefile" arch/arm/mach-pxa/Makefile
+copy_in "$REPO/modules/wireless/Kconfig"  net/wireless/Kconfig
+copy_in "$REPO/modules/wireless/Makefile" net/wireless/Makefile
+copy_in "$REPO/modules/crypto/Kconfig"    crypto/Kconfig
+copy_in "$REPO/modules/crypto/Makefile"   crypto/Makefile
 
 echo "==> applying kernel.config-corgi-$KERNEL_VERSION"
 copy_in "$REPO/kernel.config-corgi-$KERNEL_VERSION" .config
