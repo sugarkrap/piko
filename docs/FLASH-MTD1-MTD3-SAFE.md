@@ -3,7 +3,7 @@
 > **When to use this doc:** only for recovery (device unreachable over
 > SSH / unbootable) or when the *bootstrap* partition (`mtd1`/`smf`)
 > itself needs to change. For routine stage-2 kernel/module updates on a
-> working, WiFi-reachable device, use `flash/build-and-deploy.sh` instead
+> working, WiFi-reachable device, use `tools/build-and-deploy.sh` instead
 > — see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`. That path writes directly to
 > the live `home` (`mtd3`) filesystem over SSH; no SD card or NAND
 > flash involved.

@@ -17,7 +17,7 @@ kernel). That was wrong to conclude from — something else must have put that
 kernel there, not a plain `updater.sh` run through the boot-ROM menu. Trust
 direct hardware confirmation over inference from indirect evidence.
 
-## The tool: `flash/encsh.c`
+## The tool: `tools/src/encsh.c`
 
 Real, historical Sharp/Cacko tool, written by "sash@cacko.biz", part of the
 Cacko ROM kit. Original source recovered from
@@ -28,7 +28,7 @@ way, see below). It's a **static single-byte substitution cipher**: a fixed
 256-byte lookup table, not XOR, not anything key-dependent. Encoding and
 decoding are both simple table lookups (decode is the inverse permutation).
 
-Our `flash/encsh.c` is a clean reimplementation with the same algorithm,
+Our `tools/src/encsh.c` is a clean reimplementation with the same algorithm,
 built as a **host-side tool** (compiled with the system's native `gcc`, not
 the ARM cross-toolchain — it operates on files before they reach the SD
 card, never runs on the Zaurus itself). Usage:
@@ -139,7 +139,7 @@ For any new `updater.sh` swap:
    result against the confirmed set (any statistically-derived mapping that
    contradicts a confirmed one is wrong — the confirmed set is ground
    truth, not the solver's output).
-3. Once a fuller table is confirmed, update `flash/encsh.c`'s `enctab[]`
+3. Once a fuller table is confirmed, update `tools/src/encsh.c`'s `enctab[]`
    with the corrected values so the general-purpose tool works without
    needing this manual derivation every time.
 

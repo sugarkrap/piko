@@ -411,7 +411,7 @@ the recovery kernel — this exact mistake happened once already (a stale
 EABI-built `piko-install` sat on the card undetected until `readelf`
 caught it).
 
-`flash/encsh.c` (the `updater.sh` cipher tool) and `flash/piko-backup.c`
+`tools/src/encsh.c` (the `updater.sh` cipher tool) and `flash/piko-backup.c`
 are built the same way. `encsh` itself is the one exception — it's a
 **host-side** tool (operates on files before they reach the SD card, never
 runs on the Zaurus), so it's built with the system's native `gcc`, not this

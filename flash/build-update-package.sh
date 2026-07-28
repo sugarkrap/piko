@@ -8,13 +8,13 @@ set -eu
 #
 #   - boot/zImage-full + lib/modules/$KVER/...   (only if kernel-src is
 #     available locally -- see "Kernel/modules" below)
-#   - everything under nand-root/, mapped straight onto the same paths
+#   - everything under rootfs/, mapped straight onto the same paths
 #     under "/" (etc/*, usr/sbin/*, init -- whatever's actually committed
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
 #
-# This is the offline counterpart to flash/chunked-deploy.sh (which pushes
+# This is the offline counterpart to tools/chunked-deploy.sh (which pushes
 # the same kind of update live over SSH). Use this one when the device
 # isn't reachable over WiFi at all -- copy the resulting update.tar to an
 # SD card and run `piko-update /mnt/card/update.tar` on the device.
@@ -22,7 +22,7 @@ set -eu
 # Usage:
 #   flash/build-update-package.sh [output.tar]
 #
-# Env overrides (defaults match flash/build-and-deploy.sh):
+# Env overrides (defaults match tools/build-and-deploy.sh):
 #   KERNEL_DIR     kernel-src/linux-7.1.4 checkout (gitignored, local only)
 #   TOOLCHAIN      directory holding CROSS_COMPILE-prefixed binaries
 #   CROSS_COMPILE  cross toolchain prefix
@@ -101,9 +101,9 @@ STRIP="${GCC%gcc}strip"
 command -v "$STRIP" >/dev/null 2>&1 && "$STRIP" "$STAGE/piko-update" || true
 manifest_add "$STAGE/piko-update" "usr/sbin/piko-update" 755
 
-echo "==> packaging nand-root/ overlay (etc/, usr/sbin/, init -- whatever's there)"
-( cd "$REPO/nand-root" && find . -type f ) | sed 's#^\./##' | while read -r rel; do
-    manifest_add "$REPO/nand-root/$rel" "$rel"
+echo "==> packaging rootfs/ overlay (etc/, usr/sbin/, init -- whatever's there)"
+( cd "$REPO/rootfs" && find . -type f ) | sed 's#^\./##' | while read -r rel; do
+    manifest_add "$REPO/rootfs/$rel" "$rel"
 done
 
 if [ -d "$KERNEL_DIR" ]; then
@@ -124,7 +124,7 @@ if [ -d "$KERNEL_DIR" ]; then
     fi
     echo "# kernel: $KVER" >> "$MANIFEST"
 
-    # Same module set flash/chunked-deploy.sh deploys live over SSH -- kept
+    # Same module set tools/chunked-deploy.sh deploys live over SSH -- kept
     # duplicated here on purpose, matching that script's own "keep this
     # self-contained" precedent, rather than a shared-include abstraction
     # for four lines that rarely change independently of a kernel rebuild.
