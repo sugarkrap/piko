@@ -3,17 +3,30 @@ name: Build piko-update package
 # Builds the offline update.tar package for userspace/src/piko-update.c
 # (flash/build-update-package.sh) and uploads it as a workflow artifact.
 #
-# IMPORTANT SCOPE NOTE: kernel-src/ (the patched Linux 7.1.4 tree, see
-# docs/HOWTO-BUILD-DEPLOY-KERNEL.md) is gitignored and only ever exists on
-# a local dev machine with the buildroot toolchain already set up -- it is
-# NOT vendored in this repo, so this workflow CANNOT build the stage-2
-# zImage or kernel modules. flash/build-update-package.sh detects that and
-# falls back to a "rootfs-only" package: piko-update itself (freshly
-# cross-compiled here) plus the full rootfs/ overlay (etc/, usr/sbin/,
-# init). That is already a real, useful, completely offline update on its
-# own -- it just won't contain a kernel bump. For a full kernel+modules
-# package, run flash/build-update-package.sh locally with KERNEL_DIR
-# pointed at a built kernel-src checkout.
+# Two possible outcomes, both uploaded as the same artifact:
+#
+#   - Full package (kernel + modules + rootfs overlay): when
+#     flash/setup-kernel-src.sh can fully reconstruct kernel-src/ from a
+#     fresh kernel.org download plus this repo's tracked patches (see
+#     docs/HANDOFF.md and patches/README.md) and the subsequent
+#     `make zImage modules` succeeds. In this case flash/qemu-smoke-test.sh
+#     also boots the result under QEMU, insmod's every shipped module, and
+#     runs piko-update --dry-run against the actual package -- the same
+#     kernel/module ABI mismatch that broke this device for real once
+#     already (DEADLETTER-WIFI-SSH.md). A package that fails this is never
+#     uploaded.
+#   - Rootfs-only package (piko-update + rootfs/ overlay, no kernel bump):
+#     whenever the above isn't possible yet -- most notably, the
+#     Kconfig/Makefile wiring patches under patches/ don't exist yet (see
+#     patches/README.md), so setup-kernel-src.sh exits 2 by design. This
+#     is a known, temporary gap, not a CI failure -- the job still
+#     succeeds and produces a real, useful, offline update package (and
+#     the QEMU smoke test above is skipped -- nothing kernel-side to test).
+#
+# The kernel-src/ reconstruction (download + patch + oldconfig, the
+# expensive and network-heavy part) is cached across runs keyed on the
+# inputs that actually affect it, so a run where nothing kernel-related
+# changed restores instantly instead of re-downloading from kernel.org.
 
 on:
   workflow_dispatch: {}
@@ -23,6 +36,13 @@ on:
       - "userspace/src/**"
       - "rootfs/**"
       - "flash/build-update-package.sh"
+      - "flash/setup-kernel-src.sh"
+      - "flash/qemu-smoke-test.sh"
+      - "patches/**"
+      - "corgi_patched.c"
+      - "corgi.h"
+      - "modules/**"
+      - "kernel.config-corgi-7.1.4"
       - ".github/workflows/build-update-package.yml"
 
 jobs:
@@ -32,16 +52,69 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install ARM cross-compiler
+      - name: Install ARM cross-compiler + kernel build/QEMU dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-arm-linux-gnueabi
+          sudo apt-get install -y -qq gcc-arm-linux-gnueabi \
+              bison flex bc libssl-dev libelf-dev \
+              qemu-system-arm cpio
+
+      - name: Cache kernel-src reconstruction
+        id: kernel-src-cache
+        uses: actions/cache@v4
+        with:
+          path: kernel-src
+          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'patches/**', 'flash/setup-kernel-src.sh') }}
+
+      - name: Reconstruct kernel-src (download + apply tracked patches)
+        id: kernel_src
+        run: |
+          set +e
+          flash/setup-kernel-src.sh
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            echo "kernel-src fully reconstructed and ready to build" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" -eq 2 ]; then
+            echo "kernel-src reconstruction incomplete: Kconfig/Makefile wiring patches are not yet committed (see patches/README.md) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "kernel-src reconstruction failed (exit $rc) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build kernel (zImage + modules)
+        if: steps.kernel_src.outputs.rc == '0'
+        run: |
+          make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              -j"$(nproc)" zImage modules
 
       - name: Build update package
         env:
           CROSS_COMPILE: arm-linux-gnueabi-
         run: |
-          flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+          if [ "${{ steps.kernel_src.outputs.rc }}" = "0" ]; then
+            KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+          else
+            flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+          fi
+
+      - name: QEMU smoke test (boot + insmod modules + piko-update dry-run)
+        if: steps.kernel_src.outputs.rc == '0'
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
+        run: |
+          set +e
+          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" > /tmp/smoke.log 2>&1
+          rc=$?
+          set -e
+          {
+            echo "### QEMU smoke test"
+            echo
+            echo '```'
+            cat /tmp/smoke.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
       - name: Summarize package contents
         run: |
