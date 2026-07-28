@@ -21,10 +21,15 @@ name: Build piko-update package
 # its own, just without a kernel bump, and the QEMU smoke test is skipped
 # in that case (nothing kernel-side to test).
 #
-# The kernel-src/ reconstruction (download + patch + oldconfig, the
-# expensive and network-heavy part) is cached across runs keyed on the
-# inputs that actually affect it, so a run where nothing kernel-related
-# changed restores instantly instead of re-downloading from kernel.org.
+# kernel-src/ -- reconstructed source AND the actual `make zImage modules`
+# build output together, since they live in the same directory -- is
+# cached across runs, keyed on the inputs that actually affect it. An
+# exact-key hit (nothing kernel-related changed) restores an
+# already-built tree with nothing left for `make` to do. A miss (e.g. one
+# tracked patch file changed) still falls back to the nearest prior cache
+# entry via restore-keys, so `make` only has to recompile what actually
+# changed instead of building the (broad, several-GB, 15-25+ minute)
+# config from a cold tree every single time.
 
 on:
   workflow_dispatch: {}
@@ -56,18 +61,39 @@ jobs:
               bison flex bc libssl-dev libelf-dev \
               qemu-system-arm cpio
 
-      - name: Cache kernel-src reconstruction
+      - name: Cache kernel-src reconstruction + build
         id: kernel-src-cache
         uses: actions/cache@v4
         with:
           path: kernel-src
           key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'tools/setup-kernel-src.sh') }}
+          restore-keys: |
+            kernel-src-7.1.4-
 
       - name: Reconstruct kernel-src (download + apply tracked patches)
         id: kernel_src
         run: |
+          # actions/cache's automatic save happens at the very end of the
+          # job (a post-step), by which point the "Build kernel" step
+          # below has already run -- so this cache captures the *built*
+          # tree (.o/.ko alongside source), not just the reconstructed
+          # source. restore-keys above means a run where some tracked
+          # patch input changed (busting the exact hash) still restores
+          # the nearest prior build as a starting point instead of
+          # starting from zero, and make's own dependency tracking figures
+          # out what actually needs recompiling from there.
+          #
+          # That fuzzy fallback can restore a tree whose .piko-patched
+          # marker predates the change that busted the key, though --
+          # tools/setup-kernel-src.sh's marker is a plain existence check,
+          # not content-hashed, so it would otherwise skip re-applying
+          # patches onto a stale tree. --force makes reconstruction
+          # unconditional here regardless of cache hit/miss/fuzzy-match:
+          # cheap (copy_in + oldconfig, seconds) next to the ~20+ minute
+          # build, and it means correctness never depends on guessing
+          # exactly how GitHub's cache matching behaved this run.
           set +e
-          tools/setup-kernel-src.sh
+          tools/setup-kernel-src.sh --force
           rc=$?
           set -e
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
