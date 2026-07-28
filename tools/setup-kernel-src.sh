@@ -102,6 +102,17 @@ HOSTAP_DEST=drivers/net/wireless/intersil/hostap
 for f in "$REPO"/modules/hostap/hostap*.c "$REPO"/modules/hostap/hostap*.h; do
     copy_in "$f" "$HOSTAP_DEST/$(basename "$f")"
 done
+# hostap's own Kconfig/Makefile -- the whole hostap/ directory was removed
+# from mainline, so unlike mach-pxa/net/wireless/crypto below (which are
+# full working copies of files that still exist upstream), there is no
+# pristine drivers/net/wireless/intersil/hostap/{Kconfig,Makefile} to
+# replace at all. Without these, CONFIG_HOSTAP/CONFIG_HOSTAP_CS in the
+# tracked .config have no matching symbol anywhere in the tree, so
+# oldconfig silently drops them instead of erroring -- hostap.ko then
+# never gets built, and nothing surfaces until packaging looks for a file
+# that was never produced (hit exactly this in CI).
+copy_in "$REPO/modules/hostap/Kconfig"  "$HOSTAP_DEST/Kconfig"
+copy_in "$REPO/modules/hostap/Makefile" "$HOSTAP_DEST/Makefile"
 for f in "$REPO"/modules/hostap/lib80211*.c "$REPO"/modules/hostap/lib80211*.h; do
     copy_in "$f" "net/wireless/$(basename "$f")"
 done
