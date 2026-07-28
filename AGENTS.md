@@ -51,9 +51,10 @@ There is no replacement.
   Never copy the `raw`/offset fields between partitions
   (`docs/DEADLETTER-RAW-FLAG.md`, `docs/DEADLETTER-MTD1-OFFSET.md`).
 - md5-verify every file staged to the SD card.
-- The SD card is shared with other sessions — always re-verify/restore
-  `updater.sh` (the `piko-install`-invoking `flash/updater-encoded.sh`)
-  before each flash.
+- The SD card is shared with other sessions — always re-verify/regenerate
+  `updater.sh` (the `piko-install`-invoking `flash/updater-encoded.sh`,
+  built by `tools/encode-updater.py` — not tracked in git, see
+  `docs/DEADLETTER-CIPHER.md`) before each flash.
 - Recovery of last resort is the D+M service menu + a model-correct factory
   `.dbk` (`docs/DEADLETTER-NAND-RECOVERY.md`) — but never rely on it; avoid
   the mistake instead.

@@ -147,15 +147,21 @@ For any new `updater.sh` swap:
 
 `flash/updater-encoded.sh` was accidentally deleted during an unrelated
 repo cleanup pass (a "remove all the other updater variants" sweep that
-didn't know this one was load-bearing, not a duplicate). Regenerated it
-by encoding `flash/updater-uncoded.sh`'s plaintext with the 21 confirmed
-mappings above via a one-off Python script — every byte in that plaintext
-falls within the confirmed set, and the result's first 10 bytes came out
-byte-for-byte identical to the `24 22 c7 03 a8 30 c7 6e 73 2f` documented
-above, confirming the regenerated file is correct. `tools/src/encsh.c`'s
-built-in `enctab[]` was NOT used for this (still wrong for this device,
-per above) — do not regenerate this file by running it through `encsh`
-until `enctab[]` is corrected.
+didn't know this one was load-bearing, not a duplicate). Rather than
+re-tracking the ciphered bytes as a committed artifact, it's now a build
+output: `tools/encode-updater.py` encodes `flash/updater-uncoded.sh`'s
+plaintext with the 21 confirmed mappings above (hardcoded in the script,
+NOT `tools/src/encsh.c`'s built-in `enctab[]`, which is still wrong for
+this device per above) and writes `flash/updater-encoded.sh`, gitignored.
+Verified once that the script's output matches: its first 10 bytes came
+out byte-for-byte identical to the `24 22 c7 03 a8 30 c7 6e 73 2f`
+documented above.
+
+Run `tools/encode-updater.py` any time `updater-uncoded.sh` changes, and
+before staging an SD card for a flash. If it refuses a byte as
+unconfirmed, extend `CONFIRMED_MAPPING` in the script via the same
+known-plaintext technique used to derive the mappings above — don't
+guess, and don't fall back to `encsh`'s table.
 
 ## A process note, not just a technical one
 
