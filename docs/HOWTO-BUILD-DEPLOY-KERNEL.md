@@ -1,7 +1,7 @@
 # How to build and deploy a new stage-2 kernel (+ modules)
 
 *Written 2026-07-26, right after fixing the WiFi/PCMCIA ABI-mismatch
-regression (`DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
+regression (`docs/archive/DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
 without its matching modules. This is now the canonical procedure —
 follow it exactly, especially the "always deploy everything together"
 rule.*

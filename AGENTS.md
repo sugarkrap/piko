@@ -64,4 +64,4 @@ Two-stage boot works end to end; stage 2 boots to a zsh login (users
 rcS + mdev (NOT systemd — far too heavy for 64MB/400MHz/uClibc). WiFi:
 wireless-tools + wpa_supplicant + hostap/Prism2 modules are in place; the
 card associates but the data path is still being brought up. SSH via dropbear
-is the goal once WiFi passes traffic. See `docs/DEADLETTER-WIFI-SSH.md`.
+is the goal once WiFi passes traffic. See `docs/archive/DEADLETTER-WIFI-SSH.md`.

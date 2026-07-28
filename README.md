@@ -353,7 +353,7 @@ toolchain, at
 arm-buildroot-linux-uclibcgnueabi-*`. It's a sibling project's buildroot
 tree (built for that project's own DOSBox-on-Zaurus work), reused here
 because it already has the OABI-clean uClibc patches this hardware's
-ancient recovery kernel needs (see `docs/DEADLETTER.md` for why OABI matters —
+ancient recovery kernel needs (see `docs/archive/DEADLETTER.md` for why OABI matters —
 Cacko's recovery-mode kernel is 2.4.18, pre-EABI, and rejects any ELF with a
 nonzero `EF_ARM_EABI_VER`).
 
@@ -425,7 +425,7 @@ before ever flashing real hardware. Two things to know:
 
 1. **QEMU's `-M spitz` needs `CONFIG_MACH_SPITZ=y` compiled in**, separate
    from whatever real-hardware machine type the board actually needs
-   (`MACH_HUSKY` for this project's SL-C760/860 — see `docs/HANDOFF.md` for why
+   (`MACH_HUSKY` for this project's SL-C760/860 — see `docs/archive/HANDOFF.md` for why
    it's Husky, not Corgi, despite the codename). Multiple machine
    descriptors coexist fine in one kernel image; QEMU's board ID (713) and
    the real device's ID are matched independently at runtime. A kernel
