@@ -12,9 +12,9 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   flash/chunked-deploy.sh [user@host]
+#   tools/chunked-deploy.sh [user@host]
 # Example:
-#   flash/chunked-deploy.sh root@10.43.112.72
+#   tools/chunked-deploy.sh root@10.43.112.72
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -51,7 +51,7 @@ REMOTE_STAGE="/tmp/chunked-deploy-stage"
 LOCKFILE="/tmp/zaurus-chunked-deploy.lock"
 exec 9>"$LOCKFILE"
 if ! flock -n 9; then
-    echo "FAILED: another flash/chunked-deploy.sh appears to already be running" >&2
+    echo "FAILED: another tools/chunked-deploy.sh appears to already be running" >&2
     echo "        (lock held on $LOCKFILE) -- refusing to start a second," >&2
     echo "        overlapping deploy against the same device. Confirm no" >&2
     echo "        other instance is active before retrying." >&2
@@ -286,7 +286,7 @@ done
 # sharpsl_pm_pxa_read_max1111()/max1111_read_channel() always fails. These
 # modules were NEVER part of the original mtd3 rootfs build, so modprobe
 # can't find them via modules.dep (no entry exists) -- rcS loads them with
-# insmod + explicit path instead (see nand-root/etc/init.d/rcS).
+# insmod + explicit path instead (see rootfs/etc/init.d/rcS).
 # ssp.ko (drivers/soc/pxa/ssp.c) MUST be loaded before spi-pxa2xx-platform.ko:
 # it exports pxa_ssp_request()/pxa_ssp_free(), which spi-pxa2xx-platform.ko
 # needs at insmod time ("Unknown symbol pxa_ssp_request/pxa_ssp_free" if
@@ -357,26 +357,26 @@ done
 # 6. rcS itself -- carries the insmod calls for the SPI/MMC modules above (and
 # is just a plain file on the live, writable jffs2 root, so it can be
 # pushed the same way as everything else here; no NAND reflash needed).
-send_file "$REPO/nand-root/etc/init.d/rcS" "/etc/init.d/rcS"
+send_file "$REPO/rootfs/etc/init.d/rcS" "/etc/init.d/rcS"
 ssh_do "chmod 0755 /etc/init.d/rcS"
 
 # 6b. hostap.conf -- sets iw_mode=2 on the correct module (hostap_cs, not
 # hostap; iw_mode is declared in hostap_hw.c which hostap_cs.c #includes
 # directly). Was previously only ever deployed by hand, never tracked by
 # this script -- add it now so future redeploys don't silently regress it.
-send_file "$REPO/nand-root/etc/modprobe.d/hostap.conf" "/etc/modprobe.d/hostap.conf"
+send_file "$REPO/rootfs/etc/modprobe.d/hostap.conf" "/etc/modprobe.d/hostap.conf"
 
 # 6c. wifi-up.sh -- mdev's $wlan0 rule runs this on card bring-up. Also
 # previously only ever deployed by hand; now DHCP-first with a static
 # fallback (see the file itself for why). Track it here so it can't
 # silently drift from the repo copy.
-send_file "$REPO/nand-root/etc/wifi-up.sh" "/etc/wifi-up.sh"
+send_file "$REPO/rootfs/etc/wifi-up.sh" "/etc/wifi-up.sh"
 ssh_do "chmod 0755 /etc/wifi-up.sh"
 
 # 7. audioon / audinfo helper scripts (single-word, per AGENTS.md typing
-# constraint -- these are already just cp'd from flash/deploy-audio-stack.sh's
-# heredocs; regenerate them here to stay in sync with that script by reusing it
-# would be nicer, but keeping this script self-contained on purpose).
+# constraint -- generated inline here as self-contained heredocs; the
+# deploy-audio-stack.sh script that originally staged them is gone, so
+# this is now the only place they're produced).
 cat > "$STAGE/audioon" << 'EOF_AUDIOON'
 #!/bin/sh
 set -eu

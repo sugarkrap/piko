@@ -11,14 +11,14 @@ set -eu
 # This requires the device to already be reachable over SSH (WiFi up).
 # If it is NOT reachable (bricked, unbootable, or WiFi itself broken), or
 # if the BOOTSTRAP partition (mtd1/smf) itself needs to change, use the
-# SD-card recovery flash procedure instead: flash/FLASH-MTD1-MTD3-SAFE.md
+# SD-card recovery flash procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md
 # -- that path is deliberately not automated here, per AGENTS.md ("this is
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   flash/build-and-deploy.sh [user@host]
+#   tools/build-and-deploy.sh [user@host]
 # Example:
-#   flash/build-and-deploy.sh root@10.43.112.72
+#   tools/build-and-deploy.sh root@10.43.112.72
 
 TARGET="${1:-root@10.43.112.72}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
@@ -35,7 +35,7 @@ if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a" 2>/dev/null; then
     echo "This script only handles the routine SSH-based redeploy path." >&2
     echo "If the device is unreachable/unbootable, or you need to change" >&2
     echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
-    echo "procedure instead: flash/FLASH-MTD1-MTD3-SAFE.md" >&2
+    echo "procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md" >&2
     exit 1
 fi
 
@@ -57,4 +57,4 @@ fi
 echo "==> build OK"
 
 echo "==> deploying to $TARGET (zImage + sound + WiFi/PCMCIA modules)..."
-exec "$REPO/flash/chunked-deploy.sh" "$TARGET"
+exec "$REPO/tools/chunked-deploy.sh" "$TARGET"
