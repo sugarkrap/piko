@@ -36,8 +36,6 @@ on:
       - "flash/build-update-package.sh"
       - "tools/setup-kernel-src.sh"
       - "flash/qemu-smoke-test.sh"
-      - "corgi_patched.c"
-      - "corgi.h"
       - "modules/**"
       - "kernel.config-corgi-7.1.4"
       - ".github/workflows/build-update-package.yml"
@@ -61,7 +59,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel-src
-          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'corgi_patched.c', 'corgi.h', 'modules/**', 'tools/setup-kernel-src.sh') }}
+          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'modules/**', 'tools/setup-kernel-src.sh') }}
           # actions/cache skips its post-job save step entirely whenever
           # the job's overall conclusion is "failure" -- every run so far
           # has failed somewhere after this point, so no run has ever

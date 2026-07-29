@@ -75,6 +75,7 @@ SYSCALL1(sys_chdir,  12)
 SYSCALL3(sys_lseek,  19)
 SYSCALL2(sys_mkdir,  39)
 SYSCALL2(sys_dup2,   63)
+SYSCALL3(sys_ioctl,  54)
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -117,6 +118,10 @@ static void puts_(const char *s)
     if (g_logfd >= 0) sys_write(g_logfd, (long)s, n);
 }
 
+/* Forward-declared: defined near itoa_ below, hand-rolled because this
+ * freestanding OABI build has no libgcc softdiv to call into. */
+static unsigned long udiv10(unsigned long n, unsigned long *rem);
+
 static void putnum(long v)
 {
     char out[24];
@@ -127,7 +132,11 @@ static void putnum(long v)
     if (v < 0) { out[j++] = '-'; u = (unsigned long)(-v); }
     else u = (unsigned long)v;
     if (u == 0) { out[j++] = '0'; out[j] = 0; puts_(out); return; }
-    while (u > 0) { tmp[i++] = '0' + (u % 10); u /= 10; }
+    while (u > 0) {
+        unsigned long r;
+        u = udiv10(u, &r);
+        tmp[i++] = '0' + (char)r;
+    }
     while (i > 0) out[j++] = tmp[--i];
     out[j] = 0;
     puts_(out);
@@ -137,6 +146,8 @@ static void putnum(long v)
 #define TMP_VERIFY   "/tmp/update/verify.bin"
 #define TMP_LOG      "/tmp/update/nandlog.txt"
 #define CHUNK_SIZE   524288
+/* mtd1/"smf" physical partition size, per /proc/mtd ("mtd1: 00700000 ..."). */
+#define SMF_PART_SIZE 0x700000
 
 static char chunkbuf[CHUNK_SIZE];
 static char verifybuf[CHUNK_SIZE];
@@ -304,13 +315,34 @@ static const struct flash_target default_targets[] = {
  * nandlogical helpers (mtd1 / raw=0 path)
  * ------------------------------------------------------------------------- */
 
+/* armv5te has no hardware divider, and this freestanding build has no
+ * libgcc to call into for __udivsi3/__umodsi3 (this toolchain's libgcc.a
+ * is EABI-only; this binary is deliberately OABI, see the file header) --
+ * so division-by-10 is hand-rolled here via restoring binary division,
+ * same spirit as every other syscall/libc primitive in this file. */
+static unsigned long udiv10(unsigned long n, unsigned long *rem)
+{
+    unsigned long q = 0, r = 0;
+    int i;
+    for (i = 31; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1UL);
+        if (r >= 10) { r -= 10; q |= (1UL << i); }
+    }
+    if (rem) *rem = r;
+    return q;
+}
+
 static void itoa_(long v, char *out)
 {
     int i = 0;
     char tmp[24];
     unsigned long u = (unsigned long)v;
     if (u == 0) { out[0] = '0'; out[1] = 0; return; }
-    while (u > 0) { tmp[i++] = '0' + (u % 10); u /= 10; }
+    while (u > 0) {
+        unsigned long r;
+        u = udiv10(u, &r);
+        tmp[i++] = '0' + (char)r;
+    }
     int j = 0;
     while (i > 0) out[j++] = tmp[--i];
     out[j] = 0;
@@ -367,6 +399,138 @@ static int run_nandlogical(const char *mtd_dev, const char *mode, const char *ad
     if ((status & 0x7f) != 0) return -1;
     if (((status >> 8) & 0xff) != 0) return -1;
     return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * FTL logical-block diagnostic (mtd1 / raw=0 path only)
+ *
+ * nandlogical WRITE + a byte-perfect nandlogical READ verify (the existing
+ * flash_one() success path) only proves the logical address round-trips
+ * through nandlogical consistently -- it does NOT prove that logical
+ * address is actually backed by a real, OOB-tagged physical block the way
+ * the cold-boot path expects. Confirmed 2026-07-29 against a genuine
+ * factory .dbk (see docs/DEADLETTER-MTD1-OFFSET.md and the FTL forensics
+ * session that found it): the Sharp FTL stores 3 redundant copies of each
+ * physical block's logical block number in OOB bytes 8-13 of that block's
+ * first page (format: 16-bit value = (logical_block << 1) | even_parity,
+ * see flash/pico-smf-write.c's ftl_encode/ftl_decode for the original
+ * derivation). Physical block order has no fixed relationship to logical
+ * order at all (block 0 mapped to logical 16 in that forensic sample) --
+ * so the only trustworthy way to confirm a write "took" at the FTL level
+ * is to scan every physical block's OOB and see which one(s), if any,
+ * currently claim the logical range we just wrote.
+ *
+ * This scans the whole mtd1/smf partition (physical block 0 upward) via
+ * raw MEMREADOOB ioctls -- cheap (448 small ioctls for the 7MB partition)
+ * and safe (read-only). For each physical block whose OOB decodes to a
+ * logical block inside [target_logical, target_logical + num_blocks), it
+ * prints "physical P -> logical L". At the end it reports how many of the
+ * expected logical blocks were actually found mapped anywhere -- if that
+ * count is less than num_blocks, some logical blocks in the just-written
+ * range have no OOB-tagged physical home at all, which would explain a
+ * byte-perfect nandlogical verify that still doesn't survive a cold boot.
+ * ------------------------------------------------------------------------- */
+
+#define FTL_OOB_LEN         16
+#define FTL_BLOCK_SIZE      16384
+#define SHARPSL_ERASED_OOB  0xFFFF
+
+struct mtd_oob_buf_ {
+    unsigned long start;
+    unsigned long length;
+    unsigned char *ptr;
+};
+
+#define MEMREADOOB 0xc00c4d04
+
+static int ftl_popcount16(unsigned int v)
+{
+    int c = 0;
+    while (v) { c += v & 1; v >>= 1; }
+    return c;
+}
+
+/* Returns the decoded logical block number, or -1 if erased/unmapped/bad parity. */
+static int ftl_decode_oob(unsigned int us)
+{
+    if (us == SHARPSL_ERASED_OOB) return -1;
+    if (ftl_popcount16(us) & 1) return -1;
+    return (int)((us >> 1) & 0x3FF);
+}
+
+static void diagnose_ftl_mapping(const char *mtd_dev, long start_addr, long datasize)
+{
+    long target_logical = start_addr / FTL_BLOCK_SIZE;
+    long num_blocks = (datasize + FTL_BLOCK_SIZE - 1) / FTL_BLOCK_SIZE;
+    long num_phys_blocks = SMF_PART_SIZE / FTL_BLOCK_SIZE;
+
+    puts_("Piko Install: --- FTL mapping diagnostic begin (logical ");
+    putnum(target_logical);
+    puts_("..");
+    putnum(target_logical + num_blocks - 1);
+    puts_(") ---\n");
+
+    long fd = sys_open((long)mtd_dev, O_RDONLY, 0);
+    if (fd < 0) {
+        puts_("Piko Install: FTL diagnostic: cannot open ");
+        puts_(mtd_dev);
+        puts_(", skipping\n");
+        return;
+    }
+
+    static char found[512]; /* one flag per logical block in range, up to 512 */
+    long i;
+    for (i = 0; i < num_blocks && i < 512; i++) found[i] = 0;
+
+    static unsigned char oob[FTL_OOB_LEN];
+    long phys;
+    for (phys = 0; phys < num_phys_blocks; phys++) {
+        struct mtd_oob_buf_ req;
+        req.start  = (unsigned long)(phys * FTL_BLOCK_SIZE);
+        req.length = FTL_OOB_LEN;
+        req.ptr    = oob;
+        for (i = 0; i < FTL_OOB_LEN; i++) oob[i] = 0xFF;
+
+        if (sys_ioctl(fd, MEMREADOOB, (long)&req) < 0) continue;
+
+        unsigned int c0 = (unsigned int)(oob[8]  | (oob[9]  << 8));
+        unsigned int c1 = (unsigned int)(oob[10] | (oob[11] << 8));
+        unsigned int c2 = (unsigned int)(oob[12] | (oob[13] << 8));
+        int d0 = ftl_decode_oob(c0);
+        int d1 = ftl_decode_oob(c1);
+        int d2 = ftl_decode_oob(c2);
+
+        int logical = -1;
+        if (d0 >= 0 && d0 == d1) logical = d0;
+        else if (d0 >= 0 && d0 == d2) logical = d0;
+        else if (d1 >= 0 && d1 == d2) logical = d1;
+        else if (d0 >= 0) logical = d0;
+        else if (d1 >= 0) logical = d1;
+        else if (d2 >= 0) logical = d2;
+
+        if (logical >= target_logical && logical < target_logical + num_blocks) {
+            puts_("Piko Install: FTL: physical ");
+            putnum(phys);
+            puts_(" -> logical ");
+            putnum(logical);
+            puts_("\n");
+            long rel = logical - target_logical;
+            if (rel < 512) found[rel] = 1;
+        }
+    }
+    sys_close(fd);
+
+    long coverage = 0;
+    for (i = 0; i < num_blocks && i < 512; i++) coverage += found[i];
+    puts_("Piko Install: FTL mapping diagnostic: ");
+    putnum(coverage);
+    puts_(" of ");
+    putnum(num_blocks);
+    puts_(" expected logical block(s) found mapped to a physical block.\n");
+    if (coverage < num_blocks) {
+        puts_("Piko Install: FTL WARNING: not every logical block in this write's range has an OOB-tagged physical home.\n");
+    }
+    puts_("Piko Install: --- FTL mapping diagnostic end ---\n");
 }
 
 /* -------------------------------------------------------------------------
@@ -892,7 +1056,38 @@ static int flash_one(const struct flash_target *t)
     puts_("Piko Install: VERIFY OK for ");
     puts_(t->file);
     puts_("\n");
+
+    diagnose_ftl_mapping(t->mtd_dev, t->start_addr, datasize);
+
     return 0;
+}
+
+/* Copies a small /proc file to stdout and the log, framed with markers. */
+static void dump_proc_file(const char *path)
+{
+    char buf[512];
+    long n;
+
+    puts_("Piko Install: --- ");
+    puts_(path);
+    puts_(" begin ---\n");
+
+    long fd = sys_open((long)path, O_RDONLY, 0);
+    if (fd >= 0) {
+        while ((n = sys_read(fd, (long)buf, sizeof(buf))) > 0) {
+            sys_write(1, (long)buf, n);
+            if (g_logfd >= 0) sys_write(g_logfd, (long)buf, n);
+        }
+        sys_close(fd);
+    } else {
+        puts_("Piko Install: cannot open ");
+        puts_(path);
+        puts_(" (absent on this kernel)\n");
+    }
+
+    puts_("Piko Install: --- ");
+    puts_(path);
+    puts_(" end ---\n");
 }
 
 /* -------------------------------------------------------------------------
@@ -918,23 +1113,23 @@ int main(int argc, char *argv[])
 
     g_logfd = sys_open((long)"piko-log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
-    /* Print /proc/mtd for reference */
-    {
-        long fd = sys_open((long)"/proc/mtd", O_RDONLY, 0);
-        puts_("Piko Install: --- /proc/mtd begin ---\n");
-        if (fd >= 0) {
-            char buf[512];
-            long n;
-            while ((n = sys_read(fd, (long)buf, sizeof(buf))) > 0) {
-                sys_write(1, (long)buf, n);
-                if (g_logfd >= 0) sys_write(g_logfd, (long)buf, n);
-            }
-            sys_close(fd);
-        } else {
-            puts_("Piko Install: cannot open /proc/mtd\n");
-        }
-        puts_("Piko Install: --- /proc/mtd end ---\n");
-    }
+    /* Dump a few /proc files for reference.
+     *
+     * /proc/cpuinfo matters more than it looks: this recovery kernel was
+     * started by the SAME bootloader that starts our bootstrap kernel, so
+     * its "Hardware:" line names whichever machine_desc matched the
+     * machine number the bootloader passes in r1. When our own kernel
+     * reports that number matching nothing (2026-07-29 -- see
+     * docs/DEADLETTER-LED-MARKERS.md), this is a free, independent
+     * cross-check of what the bootloader really hands over.
+     *
+     * /proc/atags is only present if the recovery kernel was built with
+     * CONFIG_ATAGS_PROC; it holds the raw ATAG list (including the boot
+     * command line). Absent is fine -- it just gets reported as missing. */
+    dump_proc_file("/proc/mtd");
+    dump_proc_file("/proc/cpuinfo");
+    dump_proc_file("/proc/meminfo");
+    dump_proc_file("/proc/atags");
 
     /* Load runtime config; fall back to compile-time defaults */
     load_config();
@@ -956,8 +1151,16 @@ int main(int argc, char *argv[])
     int failures = 0;
     int i;
     for (i = 0; i < num_targets; i++) {
-        if (flash_one(&active_targets[i]) != 0)
+        if (flash_one(&active_targets[i]) != 0) {
             failures++;
+            /* Multi-target runs (e.g. mtd1 then mtd3 in one pass, see
+             * docs/FLASH-MTD1-MTD3-SAFE.md) depend on later targets only
+             * ever running after earlier ones are confirmed good -- do not
+             * erase/write a further partition once an earlier one has
+             * already failed. */
+            puts_("Piko Install: target failed, aborting remaining targets.\n");
+            break;
+        }
     }
 
     if (failures) {

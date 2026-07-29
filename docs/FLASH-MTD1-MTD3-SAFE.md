@@ -11,7 +11,51 @@
 This procedure is for the last spare board. It follows the dead-letter constraints:
 - mtd1 uses nandlogical (`raw=0`) at offset `917504` only.
 - mtd3 uses eraseall+nandcp (`raw=1`).
-- Do not flash mtd1 and mtd3 in one combined installer run.
+- Historically: do not flash mtd1 and mtd3 in one combined installer run
+  (see "Combined single-pass playbook" below for when this is now allowed).
+
+## Combined single-pass playbook (requires a confirmed backup)
+
+`piko-install` has always been able to flash multiple `piko.cfg` targets in
+one run (`flash/src/piko-install.c`'s `main()` loops over every `target`
+line), but this doc previously said not to use that for mtd1+mtd3 together
+— the separate-pass procedure below exists specifically to get a
+reboot-and-verify checkpoint after mtd1, before mtd3 (which starts with a
+full `eraseall`) is touched. If mtd1's write is bad, that checkpoint is
+what catches it before mtd3 is gone too.
+
+That checkpoint is a mitigation for *not having a good backup*, not a
+requirement in its own right. It's safe to skip it when both of these hold:
+
+1. A confirmed-good full NAND/`smf` backup exists (see
+   `flash/piko-backup.c` / `docs/HOWTO-OFFLINE-UPDATE.md`) that can restore
+   this board if the combined run leaves it unbootable.
+2. You accept flashing mtd1 and mtd3 back-to-back with no boot check in
+   between — if mtd1 silently produces a bad kernel, mtd3 still gets
+   erased+written before anyone finds out.
+
+Given both, use `flash/piko.cfg.mtd1-mtd3-combined` as `piko.cfg`:
+
+```sh
+SD=/path/to/sd
+cp piko-install zImage mtd3.jffs2 "$SD"/
+cp flash/piko.cfg.mtd1-mtd3-combined "$SD"/piko.cfg
+cp updater-uncoded.sh "$SD"/updater.sh   # or your encoded updater, per HOWTO-OFFLINE-UPDATE.md
+sync
+md5sum piko-install zImage mtd3.jffs2 flash/piko.cfg.mtd1-mtd3-combined "$SD"/piko-install "$SD"/zImage "$SD"/mtd3.jffs2 "$SD"/piko.cfg
+```
+
+`piko-install` flashes targets in file order and **aborts on the first
+target failure** — it will not erase/write mtd3 if the mtd1 pass fails.
+Order in the config (mtd1 first) matters for this to be useful; don't
+reverse it.
+
+After the run: read `piko-log.txt` off the SD card and confirm
+`ALL TARGETS FLASHED AND VERIFIED` before rebooting. If it reports a
+failure, do not power-cycle into normal boot — restore from the backup
+first.
+
+Without a confirmed backup, fall back to the separate-pass procedure below.
 
 ## Files used (profile-locked, preferred)
 - mtd1 pass: `piko-install-mtd1-safe` + `zImage`
@@ -22,6 +66,12 @@ This procedure is for the last spare board. It follows the dead-letter constrain
 
 Do not use `piko-install`/`piko-install-final` here. In this workspace state,
 those names are ambiguous because they were found to be byte-identical.
+
+(This restriction is about the separate-pass procedure below, where which
+compile-time default target a plain `piko-install` binary was built with
+matters. It doesn't apply to the combined single-pass playbook above, which
+always ships an explicit `piko.cfg` — the compile-time default is never
+consulted, so a single `piko-install` binary is fine there.)
 
 ## 0) Preflight on host (in this repo)
 Run:
@@ -90,7 +140,9 @@ md5sum piko-install-mtd3-safe mtd3.jffs2 updater-mtd3-safe.sh "$SD"/piko-install
 ## Critical reminders
 - Never use `raw=1` path for mtd1.
 - Never use `start_addr=0` for mtd1; must be `917504`.
-- Keep each pass isolated with a reboot/validation gap between them.
+- Keep each pass isolated with a reboot/validation gap between them, unless
+  running the combined single-pass playbook above with a confirmed backup
+  in hand.
 
 ## In-system SMF update note
 

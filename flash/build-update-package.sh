@@ -124,68 +124,24 @@ if [ -d "$KERNEL_DIR" ]; then
     fi
     echo "# kernel: $KVER" >> "$MANIFEST"
 
-    # Same module set tools/chunked-deploy.sh deploys live over SSH -- kept
-    # duplicated here on purpose, matching that script's own "keep this
-    # self-contained" precedent, rather than a shared-include abstraction
-    # for four lines that rarely change independently of a kernel rebuild.
-    AUDIO_MODULES="
-        sound/soundcore.ko
-        sound/core/snd.ko
-        sound/core/snd-timer.ko
-        sound/core/snd-pcm.ko
-        sound/core/snd-pcm-dmaengine.ko
-        sound/arm/snd-pxa2xx-lib.ko
-        sound/ac97_bus.ko
-        sound/pci/ac97/snd-ac97-codec.ko
-        sound/soc/snd-soc-core.ko
-        sound/soc/pxa/snd-soc-pxa2xx.ko
-        sound/soc/pxa/snd-soc-pxa2xx-i2s.ko
-        sound/soc/codecs/snd-soc-wm8731.ko
-        sound/soc/codecs/snd-soc-wm8731-i2c.ko
-        sound/soc/pxa/snd-soc-corgi.ko
-        sound/core/oss/snd-mixer-oss.ko
-        sound/core/oss/snd-pcm-oss.ko
-    "
+    # Same module set tools/chunked-deploy.sh deploys live over SSH --
+    # shared via tools/kernel-modules.sh so there's only one place this
+    # list can go stale relative to the kernel .config.
+    . "$REPO/tools/kernel-modules.sh"
     for relpath in $AUDIO_MODULES; do
         manifest_add "$KERNEL_DIR/$relpath" "lib/modules/$KVER/zaurus-audio/$(basename "$relpath")"
     done
 
     # These keep the "kernel/" depmod-tree prefix exactly as
-    # chunked-deploy.sh's own WIFI_MODULES/SPI_MODULES/SD_MODULES lists do
+    # tools/kernel-modules.sh's WIFI_MODULES/SPI_MODULES/SD_MODULES lists do
     # (stripped to find the source file under KERNEL_DIR, kept as-is for
     # the /lib/modules/$KVER/... destination) -- some of these live
     # directly under drivers/, others (net/wireless, lib/crypto, fs/nls,
     # fs/fat) don't, so the prefix has to travel with each entry rather
     # than being reconstructed from a shorter name.
-    WIFI_PCMCIA_SPI_SD_MODULES="
-        kernel/drivers/pcmcia/pcmcia_core.ko
-        kernel/drivers/pcmcia/pcmcia_rsrc.ko
-        kernel/drivers/pcmcia/pcmcia.ko
-        kernel/drivers/pcmcia/soc_common.ko
-        kernel/drivers/pcmcia/pxa2xx_base.ko
-        kernel/drivers/pcmcia/pxa2xx_sharpsl.ko
-        kernel/drivers/net/wireless/intersil/hostap/hostap.ko
-        kernel/drivers/net/wireless/intersil/hostap/hostap_cs.ko
-        kernel/net/wireless/lib80211.ko
-        kernel/net/wireless/lib80211_crypt_wep.ko
-        kernel/net/wireless/lib80211_crypt_ccmp.ko
-        kernel/net/wireless/lib80211_crypt_tkip.ko
-        kernel/lib/crypto/libarc4.ko
-        kernel/drivers/soc/pxa/ssp.ko
-        kernel/drivers/spi/spi-pxa2xx-core.ko
-        kernel/drivers/spi/spi-pxa2xx-platform.ko
-        kernel/drivers/input/touchscreen/ads7846.ko
-        kernel/drivers/input/evdev.ko
-        kernel/drivers/input/mousedev.ko
-        kernel/drivers/mmc/core/mmc_core.ko
-        kernel/drivers/mmc/core/mmc_block.ko
-        kernel/drivers/mmc/host/pxamci.ko
-        kernel/fs/nls/nls_cp437.ko
-        kernel/fs/nls/nls_cp850.ko
-        kernel/fs/nls/nls_iso8859-15.ko
-        kernel/fs/fat/fat.ko
-        kernel/fs/fat/vfat.ko
-    "
+    WIFI_PCMCIA_SPI_SD_MODULES="$WIFI_MODULES
+$SPI_MODULES
+$SD_MODULES"
     for relpath in $WIFI_PCMCIA_SPI_SD_MODULES; do
         src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
         manifest_add "$KERNEL_DIR/$src_rel" "lib/modules/$KVER/$relpath"

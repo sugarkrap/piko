@@ -80,9 +80,47 @@ copy_in() {
 }
 
 echo "==> applying Corgi board files (see README.md 'What corgi_patched.c changes')"
-copy_in "$REPO/corgi_patched.c"            arch/arm/mach-pxa/corgi.c
-copy_in "$REPO/modules/corgi_pm_patched.c" arch/arm/mach-pxa/corgi_pm.c
-copy_in "$REPO/corgi.h"                    arch/arm/mach-pxa/corgi.h
+copy_in "$REPO/modules/mach-pxa/corgi_patched.c"    arch/arm/mach-pxa/corgi.c
+copy_in "$REPO/modules/mach-pxa/corgi_pm_patched.c" arch/arm/mach-pxa/corgi_pm.c
+copy_in "$REPO/modules/mach-pxa/corgi.h"            arch/arm/mach-pxa/corgi.h
+
+# LED blink-code boot checkpoints (2026-07-29 mtd1 boot investigation,
+# see docs/DEADLETTER-LED-MARKERS.md). head.S carries the piko_blink
+# routine plus checkpoints 1-2 (pre-MMU, raw physical writes) and the
+# identity-mapped GPIO/SCOOP sections the later, post-MMU checkpoints
+# depend on. Each checkpoint blinks BOTH LEDs a distinct COUNT; the
+# highest complete group observed says how far boot got. Diagnostic only.
+copy_in "$REPO/modules/arch-arm/head_patched.S"      arch/arm/kernel/head.S
+
+# Same investigation: blink-code checkpoints 5-6 (paging_init() and
+# devicemaps_init() entry), plus the fix that makes every post-MMU
+# checkpoint viable at all -- prepare_page_table() runs at the very start
+# of paging_init() and otherwise wipes every low virtual-address mapping,
+# including the diagnostic GPIO/SCOOP sections head.S adds above.
+copy_in "$REPO/modules/arch-arm/mmu_patched.c"        arch/arm/mm/mmu.c
+
+# Same investigation: blink-code checkpoints 3 and 4 (setup_arch() entry,
+# and just after setup_machine_tags()/mdesc->fixup returns).
+copy_in "$REPO/modules/arch-arm/setup_patched.c"       arch/arm/kernel/setup.c
+
+# Same investigation: blink-code checkpoints 6-8 live here (machine-number
+# lookup, mdesc->fixup i.e. fixup_corgi, and ATAG parsing), plus the
+# fast-forever blink that makes dump_machine_table()'s silent `while(true)`
+# hang visible when the bootloader's machine number matches nothing.
+copy_in "$REPO/modules/arch-arm/atags_parse_patched.c" arch/arm/kernel/atags_parse.c
+
+# Same investigation: blink-code checkpoints through start_kernel() --
+# this bootstrap kernel has no console at all, so LED counts are the only
+# visibility into how far it gets.
+copy_in "$REPO/modules/arch-arm/main_patched.c"        init/main.c
+
+# Same investigation: the boot reaches timekeeping_init() but never returns
+# from time_init(), so these two carry a fine-grained bisect of the PXA
+# timer bring-up (pxa_timer_init -> pxa_timer_nodt_init -> common_init).
+copy_in "$REPO/modules/mach-pxa/generic_patched.c"    arch/arm/mach-pxa/generic.c
+copy_in "$REPO/modules/clk-pxa/timer_pxa_patched.c"   drivers/clocksource/timer-pxa.c
+copy_in "$REPO/modules/clk-pxa/clk_pxa25x_patched.c"  drivers/clk/pxa/clk-pxa25x.c
+copy_in "$REPO/modules/clk-pxa/clk_pxa_patched.c"     drivers/clk/pxa/clk-pxa.c
 
 echo "==> applying reference current-driver snapshots"
 copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
@@ -102,10 +140,42 @@ copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
 copy_in "$REPO/modules/w100/w100fb_private.h" drivers/video/fbdev/w100fb.h
 copy_in "$REPO/modules/w100/w100fb.h"          include/video/w100fb.h
 
+# Wire the W100 driver into the fbdev Kconfig/Makefile.
+#
+# Without this CONFIG_FB_W100 does not exist as a symbol at all, so
+# w100fb.c is copied in but NEVER BUILT -- which is why the bootstrap
+# kernel has had no console for this entire project (found 2026-07-29).
+#
+# The repo also carries full-file snapshots (modules/w100/Kconfig_fbdev,
+# Makefile_fbdev) but those are from an older tree; appending the two
+# stanzas to the pristine files is version-proof and far smaller. Both
+# files end at top level, so a plain append lands outside any menu/if.
+if ! grep -q "FB_W100" "$KERNEL_DIR/drivers/video/fbdev/Kconfig"; then
+    cat >> "$KERNEL_DIR/drivers/video/fbdev/Kconfig" <<'W100_KCONFIG'
+
+config FB_W100
+	tristate "W100 frame buffer support"
+	depends on FB && HAS_IOMEM && (ARCH_PXA || COMPILE_TEST)
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	help
+	  Frame buffer driver for the w100 as found on the Sharp SL-Cxx series.
+	  It can also drive the w3220 chip found on iPAQ hx4700.
+W100_KCONFIG
+fi
+if ! grep -q "FB_W100" "$KERNEL_DIR/drivers/video/fbdev/Makefile"; then
+    printf 'obj-$(CONFIG_FB_W100)\t\t  += w100fb.o\n' \
+        >> "$KERNEL_DIR/drivers/video/fbdev/Makefile"
+fi
+
 echo "==> applying the sharpsl NAND driver"
 copy_in "$REPO/modules/nand/sharpsl_nand_patched.c" drivers/mtd/nand/raw/sharpsl.c
 copy_in "$REPO/modules/nand/sharpslpart.c"          drivers/mtd/parsers/sharpslpart.c
 copy_in "$REPO/modules/nand/sharpsl.h"              include/linux/mtd/sharpsl.h
+
+echo "==> rate-limiting JFFS2's per-block ECC warning (see modules/jffs2/wbuf_patched.c)"
+copy_in "$REPO/modules/jffs2/wbuf_patched.c"        fs/jffs2/wbuf.c
 
 echo "==> applying hostap_cs (PCMCIA WiFi) + lib80211 + michael_mic"
 HOSTAP_DEST=drivers/net/wireless/intersil/hostap

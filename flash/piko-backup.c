@@ -39,6 +39,7 @@ SYSCALL3(sys_open,   5)
 SYSCALL1(sys_close,  6)
 SYSCALL1(sys_chdir,  12)
 SYSCALL3(sys_lseek,  19)
+SYSCALL3(sys_ioctl,  54)
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -59,6 +60,23 @@ static void puts_(const char *s)
     sys_write(1, (long)s, strlen_(s));
 }
 
+/* armv5te has no hardware divider, and this freestanding build has no
+ * libgcc to call into for __udivsi3/__umodsi3 (EABI-only on this
+ * toolchain; this binary is deliberately OABI) -- so division-by-10 is
+ * hand-rolled here via restoring binary division, matching
+ * piko-install.c's udiv10(). */
+static unsigned long udiv10(unsigned long n, unsigned long *rem)
+{
+    unsigned long q = 0, r = 0;
+    int i;
+    for (i = 31; i >= 0; i--) {
+        r = (r << 1) | ((n >> i) & 1UL);
+        if (r >= 10) { r -= 10; q |= (1UL << i); }
+    }
+    if (rem) *rem = r;
+    return q;
+}
+
 static void putnum(long v)
 {
     char out[24];
@@ -67,7 +85,11 @@ static void putnum(long v)
     int j = 0;
     unsigned long u = (unsigned long)v;
     if (u == 0) { out[j++] = '0'; out[j] = 0; puts_(out); return; }
-    while (u > 0) { tmp[i++] = '0' + (u % 10); u /= 10; }
+    while (u > 0) {
+        unsigned long r;
+        u = udiv10(u, &r);
+        tmp[i++] = '0' + (char)r;
+    }
     while (i > 0) out[j++] = tmp[--i];
     out[j] = 0;
     puts_(out);
@@ -244,6 +266,92 @@ static int backup_one(const struct backup_target *t)
     return 0;
 }
 
+/* -------------------------------------------------------------------------
+ * mtd1/"smf" OOB dump -- page-0-of-each-block only, for FTL logical-block
+ * decoding (see piko-install.c's diagnose_ftl_mapping(), added 2026-07-29
+ * against the same real Sharp FTL OOB format confirmed via a genuine
+ * factory .dbk: 3 redundant copies of the logical block number live in
+ * OOB bytes 8-13 of each physical block's first page). Only page 0's 16
+ * OOB bytes matter for this, not all 32 pages per block, so this is a
+ * separate small dump (448 blocks * 16 bytes = 7168 bytes for mtd1/smf)
+ * rather than folded into backup_one()'s main-area-only read() loop. */
+#define SMF_BLOCK_SIZE  16384
+#define SMF_NUM_BLOCKS  (0x700000 / SMF_BLOCK_SIZE)
+#define OOB_LEN         16
+
+struct mtd_oob_buf_ {
+    unsigned long start;
+    unsigned long length;
+    unsigned char *ptr;
+};
+#define MEMREADOOB 0xc00c4d04
+
+static int backup_smf_oob(const char *mtd_dev, const char *out_file)
+{
+    puts_("Piko Backup: === reading ");
+    puts_(mtd_dev);
+    puts_(" page-0 OOB (");
+    putnum(SMF_NUM_BLOCKS);
+    puts_(" blocks) to ");
+    puts_(out_file);
+    puts_(" ===\n");
+
+    long mtd = sys_open((long)mtd_dev, O_RDONLY, 0);
+    if (mtd < 0) {
+        puts_("Piko Backup: cannot open ");
+        puts_(mtd_dev);
+        puts_("\n");
+        return -1;
+    }
+
+    long out = sys_open((long)out_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) {
+        puts_("Piko Backup: cannot open output file\n");
+        sys_close(mtd);
+        return -1;
+    }
+
+    static unsigned char oob[OOB_LEN];
+    long blk;
+    long bad = 0;
+    for (blk = 0; blk < SMF_NUM_BLOCKS; blk++) {
+        struct mtd_oob_buf_ req;
+        req.start  = (unsigned long)(blk * SMF_BLOCK_SIZE);
+        req.length = OOB_LEN;
+        req.ptr    = oob;
+        zero_fill((char *)oob, OOB_LEN);
+
+        if (sys_ioctl(mtd, MEMREADOOB, (long)&req) < 0) {
+            /* Leave zero-filled so the output file stays block-aligned;
+             * ftl_decode's caller must treat all-zero as "unreadable",
+             * distinct from the genuine all-0xFF "erased" encoding. */
+            bad++;
+        }
+
+        long w = sys_write(out, (long)oob, OOB_LEN);
+        if (w != OOB_LEN) {
+            puts_("Piko Backup: short write to OOB output file at block ");
+            putnum(blk);
+            puts_("\n");
+            sys_close(mtd);
+            sys_close(out);
+            return -1;
+        }
+    }
+
+    sys_close(mtd);
+    sys_close(out);
+
+    puts_("Piko Backup: done, wrote ");
+    putnum(SMF_NUM_BLOCKS * OOB_LEN);
+    puts_(" bytes to ");
+    puts_(out_file);
+    puts_(" (");
+    putnum(bad);
+    puts_(" unreadable block(s))\n");
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
@@ -263,6 +371,9 @@ int main(int argc, char *argv[])
         if (backup_one(&targets[i]) != 0)
             failures++;
     }
+
+    if (backup_smf_oob("/dev/mtd1", "smf-oob.bin") != 0)
+        failures++;
 
     if (failures) {
         puts_("Piko Backup: DONE with ");

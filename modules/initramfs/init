@@ -1,0 +1,64 @@
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+
+# Rebind stdio to the real console now that /dev exists (PID 1 starts with
+# no controlling TTY -> stdio is fully-buffered and output stays invisible
+# until exec time otherwise).
+exec > /dev/tty0 2>&1
+
+export TERM=linux
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+
+echo ""
+echo "=== zaurus-refresh bootstrap (kexec into stage 2) ==="
+echo ""
+
+# Recovery numbering is mtd1=smf/mtd2=root/mtd3=home, but THIS kernel sees
+# mtd0=smf/mtd1=root/mtd2=home -- stage-2 payload is /dev/mtdblock2.
+mkdir -p /mnt/home
+LOG=/mnt/home/debug.log
+
+if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
+	echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG"
+
+	# JFFS2's background scan/GC keeps processing nodes after mount()
+	# returns, so a nested-path test -f can briefly fail. Poll (quietly)
+	# until both payload files are actually accessible.
+	while true; do
+		if test -f /mnt/home/boot/zImage-full && test -f /mnt/home/sbin/kexec; then
+			break
+		fi
+		sleep 1
+	done
+
+	# Load stage 2 with -d (verbose): prints the memory-range scan and the
+	# exact placement decision/failure. --atags is required on this
+	# ATAG-only board (no /sys/firmware/fdt); without it the new kernel
+	# gets no memory map. Capture to a tmpfile (no `tee` in this busybox)
+	# so both console and the persistent log get it and $? is kexec's own.
+	echo "--- kexec -d -l output ---"
+	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
+		--atags \
+		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw" \
+		> /tmp/kexec-l.out 2>&1
+	KEXEC_LOAD_RC=$?
+	cat /tmp/kexec-l.out
+	cat /tmp/kexec-l.out >> "$LOG"
+	echo "--- kexec -l exit code: $KEXEC_LOAD_RC ---"
+	echo "kexec -l exit code: $KEXEC_LOAD_RC" >> "$LOG"
+
+	if test "$KEXEC_LOAD_RC" -eq 0; then
+		echo "kexec -l ok, jumping to stage 2..."
+		sync
+		exec /mnt/home/sbin/kexec -e
+	fi
+	echo "kexec load failed -- dropping to bootstrap shell"
+	echo "kexec load failed" >> "$LOG"
+else
+	echo "home mount failed" >&2
+fi
+
+exec setsid cttyhack /bin/ash -l

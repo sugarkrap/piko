@@ -16,3 +16,27 @@
 [submodule "libXfont"]
 	path = userspace/src/libXfont
 	url = https://gitlab.freedesktop.org/xorg/lib/libXfont.git
+[submodule "libfontenc"]
+	path = userspace/src/libfontenc
+	url = https://gitlab.freedesktop.org/xorg/lib/libfontenc.git
+[submodule "xcb-proto"]
+	path = userspace/src/xcb-proto
+	url = https://gitlab.freedesktop.org/xorg/proto/xcbproto.git
+[submodule "libXau"]
+	path = userspace/src/libXau
+	url = https://gitlab.freedesktop.org/xorg/lib/libxau.git
+[submodule "libXdmcp"]
+	path = userspace/src/libXdmcp
+	url = https://gitlab.freedesktop.org/xorg/lib/libxdmcp.git
+[submodule "libxcb"]
+	path = userspace/src/libxcb
+	url = https://gitlab.freedesktop.org/xorg/lib/libxcb.git
+[submodule "libxkbfile"]
+	path = userspace/src/libxkbfile
+	url = https://gitlab.freedesktop.org/xorg/lib/libxkbfile.git
+[submodule "pixman"]
+	path = userspace/src/pixman
+	url = https://gitlab.freedesktop.org/pixman/pixman.git
+[submodule "libXext"]
+	path = userspace/src/libXext
+	url = https://gitlab.freedesktop.org/xorg/lib/libxext.git

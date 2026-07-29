@@ -182,12 +182,17 @@ surfaced more API changes that a source read missed:
 
 ## Files here
 
-- `corgi_patched.c` / `modules/corgi_pm_patched.c` — **compile-verified clean
-  (zero warnings) against Linux 7.1.4**, kept in sync with the working
-  copies under `kernel-src/linux-7.1.4/arch/arm/mach-pxa/`.
-- `corgi.h` — the board's GPIO/hardware-constant header, deleted alongside
-  `corgi.c` in the same cleanup. Pulled unchanged from v6.0 — it's pure
-  `#define`s, nothing in it depends on removed kernel APIs.
+- `modules/mach-pxa/corgi_patched.c` / `modules/mach-pxa/corgi_pm_patched.c`
+  — **compile-verified clean (zero warnings) against Linux 7.1.4**, kept in
+  sync with the working copies under `kernel-src/linux-7.1.4/arch/arm/mach-pxa/`.
+  (Moved out of the repo root into `modules/mach-pxa/` 2026-07-30, alongside
+  the rest of the `*_patched.c`/`.S` files, which now live under `modules/`
+  grouped by the kernel subsystem/directory they patch — see
+  `tools/setup-kernel-src.sh`'s `copy_in` calls for the authoritative
+  source→destination mapping.)
+- `modules/mach-pxa/corgi.h` — the board's GPIO/hardware-constant header,
+  deleted alongside `corgi.c` in the same cleanup. Pulled unchanged from
+  v6.0 — it's pure `#define`s, nothing in it depends on removed kernel APIs.
 - `zImage-corgi-7.1.4` / `kernel.config-corgi-7.1.4` — the actual build
   output: a ready-to-flash (untested on hardware) compressed kernel image
   and the `.config` that produced it.
@@ -213,7 +218,7 @@ surfaced more API changes that a source read missed:
   reference snapshots applied by `tools/setup-kernel-src.sh` when rebuilding
   `kernel-src/linux-7.1.4/`.
 
-## What `corgi_patched.c` changes, and why
+## What `modules/mach-pxa/corgi_patched.c` changes, and why
 
 1. **Dropped `.handle_irq = pxa25x_handle_irq` from all three
    `MACHINE_START` blocks** (Corgi/Shepherd/Husky). `struct machine_desc`

@@ -226,3 +226,9 @@ if this one is bricked too. Current rules, until stated otherwise:
    in `mtd2`) is back on the table, specifically *because* it keeps `mtd1`
    permanently small and safe — the risk was always the oversized `mtd1`
    write, not the concept of a second-stage kernel living in `mtd2`.
+
+> **Update:** the "isolate mtd1 and mtd3 passes with a reboot gap" rule
+> this doc's Part 5 assumes was later relaxed, once a confirmed-good full
+> `smf` backup existed for this board — see "Combined single-pass
+> playbook" in `docs/FLASH-MTD1-MTD3-SAFE.md`. The mtd1 size/offset budget
+> (rule 1) is untouched and still absolute.

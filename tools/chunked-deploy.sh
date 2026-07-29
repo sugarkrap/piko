@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -21,6 +21,11 @@ set -eu
 # adapters and the Zaurus is only reachable via one of them.
 # --target user@host sets the SSH destination explicitly. A positional
 # user@host is also accepted for backwards compatibility.
+# --kernel-only skips every module/script/helper deployment step below and
+# only ships /boot/zImage-full (still preceded by the md5sum bootstrap and
+# the compr=zlib remount preflight). Useful when iterating on a kernel-only
+# change (e.g. the JFFS2 compressor fix itself) where redeploying modules
+# that haven't changed just adds time and extra risk on the flaky link.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -36,6 +41,7 @@ set -eu
 
 ADAPTER=""
 TARGET=""
+KERNEL_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -54,8 +60,12 @@ while [ $# -gt 0 ]; do
             TARGET="$2"
             shift 2
             ;;
+        --kernel-only)
+            KERNEL_ONLY=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]"
             exit 0
             ;;
         --*)
@@ -74,7 +84,7 @@ while [ $# -gt 0 ]; do
 done
 TARGET="${TARGET:-root@10.43.112.72}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new"
 if [ -n "$ADAPTER" ]; then
     SSH_OPTS="$SSH_OPTS -B $ADAPTER"
 fi
@@ -279,8 +289,37 @@ else
     echo "==> remote md5sum NOT available -- falling back to size-only verification"
 fi
 
+# 0b. Force zlib compression for this deploy's writes, regardless of
+# whatever JFFS2 compressor mode the CURRENTLY-RUNNING kernel defaults to.
+# A `rootflags=compr=zlib` baked into the kernel we're about to *ship* only
+# takes effect once that kernel is the one running -- it does nothing for
+# the write we are about to perform right now, which happens under
+# whichever kernel is already live. Left alone, a live kernel using the
+# default CMODE_PRIORITY compressor selection can pick LZO for
+# /boot/zImage-full, and the bootstrap kernel (CONFIG_JFFS2_LZO not set,
+# see kernel.config-corgi-7.1.4-minimal) can't decompress it --
+# "jffs2: compression type 0x07 not available", unbootable until the .bak
+# is restored (see docs/DEADLETTER-* for the history of this failure).
+if remount_out="$(ssh_do "mount -o remount,compr=zlib / 2>&1")"; then
+    echo "==> remounted / with compr=zlib (forces zlib for this deploy's writes)"
+    [ -n "$remount_out" ] && echo "    $remount_out"
+else
+    echo "WARNING: remount compr=zlib on / failed -- the currently-running" >&2
+    echo "         kernel may not support the compr= mount option. Writes" >&2
+    echo "         below may still pick LZO under CMODE_PRIORITY, which the" >&2
+    echo "         bootstrap kernel cannot decompress. Proceeding anyway." >&2
+    echo "         remote error: $remount_out" >&2
+fi
+
 # 1. Stage-2 kernel (kernel-panic fix)
 send_file "$KERNEL_DIR/arch/arm/boot/zImage" "/boot/zImage-full"
+
+if [ "$KERNEL_ONLY" -eq 1 ]; then
+    echo "==> --kernel-only: skipping module/script/helper deployment"
+    ssh_do "rm -rf '$REMOTE_STAGE'"
+    echo "==> done (kernel only)"
+    exit 0
+fi
 
 # 2. Sound stack modules + helper scripts (matching the kernel just sent)
 KVER_LOCAL=""
@@ -290,24 +329,12 @@ fi
 KVER_REMOTE="$(ssh_do 'uname -r')"
 echo "==> remote kernel release currently running: $KVER_REMOTE (will change after reboot to the newly deployed kernel)"
 
-MODULES="
-$KERNEL_DIR/sound/soundcore.ko
-$KERNEL_DIR/sound/core/snd.ko
-$KERNEL_DIR/sound/core/snd-timer.ko
-$KERNEL_DIR/sound/core/snd-pcm.ko
-$KERNEL_DIR/sound/core/snd-pcm-dmaengine.ko
-$KERNEL_DIR/sound/arm/snd-pxa2xx-lib.ko
-$KERNEL_DIR/sound/ac97_bus.ko
-$KERNEL_DIR/sound/pci/ac97/snd-ac97-codec.ko
-$KERNEL_DIR/sound/soc/snd-soc-core.ko
-$KERNEL_DIR/sound/soc/pxa/snd-soc-pxa2xx.ko
-$KERNEL_DIR/sound/soc/pxa/snd-soc-pxa2xx-i2s.ko
-$KERNEL_DIR/sound/soc/codecs/snd-soc-wm8731.ko
-$KERNEL_DIR/sound/soc/codecs/snd-soc-wm8731-i2c.ko
-$KERNEL_DIR/sound/soc/pxa/snd-soc-corgi.ko
-$KERNEL_DIR/sound/core/oss/snd-mixer-oss.ko
-$KERNEL_DIR/sound/core/oss/snd-pcm-oss.ko
-"
+. "$REPO/tools/kernel-modules.sh"
+MODULES=""
+for m in $AUDIO_MODULES; do
+    MODULES="$MODULES
+$KERNEL_DIR/$m"
+done
 
 for m in $MODULES; do
     if [ ! -f "$m" ]; then
@@ -320,28 +347,8 @@ for m in $MODULES; do
 done
 
 # 3. WiFi/PCMCIA stack modules -- MUST be redeployed in lockstep with every
-# kernel rebuild (learned the hard way 2026-07-26: shipping a new zImage
-# without these leaves stale .ko's whose struct-module ABI no longer matches
-# the new kernel, so insmod fails with "section size must match", PCMCIA
-# never comes up, and the device becomes unreachable over WiFi/SSH). These
-# go to their real depmod-tree paths (not a side directory like the audio
-# modules), replacing the exact files modules.dep already points at.
-WIFI_MODULES="
-kernel/drivers/pcmcia/pcmcia_core.ko
-kernel/drivers/pcmcia/pcmcia_rsrc.ko
-kernel/drivers/pcmcia/pcmcia.ko
-kernel/drivers/pcmcia/soc_common.ko
-kernel/drivers/pcmcia/pxa2xx_base.ko
-kernel/drivers/pcmcia/pxa2xx_sharpsl.ko
-kernel/drivers/net/wireless/intersil/hostap/hostap.ko
-kernel/drivers/net/wireless/intersil/hostap/hostap_cs.ko
-kernel/net/wireless/lib80211.ko
-kernel/net/wireless/lib80211_crypt_wep.ko
-kernel/net/wireless/lib80211_crypt_ccmp.ko
-kernel/net/wireless/lib80211_crypt_tkip.ko
-kernel/lib/crypto/libarc4.ko
-"
-
+# kernel rebuild. List + full rationale now lives in tools/kernel-modules.sh
+# (shared with flash/build-update-package.sh and flash/build-mtd3-jffs2.sh).
 for relpath in $WIFI_MODULES; do
     local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
     if [ ! -f "$local_path" ]; then
@@ -353,45 +360,9 @@ for relpath in $WIFI_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-# 4. SPI stack modules -- needed for the MAX1111 ADC (main battery voltage,
-# see sharpsl-pm's "Cannot read main battery!" warning) which hangs off
-# corgi's SPI1 bus (spi_board_info registered unconditionally in corgi.c,
-# see corgi_init_spi()). CONFIG_SPI_PXA2XX is a module (=m), and until it
-# loads and registers the SPI master, the max1111 device never probes, so
-# sharpsl_pm_pxa_read_max1111()/max1111_read_channel() always fails. These
-# modules were NEVER part of the original mtd3 rootfs build, so modprobe
-# can't find them via modules.dep (no entry exists) -- rcS loads them with
-# insmod + explicit path instead (see rootfs/etc/init.d/rcS).
-# ssp.ko (drivers/soc/pxa/ssp.c) MUST be loaded before spi-pxa2xx-platform.ko:
-# it exports pxa_ssp_request()/pxa_ssp_free(), which spi-pxa2xx-platform.ko
-# needs at insmod time ("Unknown symbol pxa_ssp_request/pxa_ssp_free" if
-# missing) -- discovered 2026-07-26 after the platform module loaded but the
-# SPI bus/max1111 never registered.
-# ads7846.ko (touchscreen) also hangs off this same SPI1 bus. It was
-# PREVIOUSLY built-in (CONFIG_TOUCHSCREEN_ADS7846=y) in whatever kernel is
-# currently running on-device, so it "just worked" with no explicit load
-# step -- but the current kernel.config-corgi-7.1.4 has it as =m, so a
-# rebuilt kernel produces a standalone ads7846.ko that NOTHING loaded
-# (found 2026-07-27, before it ever got deployed and silently broke the
-# touchscreen). Ship + load it explicitly here like the other SPI modules
-# rather than relying on it being built-in.
-# evdev.ko/mousedev.ko are also =m (CONFIG_INPUT_EVDEV=m,
-# CONFIG_INPUT_MOUSEDEV=m) and NOT SPI devices themselves, but they're the
-# input-core handler modules that actually create /dev/input/eventN
-# (evdev) and /dev/input/mice (mousedev) once ads7846 registers its input
-# device -- without evdev.ko, ads7846 probes fine but no eventN node ever
-# appears, so anything reading raw evdev (e.g. handheldquake's vid_fb.c)
-# would silently see no touchscreen at all. Shipped in this same list for
-# convenience since they're needed by the same touchscreen bring-up.
-SPI_MODULES="
-kernel/drivers/soc/pxa/ssp.ko
-kernel/drivers/spi/spi-pxa2xx-core.ko
-kernel/drivers/spi/spi-pxa2xx-platform.ko
-kernel/drivers/input/touchscreen/ads7846.ko
-kernel/drivers/input/evdev.ko
-kernel/drivers/input/mousedev.ko
-"
-
+# 4. SPI stack modules -- needed for the MAX1111 ADC and the touchscreen's
+# SPI1 bus. ORDER MATTERS (ssp.ko before spi-pxa2xx-platform.ko). List +
+# full rationale now lives in tools/kernel-modules.sh.
 for relpath in $SPI_MODULES; do
     local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
     if [ ! -f "$local_path" ]; then
@@ -403,21 +374,8 @@ for relpath in $SPI_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-# 5. MMC/SD + VFAT stack. These are all configured as modules, so the
-# pxa2xx-mci platform device remains unbound and an inserted card is invisible
-# unless they are shipped and loaded explicitly. VFAT/NLS covers the usual
-# Cacko-formatted SD cards; ext4 support is built into the kernel.
-SD_MODULES="
-kernel/drivers/mmc/core/mmc_core.ko
-kernel/drivers/mmc/core/mmc_block.ko
-kernel/drivers/mmc/host/pxamci.ko
-kernel/fs/nls/nls_cp437.ko
-kernel/fs/nls/nls_cp850.ko
-kernel/fs/nls/nls_iso8859-15.ko
-kernel/fs/fat/fat.ko
-kernel/fs/fat/vfat.ko
-"
-
+# 5. MMC/SD + VFAT stack. List + full rationale now lives in
+# tools/kernel-modules.sh.
 for relpath in $SD_MODULES; do
     local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
     if [ ! -f "$local_path" ]; then

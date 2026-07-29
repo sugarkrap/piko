@@ -1,0 +1,14 @@
+# Combined single-pass config: flashes mtd1 (bootstrap kernel) then mtd3
+# (home/rootfs) in one piko-install run, no reboot/verify gate between them.
+#
+# Only use this when a confirmed-good full NAND/smf backup exists to restore
+# from if the run goes wrong -- see docs/FLASH-MTD1-MTD3-SAFE.md, "Combined
+# single-pass playbook". Without a confirmed backup, use the separate
+# mtd1-then-mtd3 procedure in that doc instead.
+#
+# Order matters: mtd1 first. piko-install aborts on the first target
+# failure and will not touch mtd3 if the mtd1 write/verify fails.
+#
+# target <mtd_dev> <file> <start_addr> <max_size> <raw> <erase_only>
+target /dev/mtd1 zImage 917504 1294336 0 0
+target /dev/mtd3 mtd3.jffs2 0 71303168 1 0

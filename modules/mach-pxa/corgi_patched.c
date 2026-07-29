@@ -782,9 +782,42 @@ static const char * const probes[] = {
 	NULL,
 };
 
+/*
+ * FALLBACK (2026-07-29, piko project): static partition table for when
+ * sharpslpart's on-flash directory read fails.
+ *
+ * On real hardware, sharpslpart's own FTL scan succeeds ("Sharp SL FTL:
+ * 448 blocks used (424 logical, 24 reserved)" -- matches this exact
+ * board), but reading BOTH copies of the on-flash partition-info record
+ * (logical 0x60000 and 0x64000, inside that same FTL area) fails. Root
+ * cause not yet established -- could be genuine flash wear from the many
+ * kernel flashes this project has done, or something else.
+ *
+ * These three offsets/sizes are not a guess: they are independently
+ * confirmed twice, once from this device's own Cacko /proc/mtd
+ * (docs/DEADLETTER-MACHINE-ID-196.md) and once from sharpslpart.c's own
+ * source comment, which documents a reference dump taken from an actual
+ * SL-C860 -- this exact model:
+ *
+ *   mtd1: 00700000 00004000 "smf"
+ *   mtd2: 03500000 00004000 "root"
+ *   mtd3: 04400000 00004000 "home"
+ *
+ * mtd_device_parse_register() only falls back to this table if every
+ * parser in `probes` above fails first, so a working on-flash table
+ * still takes priority -- this is a safety net, not a replacement.
+ */
+static struct mtd_partition sharpsl_nand_fallback_parts[] = {
+	{ .name = "smf",  .offset = 0x00000000, .size = 0x00700000 },
+	{ .name = "root", .offset = 0x00700000, .size = 0x03500000 },
+	{ .name = "home", .offset = 0x03c00000, .size = 0x04400000 },
+};
+
 static struct sharpsl_nand_platform_data sharpsl_nand_platform_data = {
 	.badblock_pattern	= &sharpsl_bbt,
 	.part_parsers		= probes,
+	.partitions		= sharpsl_nand_fallback_parts,
+	.nr_partitions		= ARRAY_SIZE(sharpsl_nand_fallback_parts),
 };
 
 static struct resource sharpsl_nand_resources[] = {
@@ -872,30 +905,6 @@ static void __init corgi_init(void)
 	PCFR |= PCFR_OPDE;
 
 	pxa2xx_mfp_config(ARRAY_AND_SIZE(corgi_pin_config));
-
-	/*
-	 * EARLY BOOT MARKER: drive the SCOOP green LED (PA11) high via a
-	 * raw ioremap + register write, before any driver probing. Uses
-	 * the green LED instead of the orange charge LED (GPIO13) because
-	 * the orange LED's circuit appears to require a charger physically
-	 * connected to have any power at all -- it doesn't light regardless
-	 * of GPIO state when running on battery only, making it useless as
-	 * a cold-boot signal. SCOOP lives on the static-memory/chip-select
-	 * bus, not the always-mapped peripheral bus GPIO13 is on, so it
-	 * needs an explicit ioremap() here rather than io_p2v(). Mirrors
-	 * scoop_probe()'s own init sequence (MCR/CPR then GPCR/GPWR).
-	 * If this lights on a cold boot, the kernel definitely reached
-	 * board init (.init_machine).
-	 */
-	{
-		void __iomem *scoop = ioremap(0x10800000, 0x30);
-		if (scoop) {
-			__raw_writew(0x0140, scoop + 0x00);	/* SCOOP_MCR */
-			__raw_writew(0x0000, scoop + 0x0C);	/* SCOOP_CPR */
-			__raw_writew(1 << 1, scoop + 0x20);	/* SCOOP_GPCR: PA11 = output */
-			__raw_writew(1 << 1, scoop + 0x24);	/* SCOOP_GPWR: PA11 high (green LED on) */
-		}
-	}
 
 	/*
 	 * COLD-BOOT W100 FRAMEBUFFER FIX (crystal warm-up).
@@ -1014,4 +1023,73 @@ MACHINE_START(HUSKY, "SHARP Husky")
 	.restart	= corgi_restart,
 MACHINE_END
 #endif
+
+/*
+ * Sharp's legacy machine number (196) -- the one this hardware actually
+ * boots with.
+ *
+ * Found 2026-07-29 by decompressing the Cacko/Sharp kernel straight out of
+ * the board's own NAND (SYSTC760.DBK):
+ *
+ *   Linux version 2.4.18-rmk7-pxa3-embedix-021129 (zaurus@sharplinux)
+ *
+ * That kernel contains exactly one Sharp machine descriptor, "SHARP
+ * Shepherd", with nr = 196, phys_ram = 0xa0000000, phys_io = 0x40000000.
+ * The bootloader consequently passes 196 in r1 -- and 196 was NEVER
+ * registered in mainline's arch/arm/tools/mach-types, which only knows
+ * corgi 423, poodle 424, tosa 520, husky 543, shepherd 545.
+ *
+ * So no mainline kernel could ever match this board: setup_machine_tags()
+ * found nothing, and dump_machine_table() ended in its bare
+ * `while (true);` -- a silent, console-less hang that looks exactly like a
+ * failed flash. That cost an entire debugging session; see
+ * docs/DEADLETTER-MACHINE-ID-196.md.
+ *
+ * Hardware-wise this is the same board as Corgi/Shepherd/Husky (same
+ * .fixup/.map_io/.init_irq/.init_machine), and machine_is_corgi() is
+ * false for 196, so it takes the identical non-Corgi path.
+ */
+#define MACH_TYPE_SHARP_LEGACY	196
+
+/*
+ * ...and the number the bootloader ACTUALLY passes in r1: 19.
+ *
+ * Read directly off the LEDs on real hardware (2026-07-29), stable across
+ * power cycles, unambiguous once the decimal readout gained a rapid
+ * "attention burst" prefix -- a 0 digit is encoded as one LONG flash, so
+ * two flash-groups means exactly two digits: 1 and 9.
+ *
+ * 19 is MACH_TYPE_L7200 upstream (a LinkUp L7200 SDP -- utterly unrelated
+ * hardware), so this is almost certainly NOT a deliberate machine ID at
+ * all: Sharp's own kernel ships exactly one machine_desc, so it has no
+ * reason to validate r1, and the bootloader evidently never sets it
+ * meaningfully. We match it anyway because it is stable, and because the
+ * alternative -- no match -- means dump_machine_table()'s silent
+ * `while (true);`, which is indistinguishable from a failed flash and
+ * cost an entire session to diagnose.
+ *
+ * Deliberately NOT spelled MACH_TYPE_L7200: that name would imply this is
+ * an L7200, which it emphatically is not.
+ */
+#define MACH_TYPE_SHARP_BOOTLOADER	19
+
+MACHINE_START(SHARP_BOOTLOADER, "SHARP Zaurus (bootloader nr 19)")
+	.fixup		= fixup_corgi,
+	.map_io		= pxa25x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
+	.init_irq	= pxa25x_init_irq,
+	.init_machine	= corgi_init,
+	.init_time	= pxa_timer_init,
+	.restart	= corgi_restart,
+MACHINE_END
+
+MACHINE_START(SHARP_LEGACY, "SHARP Shepherd (Sharp legacy nr 196)")
+	.fixup		= fixup_corgi,
+	.map_io		= pxa25x_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
+	.init_irq	= pxa25x_init_irq,
+	.init_machine	= corgi_init,
+	.init_time	= pxa_timer_init,
+	.restart	= corgi_restart,
+MACHINE_END
 

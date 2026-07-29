@@ -6,7 +6,14 @@ Observed format for systc760.dbk:
 - 16-byte global header
 - 8192 block records for a 128MiB NAND (16KiB eraseblock)
 - each record is 0x4210 bytes: 0x10 per-block header + 0x4200 page payload
-- payload contains 32 pages of (512B main + 16B OOB)
+- payload is "structure of arrays", NOT interleaved per-page: the first
+  0x4000 (16384) bytes are all 32 pages' 512-byte main areas back to back,
+  followed by the last 0x200 (512) bytes = all 32 pages' 16-byte OOB areas
+  back to back. (Confirmed 2026-07-29 by locating a real ARM zImage's
+  "Uncompressing Linux..." decompressor-stub string + gzip header in the
+  reconstructed output and decompressing it cleanly end to end -- the
+  originally-assumed interleaved [512 main][16 OOB] x32 layout decompresses
+  to garbage after a few hundred bytes.)
 
 This tool reconstructs:
 - full_main.bin (128MiB main area)
@@ -53,14 +60,9 @@ def iter_blocks(buf: bytes):
 def payload_to_main(payload: bytes) -> bytes:
     if len(payload) != BLOCK_PAYLOAD:
         raise ValueError("invalid payload size")
-    out = bytearray(PAGES_PER_BLOCK * PAGE_MAIN)
-    src = 0
-    dst = 0
-    for _ in range(PAGES_PER_BLOCK):
-        out[dst : dst + PAGE_MAIN] = payload[src : src + PAGE_MAIN]
-        src += PAGE_MAIN + PAGE_OOB
-        dst += PAGE_MAIN
-    return bytes(out)
+    # Structure-of-arrays: all main areas first, then all OOB areas -- see
+    # the module docstring. Just slice off the leading main-area region.
+    return payload[: PAGES_PER_BLOCK * PAGE_MAIN]
 
 
 def main() -> int:

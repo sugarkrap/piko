@@ -1,11 +1,30 @@
 # AGENTS.md — read this before working on zaurus-refresh
 
 Mainline Linux (7.1.4) revival for a Sharp Zaurus SL-C760/SL-C860 (PXA255,
-XScale ARMv5TE, "Husky" machine ID). Two-stage kexec boot: a tiny JFFS2+KEXEC
-bootstrap kernel in the `smf` NAND partition kexecs a full stage-2 kernel +
-rootfs stored on `home`. Full history and bug post-mortems are in `docs/`
-(the `DEADLETTER-*.md` files — read the relevant one before touching kexec,
-flashing, the cipher, etc.).
+XScale ARMv5TE). **Machine ID is NOT "Husky."** Two numbers matter and they
+are not the same thing:
+
+- **19** — what the bootloader actually passes in register r1 at boot,
+  confirmed by repeated LED-blink digit readouts on real hardware. Nothing
+  in mainline's `arch/arm/tools/mach-types` claims 19 for this board (it's
+  `L7200` upstream, unrelated hardware) — a new `MACHINE_START` descriptor
+  had to be added that matches it anyway, purely because the alternative is
+  `dump_machine_table()`'s silent infinite loop. **This is the number any
+  mainline kernel booting this board must match against.**
+- **196** — what Sharp's own factory kernel (extracted/decompiled from this
+  board's NAND) calls itself internally ("SHARP Shepherd"). Useful
+  historical/forensic context, and also now registered as a fallback
+  `MACHINE_START`, but it is NOT what the bootloader passes and NOT
+  primarily what boots this board.
+
+See `docs/DEADLETTER-MACHINE-ID-196.md` for the full 19-vs-196 story. Two-
+stage kexec boot: a tiny bootstrap kernel (embedded initramfs, runs
+entirely in RAM — see `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md`) in
+the `smf` NAND partition fetches and kexecs a full stage-2 kernel + rootfs
+stored on `home`. Full history and bug post-mortems are in `docs/` (the
+`DEADLETTER-*.md` files — read the relevant one before touching kexec,
+flashing, the cipher, etc.; resolved/historical material has been moved to
+`docs/archive/` to keep the top level lean).
 
 ## HARD CONSTRAINTS — do not violate
 
@@ -50,6 +69,14 @@ There is no replacement.
   nandlogical at offset **917504**) vs `mtd3` (home, `raw=1` eraseall+nandcp).
   Never copy the `raw`/offset fields between partitions
   (`docs/DEADLETTER-RAW-FLAG.md`, `docs/DEADLETTER-MTD1-OFFSET.md`).
+- **`mtdN` numbering is context-dependent — always say which kernel.** The
+  Cacko/recovery-menu kernel that `piko-install` runs under (and every
+  flashing doc's `mtd1`/`mtd3` above) sees `mtd1=smf / mtd2=root /
+  mtd3=home`. The mainline kernel this project builds sees `mtd0=smf /
+  mtd1=root / mtd2=home` instead — one off, because a NOR "Filesystem"
+  physmap device is defined in `modules/mach-pxa/corgi_patched.c` but never registered in
+  `corgi_devices[]`, so mainline's NAND partitions start counting at
+  `mtd0`. A bare "mtdN" with no kernel context is a trap; say which one.
 - md5-verify every file staged to the SD card.
 - The SD card is shared with other sessions — always re-verify/regenerate
   `updater.sh` (the `piko-install`-invoking `flash/updater-encoded.sh`,
@@ -59,10 +86,16 @@ There is no replacement.
   `.dbk` (`docs/DEADLETTER-NAND-RECOVERY.md`) — but never rely on it; avoid
   the mistake instead.
 
-## Current state (2026-07)
-Two-stage boot works end to end; stage 2 boots to a zsh login (users
-`root`/`zaurus`, `piko`/`piko`). Service stack is BusyBox init + inittab +
-rcS + mdev (NOT systemd — far too heavy for 64MB/400MHz/uClibc). WiFi:
-wireless-tools + wpa_supplicant + hostap/Prism2 modules are in place; the
-card associates but the data path is still being brought up. SSH via dropbear
-is the goal once WiFi passes traffic. See `docs/archive/DEADLETTER-WIFI-SSH.md`.
+## Current state (2026-07-30)
+The bootstrap kernel boots successfully on real hardware as of tonight
+(2026-07-30) — see `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md` for the
+full chain of fixes that took. It does not yet reach a working stage 2:
+`home` currently holds an older stage-2 `zImage-full` built without
+framebuffer support, so kexec into it (if it even completes) is headless.
+A stage-2 rebuild with `CONFIG_FB_W100=y` is in progress. Once that lands,
+stage 2's own login/service-stack state (BusyBox init + inittab + rcS +
+mdev, zsh login as `root`/`zaurus` or `piko`/`piko`, wireless-tools +
+wpa_supplicant + hostap/Prism2 for WiFi, dropbear for SSH) needs to be
+re-verified on real hardware — treat prior claims about it working end to
+end as unconfirmed until then. See `docs/archive/DEADLETTER-WIFI-SSH.md`
+for the WiFi data-path history.

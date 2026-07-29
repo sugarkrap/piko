@@ -107,6 +107,23 @@ static int sharpsl_attach_chip(struct nand_chip *chip)
 	chip->ecc.calculate = sharpsl_nand_calculate_ecc;
 	chip->ecc.correct = rawnand_sw_hamming_correct;
 
+	/*
+	 * FIX (2026-07-29, piko project): this driver never opted into
+	 * generic erased-page detection, so every genuinely blank (all-0xFF)
+	 * page reads back as an uncorrectable ECC error -- nand_read_page_hwecc()
+	 * only special-cases erased pages when NAND_ECC_GENERIC_ERASED_CHECK is
+	 * set (see nand_check_erased_ecc_chunk() in nand_base.c). On real
+	 * hardware this reproduced as "mtd->read(...) returned ECC error" for
+	 * literally every block of a partition during the initial JFFS2 scan --
+	 * 100% failure rate, perfectly regular block-aligned addresses, no
+	 * exceptions -- which is the fingerprint of this exact, well-known gap,
+	 * not real flash wear (real bit rot is scattered, not universal). Four
+	 * other in-tree NAND drivers (diskonchip, davinci_nand, stm32_fmc2_nand,
+	 * plus nand_base.c's own default) set this same flag for the same
+	 * reason; it was simply missing here.
+	 */
+	chip->ecc.options |= NAND_ECC_GENERIC_ERASED_CHECK;
+
 	return 0;
 }
 
