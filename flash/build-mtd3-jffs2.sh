@@ -2,20 +2,44 @@
 set -eu
 
 # Rebuilds mtd3.jffs2 (the "home" partition image for SD-card recovery
-# flashing, see docs/FLASH-MTD1-MTD3-SAFE.md) by taking an EXISTING
-# mtd3.jffs2 as a base and appending an incremental update containing the
-# latest kernel + modules + rootfs/ overlay, via mkfs.jffs2's -i/--incremental
-# mode: it reads the base image to learn existing inode/version numbers and
-# emits only new nodes for the paths in the overlay tree, which win over the
-# base image's older versions of the same paths once concatenated.
+# flashing, see docs/FLASH-MTD1-MTD3-SAFE.md) by fully UNPACKING an
+# existing mtd3.jffs2 as a base, overlaying the latest kernel + modules +
+# rootfs/ on top, and building a single fresh image with mkfs.jffs2 -r
+# (no -i).
 #
 # This project has no full base userland (busybox, /bin, /lib, device
 # nodes, etc.) committed anywhere -- rootfs/ here is only the same overlay
 # tools/build-and-deploy.sh and flash/build-update-package.sh push onto a
 # live device. The only place a full "home" tree currently exists is inside
 # a previously-built mtd3.jffs2 already staged somewhere (e.g. on the SD
-# card) -- that's why this is incremental-onto-an-existing-image rather
-# than a from-nothing rootfs build.
+# card) -- that's why this unpacks an existing image rather than building
+# a rootfs from nothing.
+#
+# NOT using mkfs.jffs2 -i/--incremental (2026-07-30, confirmed on a real
+# base image): its incremental mode reads the base to learn every existing
+# inode/version number, an O(n^2)-looking operation over total node
+# records (not distinct files) -- a real base image with ~1,550 files but
+# ~18,000 accumulated node versions (config files rewritten many times
+# over the image's life) made it run 30+ minutes without finishing, while
+# `jffs2dump` reads the exact same file end-to-end in under 30 seconds.
+# Unpacking + a single fresh non-incremental build sidesteps that
+# bookkeeping entirely and is dramatically faster. tools/jffs2-unpack.py
+# does the unpacking (jffs2reader only supports single-directory listing
+# and single-file dump, no bulk/recursive extraction, so this walks the
+# tree by hand); it skips any file jffs2reader's small internal buffer
+# can't hold (e.g. old kernel images) or a compression method it doesn't
+# support -- both classes of skip are fine here since anything genuinely
+# needed is provided by the overlay anyway, and the script reports skips
+# so a real gap wouldn't go unnoticed.
+#
+# GOTCHA when spot-checking the OUTPUT image by hand: `jffs2reader -d`
+# chokes internally on a big file's data nodes (the same buffer limit as
+# above) and silently drops its own tracking of that file's PARENT
+# directory too -- e.g. `jffs2reader out.jffs2 -d /` will not list `boot`
+# at all once `/boot/zImage-full` is  ~6MB, even though the image is
+# genuinely fine. Confirmed 2026-07-30: `jffs2dump -c out.jffs2 | grep
+# name` still shows the real dirent/inode nodes correctly in this same
+# case. Trust jffs2dump over jffs2reader for verifying a built image.
 #
 # Usage:
 #   flash/build-mtd3-jffs2.sh <base-mtd3.jffs2> [output.jffs2]
@@ -44,6 +68,10 @@ esac
 
 if ! command -v mkfs.jffs2 >/dev/null 2>&1; then
     echo "build-mtd3-jffs2: mkfs.jffs2 not found (apt install mtd-utils)" >&2
+    exit 1
+fi
+if ! command -v jffs2reader >/dev/null 2>&1; then
+    echo "build-mtd3-jffs2: jffs2reader not found (apt install mtd-utils)" >&2
     exit 1
 fi
 
@@ -95,13 +123,22 @@ done
     chmod "$mode" "$dst"
 done
 
-echo "==> generating incremental appendage against $BASE_JFFS2 (eraseblock=$ERASEBLOCK)"
-APPEND="$STAGE/appendage.jffs2"
-mkfs.jffs2 -r "$OVERLAY" -i "$BASE_JFFS2" -o "$APPEND" \
-    -e "$ERASEBLOCK" -l -q -v 2>&1 | tail -20
+echo "==> unpacking base image $BASE_JFFS2 (this walks the tree via jffs2reader, no bulk-extract exists)"
+MERGED="$STAGE/merged"
+python3 "$REPO/tools/jffs2-unpack.py" "$BASE_JFFS2" "$MERGED"
 
-echo "==> concatenating base + appendage -> $OUT"
-cat "$BASE_JFFS2" "$APPEND" > "$OUT"
+echo "==> overlaying kernel + modules + rootfs/ on top of the unpacked base"
+cp -a "$OVERLAY/." "$MERGED/"
 
-md5sum "$BASE_JFFS2" "$APPEND" "$OUT"
+echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
+# -U/--squash-uids: the unpack above can't preserve the original root
+# ownership (jffs2reader needs no privilege to read, but we have none to
+# chown to arbitrary uid/gid on extraction) -- force everything back to
+# root:root at pack time instead, which is what every file in this image
+# actually needs to be owned as on the real device.
+mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
+    -e "$ERASEBLOCK" -l -U -q -v 2>&1 | tail -20
+mv "$OUT.partial" "$OUT"
+
+md5sum "$BASE_JFFS2" "$OUT"
 echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
