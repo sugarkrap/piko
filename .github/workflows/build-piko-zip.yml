@@ -1,0 +1,233 @@
+name: Build piko.zip (SD-card recovery-flash package)
+
+# Builds piko.zip: the complete SD-card recovery-flash package Cacko's
+# recovery menu needs -- updater.sh (Cacko-cipher-encoded), piko-install
+# (the freestanding ARM OABI flasher), piko.cfg (combined mtd1+mtd3
+# targets), the bootstrap zImage (mtd1/smf, kernel.config-corgi-
+# 7.1.4-minimal + embedded initramfs), and mtd3.jffs2 (the full stage-2
+# home partition image). Uploaded flat, no subdirectories -- this needs to
+# land directly on an SD card root, matching how piko-install and
+# updater.sh are invoked at /mnt/card/... (see flash/updater-uncoded.sh).
+#
+# Two genuinely different toolchains are involved:
+#   - the bootstrap/stage-2 kernels themselves build with a normal EABI
+#     cross-gcc (gcc-arm-linux-gnueabi via apt, same as
+#     build-update-package.yml already uses).
+#   - piko-install/piko-backup (freestanding ARM OABI, no libc) and the
+#     bootstrap initramfs's static busybox both need a cross-gcc that can
+#     still emit genuine pre-EABI OABI code via -mabi=apcs-gnu, and (for
+#     the initramfs specifically) a small libc so the resulting busybox
+#     doesn't blow the bootstrap zImage's 1,294,336-byte NAND-slot budget.
+#     tools/build-oabi-toolchain.sh provisions this: it first checks
+#     whether any already-available compiler (e.g. the apt-installed
+#     gcc-arm-linux-gnueabi above) happens to produce genuine OABI code
+#     with that flag -- if not, it builds this project's own dev
+#     toolchain from source via crosstool-NG, from the tracked config at
+#     tools/oabi-toolchain.config. That from-source build is slow but
+#     cacheable, and every acceptance check in this pipeline is a real
+#     `readelf -h` flags check, never just "the compiler exited 0" (see
+#     tools/build-piko-install.sh's header comment for exactly why that
+#     distinction matters here).
+#
+# Two independent kernel builds happen against the SAME reconstructed
+# kernel-src/linux-7.1.4 tree (tools/setup-kernel-src.sh, shared with
+# build-update-package.yml): the full kernel.config-corgi-7.1.4 stage-2
+# build happens in-tree (same as build-update-package.yml always did);
+# the bootstrap kernel.config-corgi-7.1.4-minimal build happens
+# out-of-tree via `make O=...` into its own build directory, so it never
+# touches the stage-2 build's in-tree .config or object files.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "flash/src/piko-install.c"
+      - "flash/piko-backup.c"
+      - "flash/updater-uncoded.sh"
+      - "tools/encode-updater.py"
+      - "flash/piko.cfg.mtd1-mtd3-combined"
+      - "kernel.config-corgi-7.1.4-minimal"
+      - "kernel.config-corgi-7.1.4"
+      - "modules/**"
+      - "drivers/**"
+      - "initramfs/**"
+      - "tools/build-initramfs.sh"
+      - "tools/build-piko-install.sh"
+      - "tools/build-oabi-toolchain.sh"
+      - "tools/oabi-toolchain.config"
+      - "flash/mtd3.jffs2"
+      - "flash/build-mtd3-jffs2.sh"
+      - "tools/setup-kernel-src.sh"
+      - "tools/kernel-modules.sh"
+      - "rootfs/**"
+      - ".github/workflows/build-piko-zip.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo (with LFS -- flash/mtd3.jffs2 base image)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install ARM cross-compiler, kernel build deps, mtd-utils, and crosstool-NG build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              gcc-arm-linux-gnueabi \
+              bison flex bc libssl-dev libelf-dev cpio zip \
+              mtd-utils file \
+              build-essential git autoconf automake bison flex texinfo \
+              gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
+              patch gawk python3-dev rsync
+
+      # Slow-but-cacheable: reproduces this project's own OABI-capable
+      # crosstool-NG toolchain from source, ONLY if no already-available
+      # compiler (gcc-arm-linux-gnueabi above included) actually passes
+      # the real -mabi=apcs-gnu -> readelf 0x600 check. See
+      # tools/build-oabi-toolchain.sh's header comment for the full
+      # rationale and search order.
+      - name: Cache OABI-capable toolchain (crosstool-NG build)
+        id: oabi-toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: oabi-toolchain-v1-${{ hashFiles('tools/oabi-toolchain.config', 'tools/build-oabi-toolchain.sh') }}
+          save-always: true
+
+      - name: Provision OABI-capable toolchain
+        id: oabi_toolchain
+        run: |
+          # Deliberately does NOT set EXTRA_CC_CANDIDATES to try the
+          # apt-installed gcc-arm-linux-gnueabi here: that compiler is
+          # glibc-cross, and while it may well also pass the OABI check
+          # (untested against the real Debian/Ubuntu package -- see
+          # tools/build-piko-install.sh's header comment), the bootstrap
+          # initramfs's static busybox specifically needs a SMALL libc
+          # (uclibc) to fit inside the 1,294,336-byte mtd1 NAND slot budget
+          # alongside the compressed kernel -- a glibc-static busybox would
+          # risk blowing that budget even if it "worked" for piko-install
+          # alone. So this always builds (or restores from cache) this
+          # project's own proven arm-unknown-linux-uclibcgnueabi toolchain,
+          # used for BOTH piko-install/piko-backup and the initramfs.
+          # Writes toolchain_bin_dir=<path> to $GITHUB_OUTPUT itself (see
+          # report_and_exit() in the script) -- no extra plumbing needed here.
+          ./tools/build-oabi-toolchain.sh
+
+      - name: Build piko-install + piko-backup (verify genuine OABI)
+        env:
+          TOOLCHAIN_BIN_DIR: ${{ steps.oabi_toolchain.outputs.toolchain_bin_dir }}
+        run: |
+          ./tools/build-piko-install.sh --force
+
+      - name: Build bootstrap initramfs (static busybox, embedded in mtd1 zImage)
+        env:
+          TOOLCHAIN_BIN_DIR: ${{ steps.oabi_toolchain.outputs.toolchain_bin_dir }}
+        run: |
+          ./tools/build-initramfs.sh --force
+
+      - name: Cache kernel-src reconstruction
+        id: kernel-src-cache
+        uses: actions/cache@v4
+        with:
+          path: kernel-src
+          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'kernel.config-corgi-7.1.4-minimal', 'modules/**', 'drivers/**', 'tools/setup-kernel-src.sh') }}
+          save-always: true
+
+      - name: Reconstruct kernel-src (download + apply tracked patches, full config + oldconfig in-tree)
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
+        run: |
+          ./tools/setup-kernel-src.sh
+
+      - name: Build stage-2 kernel (full config, in-tree, zImage + modules)
+        run: |
+          make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              -j"$(nproc)" zImage modules
+          echo "### Stage-2 kernel (kernel.config-corgi-7.1.4)" >> "$GITHUB_STEP_SUMMARY"
+          echo "zImage: $(stat -c%s kernel-src/linux-7.1.4/arch/arm/boot/zImage) bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build bootstrap kernel (minimal config, out-of-tree O=, embedded initramfs)
+        run: |
+          BOOT_O="$GITHUB_WORKSPACE/kernel-src/build-bootstrap"
+          mkdir -p "$BOOT_O"
+          cp kernel.config-corgi-7.1.4-minimal "$BOOT_O/.config"
+
+          # The tracked config points CONFIG_INITRAMFS_SOURCE at a
+          # machine-local dev path (see the comment in
+          # kernel.config-corgi-7.1.4-minimal itself) -- repoint it at the
+          # initramfs tools/build-initramfs.sh just built into this
+          # checkout before oldconfig locks it in.
+          INITRAMFS_CPIO="$GITHUB_WORKSPACE/initramfs/initramfs-minimal-built.cpio.gz"
+          if [ ! -f "$INITRAMFS_CPIO" ]; then
+            echo "::error::bootstrap initramfs not found at $INITRAMFS_CPIO -- tools/build-initramfs.sh should have produced it" >&2
+            exit 1
+          fi
+          sed -i "s|^CONFIG_INITRAMFS_SOURCE=.*|CONFIG_INITRAMFS_SOURCE=\"$INITRAMFS_CPIO\"|" "$BOOT_O/.config"
+
+          make -C kernel-src/linux-7.1.4 O="$BOOT_O" ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              olddefconfig
+          make -C kernel-src/linux-7.1.4 O="$BOOT_O" ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              -j"$(nproc)" zImage
+
+          BOOT_ZIMAGE="$BOOT_O/arch/arm/boot/zImage"
+          BOOT_SIZE=$(stat -c%s "$BOOT_ZIMAGE")
+          MAX_SIZE=1294336
+          {
+            echo "### Bootstrap kernel (kernel.config-corgi-7.1.4-minimal)"
+            echo "zImage: $BOOT_SIZE bytes (NAND mtd1 slot budget: $MAX_SIZE bytes)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$BOOT_SIZE" -gt "$MAX_SIZE" ]; then
+            echo "::error::bootstrap zImage is $BOOT_SIZE bytes, exceeds the $MAX_SIZE-byte mtd1 NAND slot budget (docs/FLASH-MTD1-MTD3-SAFE.md) -- refusing to ship an oversized bootstrap kernel." >&2
+            echo "**FAILED: bootstrap zImage exceeds the $MAX_SIZE-byte budget.**" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "BOOT_ZIMAGE=$BOOT_ZIMAGE" >> "$GITHUB_ENV"
+
+      - name: Build mtd3.jffs2 (incremental onto the git-LFS-tracked base image)
+        run: |
+          test -f flash/mtd3.jffs2 || { echo "::error::flash/mtd3.jffs2 (LFS-tracked base image) not present after checkout -- was lfs: true honored?" >&2; exit 1; }
+          file flash/mtd3.jffs2
+          mkdir -p "$GITHUB_WORKSPACE/piko-package"
+          ./flash/build-mtd3-jffs2.sh flash/mtd3.jffs2 "$GITHUB_WORKSPACE/piko-package/mtd3.jffs2"
+
+      - name: Assemble piko.zip
+        run: |
+          PKG="$GITHUB_WORKSPACE/piko-package"
+          mkdir -p "$PKG"
+
+          python3 tools/encode-updater.py flash/updater-uncoded.sh "$PKG/updater.sh"
+          cp flash/piko-install "$PKG/piko-install"
+          cp flash/piko.cfg.mtd1-mtd3-combined "$PKG/piko.cfg"
+          cp "$BOOT_ZIMAGE" "$PKG/zImage"
+          # mtd3.jffs2 already landed directly in $PKG by the previous step.
+
+          chmod 755 "$PKG/piko-install"
+
+          {
+            echo "### piko.zip contents (md5sums, verify-before-flash -- see AGENTS.md 'last spare board')"
+            echo
+            echo '```'
+            ( cd "$PKG" && md5sum updater.sh piko-install piko.cfg zImage mtd3.jffs2 )
+            echo '```'
+            echo
+            echo '```'
+            ( cd "$PKG" && ls -la updater.sh piko-install piko.cfg zImage mtd3.jffs2 )
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          ( cd "$PKG" && zip -j "$GITHUB_WORKSPACE/piko.zip" updater.sh piko-install piko.cfg zImage mtd3.jffs2 )
+
+          echo "### piko.zip archive listing" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          unzip -l piko.zip >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload piko.zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: piko-zip
+          path: piko.zip
+          if-no-files-found: error
