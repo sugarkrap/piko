@@ -394,6 +394,20 @@ done
 send_file "$REPO/rootfs/etc/init.d/rcS" "/etc/init.d/rcS"
 ssh_do "chmod 0755 /etc/init.d/rcS"
 
+# 6a. Graphical session: xsession brings up Xfbdev -> Zaurus keymap ->
+# Matchbox, and inittab runs it on tty1 in place of the getty, so the
+# device boots to a desktop rather than an ash prompt. xsession falls
+# back to a getty itself on every failure path, so shipping these cannot
+# strand the machine at a blank screen -- and dropbear starts earlier in
+# rcS, so SSH is up either way.
+#
+# Deployed BEFORE the X11 payload below on purpose: if the payload
+# transfer dies partway over this flaky link, xsession finds no Xfbdev
+# and drops to a console instead of init respawning into a broken state.
+send_file "$REPO/rootfs/etc/init.d/xsession" "/etc/init.d/xsession"
+ssh_do "chmod 0755 /etc/init.d/xsession"
+send_file "$REPO/rootfs/etc/inittab" "/etc/inittab"
+
 # 6b. hostap.conf -- sets iw_mode=2 on the correct module (hostap_cs, not
 # hostap; iw_mode is declared in hostap_hw.c which hostap_cs.c #includes
 # directly). Was previously only ever deployed by hand, never tracked by
@@ -539,6 +553,36 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
 fi
 
 ssh_do "rm -rf '$REMOTE_STAGE'"
+
+# 9. X11 + Matchbox desktop payload.
+#
+# Shipped as ONE tar and unpacked on the device with our own untar
+# (userspace/src/untar.c): the stack is ~400 files, and that many
+# individual send_file round trips over this link would be brutal. The
+# device's busybox has no tar at all, which is precisely why untar exists.
+#
+# Built by tools/build-matchbox-payload.sh, which also verifies every
+# DT_NEEDED is satisfied and every ELF is really ARM before packing.
+# Skipped (with a note, not an error) when the tar has not been built --
+# a kernel-only redeploy should not have to build all of X first.
+X11_PAYLOAD="${X11_PAYLOAD:-/tmp/matchbox-payload.tar}"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
+    echo "==> X11/Matchbox payload ($(wc -c < "$X11_PAYLOAD") bytes)"
+    if [ "$(ssh_do "if [ -x /usr/local/bin/untar ]; then echo 1; else echo 0; fi")" != "1" ]; then
+        # untar is a small static binary with no dependencies, so it can
+        # always be (re)built and pushed even on a bare device.
+        echo "FAILED: /usr/local/bin/untar missing on the device." >&2
+        echo "Build it and push it first:" >&2
+        echo "  \$GCC -march=armv5te -O2 -static -o untar userspace/src/untar.c" >&2
+        exit 1
+    fi
+    send_file "$X11_PAYLOAD" "/tmp/x11-payload.tar"
+    ssh_do "/usr/local/bin/untar /tmp/x11-payload.tar / && rm -f /tmp/x11-payload.tar"
+    echo "==> X11/Matchbox stack unpacked"
+elif [ "$KERNEL_ONLY" -eq 0 ]; then
+    echo "==> no X11 payload at $X11_PAYLOAD -- skipping"
+    echo "    (build it with tools/build-matchbox-payload.sh)"
+fi
 
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."

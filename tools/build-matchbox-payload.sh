@@ -57,27 +57,49 @@ TARGET="${TARGET:-root@10.208.47.72}"
 STRIP="$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip"
 [ -x "$STRIP" ] || { echo "FAILED: no strip at $STRIP" >&2; exit 1; }
 
-# Runtime libraries. These are the SONAMEs every Matchbox binary lists in
-# DT_NEEDED, minus the four the device already has (libc, libX11, libXext,
-# libz). Bare filenames here; the version suffix is discovered below so a
-# rebuilt library does not silently keep shipping the old one.
-LIBS="libmb libXft libXrender libfreetype libfontconfig libpng16 libexpat"
+# Runtime libraries -- the WHOLE X11 stack, not just Matchbox's own
+# dependencies, so this payload can populate a freshly-flashed device
+# rather than assuming an earlier hand-deploy left things lying around.
+# Only libc.so.0 and the dynamic loader come from the rootfs itself.
+#
+# Bare names here; the version suffix is discovered below, so a rebuilt
+# library cannot silently keep shipping the old one.
+LIBS="libX11 libXext libxcb libXau libXdmcp libz libexpat libpng16 \
+libfreetype libfontconfig libXrender libXft libmb libpixman-1 libXfont \
+libfontenc libxkbfile libmd"
+
+# Binaries that do not come from a component DESTDIR: the X server and the
+# XKB compiler live in the xserver/xkbcomp submodule build trees. xkbcomp
+# is not optional -- the server shells out to it to compile a keymap, and
+# without it X dies with "Failed to activate core devices".
+XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
+XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
+XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
 mkdir -p "$PAYLOAD/lib" "$PAYLOAD/usr" "$PAYLOAD/etc"
 
 for base in $LIBS; do
-    real="$(ls "$STAGE/usr/lib/" 2>/dev/null | grep -E "^${base}\.so\.[0-9.]+$" | sort -V | tail -1)"
-    if [ -z "$real" ]; then
+    # Ship EVERY version present, not just the newest. Two libraries can
+    # share a base name but export different SONAMEs -- libmd is exactly
+    # that here: libmd.so.0 is libbsd's (what Xfbdev links) and
+    # libmd.so.1 is this project's xsha1-compat shim. Picking "the
+    # highest version" silently shipped the wrong one and left Xfbdev
+    # unable to start.
+    found=0
+    for real in $(ls "$STAGE/usr/lib/" 2>/dev/null | grep -E "^${base}\.so\.[0-9]+(\.[0-9]+)*$"); do
+        cp "$STAGE/usr/lib/$real" "$PAYLOAD/lib/"
+        # DT_NEEDED names the SONAME (libfoo.so.N), so that symlink must exist.
+        soname="$(echo "$real" | sed -E 's/^(.*\.so\.[0-9]+)\..*$/\1/')"
+        [ "$soname" = "$real" ] || ln -sf "$real" "$PAYLOAD/lib/$soname"
+        echo "    lib: $real"
+        found=1
+    done
+    if [ "$found" -eq 0 ]; then
         echo "FAILED: $base not in $STAGE/usr/lib -- build it first" >&2
         exit 1
     fi
-    cp "$STAGE/usr/lib/$real" "$PAYLOAD/lib/"
-    # DT_NEEDED names the SONAME (libfoo.so.N), so that symlink must exist.
-    soname="$(echo "$real" | sed -E 's/^(.*\.so\.[0-9]+)\..*$/\1/')"
-    [ "$soname" = "$real" ] || ln -sf "$real" "$PAYLOAD/lib/$soname"
-    echo "    lib: $real"
 done
 
 # libgcc_s comes from the toolchain, not the staging tree: libexpat needs
@@ -94,6 +116,32 @@ for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON"; do
     [ -d "$d/etc" ] && cp -a "$d/etc/." "$PAYLOAD/etc/"
     echo "    merged: $d"
 done
+
+# X server + XKB compiler + xev (handy for diagnosing input on-device).
+# Xfbdev goes to /usr/local/bin to match where it has always lived here;
+# xkbcomp must be on the default PATH because the server execs it by name,
+# and PATH on this device is only /usr/sbin:/usr/bin:/sbin:/bin.
+mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin"
+for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
+            "$XKBCOMP_BIN:usr/bin/xkbcomp" \
+            "$XEV_BIN:usr/local/bin/xev"; do
+    src="${spec%:*}"; dst="${spec##*:}"
+    if [ ! -f "$src" ]; then
+        echo "FAILED: missing $src -- build that component first" >&2
+        exit 1
+    fi
+    cp "$src" "$PAYLOAD/$dst"
+    echo "    bin: $dst"
+done
+
+# XKB database + our Zaurus layout. Without the database the server cannot
+# compile any keymap at all; without the layout the Fn symbol row (/ : [ ]
+# | ...) is untypable. zaurus.xkb is the wrapper /etc/init.d/xsession
+# feeds to xkbcomp at session start.
+mkdir -p "$PAYLOAD/usr/share/X11" "$PAYLOAD/etc/X11"
+cp -a "$STAGE/usr/share/X11/xkb" "$PAYLOAD/usr/share/X11/"
+cp "$REPO/userspace/xkb/symbols/zaurus" "$PAYLOAD/usr/share/X11/xkb/symbols/zaurus"
+cp "$REPO/userspace/xkb/zaurus.xkb"     "$PAYLOAD/etc/X11/zaurus.xkb"
 
 # Fonts + fontconfig config. The device ships with NO fonts and no
 # /etc/fonts at all, and Matchbox themes ask for "Sans bold 16px" -- a
@@ -129,7 +177,8 @@ fi
 # Every DT_NEEDED must be satisfied by the payload or already present on
 # the device. Getting this wrong means a binary that dies at exec time
 # with a bare "not found", which is painful to diagnose over this link.
-ON_DEVICE="libc.so.0 libX11.so.6 libXext.so.6 libz.so.1"
+# Only libc comes from the rootfs now; everything else we ship.
+ON_DEVICE="libc.so.0"
 NEEDED="$(find "$PAYLOAD" -type f | while read -r f; do
     case "$(file -b "$f")" in
         ELF*) "$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-readelf" -d "$f" 2>/dev/null \

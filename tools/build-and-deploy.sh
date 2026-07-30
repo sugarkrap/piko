@@ -51,6 +51,7 @@ ADAPTER=""
 FORCE_KERNEL_SRC=0
 KERNEL_ONLY=0
 SKIP_USERSPACE=0
+SKIP_X11=0
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -64,6 +65,10 @@ while [ $# -gt 0 ]; do
             ;;
         --kernel-only)
             KERNEL_ONLY=1
+            shift
+            ;;
+        --skip-x11)
+            SKIP_X11=1
             shift
             ;;
         --skip-userspace)
@@ -179,10 +184,31 @@ else
     echo "==> userspace build OK"
 fi
 
+# --- X11 + Matchbox desktop -------------------------------------------
+# Repackages the already-built X stack into the single tar that
+# chunked-deploy ships (see section 9 there). This only *collects*: the
+# X submodules and Matchbox components are built separately, because a
+# from-scratch X build is long and almost never what you want on a
+# routine kernel redeploy. See docs/HOWTO-MATCHBOX-DESKTOP.md.
+#
+# Missing pieces are not fatal here -- the payload script fails loudly if
+# a component is absent, and a kernel-only or X-less deploy is a
+# perfectly normal thing to want.
+if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
+    echo "==> repacking the X11/Matchbox payload..."
+    if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
+        echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    else
+        echo "==> X11 payload NOT built -- deploying without it" >&2
+        echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
+        tail -3 /tmp/x11-payload-build.log >&2
+    fi
+fi
+
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> deploying to $TARGET (zImage only)..."
 else
-    echo "==> deploying to $TARGET (zImage + sound + WiFi/PCMCIA modules)..."
+    echo "==> deploying to $TARGET (zImage + modules + X11/Matchbox)..."
 fi
 set -- "$TARGET"
 if [ -n "$ADAPTER" ]; then
