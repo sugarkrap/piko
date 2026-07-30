@@ -30,4 +30,12 @@ ls /sys/class/net/ 2>/dev/null
 echo "== dmesg, pcmcia/hostap/card lines only (no jffs2 noise) =="
 dmesg | grep -iE "pcmcia|hostap|prism|cs:|socket"
 
+echo "== dmesg, any kernel WARNING/BUG/Oops, with context =="
+# A bare grep for pcmcia/hostap can hit only the "Modules linked in: ..."
+# line of an Oops/WARN backtrace (it lists every loaded module, so it
+# often contains "pcmcia"/"hostap" as a substring) while missing the
+# actual warning message and call trace around it -- -B/-A pulls the
+# whole thing in instead of just that one incidental line.
+dmesg | grep -iE -B5 -A25 "WARNING:|Oops|BUG:|Call trace"
+
 echo "== done =="
