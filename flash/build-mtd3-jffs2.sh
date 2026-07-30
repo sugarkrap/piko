@@ -134,8 +134,21 @@ echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
 # chown to arbitrary uid/gid on extraction) -- force everything back to
 # root:root at pack time instead, which is what every file in this image
 # actually needs to be owned as on the real device.
+#
+# -n/--no-cleanmarkers (2026-07-30, found from real hardware's own kernel
+# log): fs/jffs2/os-linux.h defines jffs2_cleanmarker_oob(c) as
+# `c->mtd->type == MTD_NANDFLASH` -- true for this device, meaning the
+# running kernel expects clean markers written in the OOB area, not
+# inline in the data area. mkfs.jffs2's default behavior writes an
+# inline CLEANMARKER node to every eraseblock, which the NAND-aware scan
+# correctly flags as wrong-format noise on every single eraseblock at
+# boot ("CLEANMARKER node found ... has totlen 0xc != normal 0x10") --
+# harmless (jffs2 falls back to treating the block as normal data and
+# still mounts), but very noisy, and not what should be shipped. -n
+# suppresses the inline markers entirely; the kernel manages OOB-based
+# clean marking itself as it erases/reuses blocks at runtime.
 mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
-    -e "$ERASEBLOCK" -l -U -q -v 2>&1 | tail -20
+    -e "$ERASEBLOCK" -l -U -n -q -v 2>&1 | tail -20
 mv "$OUT.partial" "$OUT"
 
 md5sum "$BASE_JFFS2" "$OUT"

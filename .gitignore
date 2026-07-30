@@ -113,6 +113,7 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/wifiup
 !rootfs/usr/sbin/netinfo
 !rootfs/usr/sbin/ver
+!rootfs/usr/sbin/cardinfo
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
