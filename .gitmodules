@@ -58,3 +58,12 @@
 [submodule "libXft"]
 	path = userspace/src/libXft
 	url = https://gitlab.freedesktop.org/xorg/lib/libxft.git
+[submodule "matchbox-desktop-classic"]
+	path = userspace/src/matchbox-desktop-classic
+	url = https://git.yoctoproject.org/matchbox-desktop
+[submodule "matchbox-panel"]
+	path = userspace/src/matchbox-panel
+	url = https://git.yoctoproject.org/matchbox-panel
+[submodule "matchbox-common"]
+	path = userspace/src/matchbox-common
+	url = https://git.yoctoproject.org/matchbox-common

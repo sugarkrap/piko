@@ -43,7 +43,7 @@ for arg in "$@"; do
         *) PKGS="$PKGS $arg" ;;
     esac
 done
-[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig"
+[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig dejavu"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -100,6 +100,18 @@ usr/lib/pkgconfig/freetype2.pc"
 3ba2dd92158718acec5caaf1a716043b5aa055c27b081d914af3ccb40dce8a55 \
 usr/lib/pkgconfig/fontconfig.pc"
         ;;
+    dejavu)
+        # Not a build -- font data. The device ships with NO fonts at all
+        # and no /etc/fonts, so libXft/fontconfig resolve nothing and every
+        # themed widget renders blank. Matchbox themes ask for
+        # "Sans bold 16px", a generic fontconfig family, so something has
+        # to provide Sans. Only the Sans regular + bold faces are
+        # installed (~1.4MB); the full family is ~10MB and the rest is
+        # never referenced.
+        echo "2.37 https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2 \
+fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7 \
+usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        ;;
     *)
         echo "FAILED: unknown package: $1" >&2
         exit 1
@@ -121,7 +133,13 @@ configure_args() {
     fontconfig)
         # Docs need docbook; the cache tools are target binaries so they
         # can't be run here.
-        echo "--disable-static --disable-docs --with-arch=arm"
+        #
+        # --sysconfdir/--localstatedir are explicit because with a bare
+        # --prefix=/usr autoconf derives them as /usr/etc and /usr/var, so
+        # fontconfig would bake in /usr/etc/fonts as the config location
+        # and put its cache under /usr/var. Everything else on the device
+        # expects /etc/fonts and /var/cache/fontconfig.
+        echo "--disable-static --disable-docs --with-arch=arm --sysconfdir=/etc --localstatedir=/var"
         ;;
     expat)      echo "--disable-static --without-docbook --without-examples --without-tests" ;;
     *)          echo "--disable-static" ;;
@@ -165,6 +183,23 @@ build_one() {
     mkdir -p "$BUILD"
     tar xf "$tarball" -C "$BUILD"
     [ -d "$srcdir" ] || srcdir="$(find "$BUILD" -maxdepth 1 -type d -name "$name-*" | head -1)"
+
+    # Font data: nothing to configure or compile, just place the faces
+    # where fonts.conf already looks (<dir>/usr/share/fonts</dir>).
+    if [ "$name" = dejavu ]; then
+        fontdir="$STAGE/usr/share/fonts/truetype/dejavu"
+        mkdir -p "$fontdir"
+        for face in DejaVuSans.ttf DejaVuSans-Bold.ttf; do
+            src="$(find "$BUILD" -name "$face" -path "*/ttf/*" | head -1)"
+            if [ -z "$src" ]; then
+                echo "FAILED: $face not found in the dejavu tarball" >&2
+                exit 1
+            fi
+            cp "$src" "$fontdir/$face"
+            echo "    installed: usr/share/fonts/truetype/dejavu/$face"
+        done
+        return 0
+    fi
 
     ( cd "$srcdir"
       if [ "$name" = zlib ]; then
