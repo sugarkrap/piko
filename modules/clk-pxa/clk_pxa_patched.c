@@ -106,51 +106,54 @@ int __init clk_pxa_cken_init(const struct desc_clk_cken *clks,
 
 	for (i = 0; i < nb_clks; i++) {
 		/*
-		 * WORKAROUND (2026-07-29, piko project): skip the static
-		 * memory-controller clock.
+		 * WORKAROUND (2026-07-29, narrowed 2026-07-30): skip the LCD
+		 * and static-memory-controller clocks -- but only where
+		 * nothing can consume them.
 		 *
-		 * Registering it hangs this board solid -- confirmed on real
-		 * hardware: the loop blinks index 16 (MEMC, looked up as
-		 * "pxa2xx-pcmcia") and never reaches the post-loop marker,
-		 * while index 15 (LCD), which uses the SAME macro and the same
-		 * parents and differs only by CLK_IGNORE_UNUSED, registers
-		 * fine.
+		 * Registering one of these two hangs this board solid inside
+		 * this loop. Which of the two is at fault was never actually
+		 * pinned down: they are the last two entries, share a macro
+		 * and parent list, and the only thing distinguishing them at
+		 * the time was an LED-blinked loop index (15 vs 16) that was
+		 * read inconsistently across attempts. Skipping BOTH is what
+		 * originally got this board booting at all.
 		 *
-		 * Skipping is safe: NOT registering a clock does not disable
-		 * it. The CKEN bit keeps whatever value the bootloader left,
-		 * so external memory timing is untouched -- we simply never
-		 * hand this clock to the common clock framework. The bootstrap
-		 * kernel only has to mount JFFS2 and kexec stage 2, and needs
-		 * no runtime control over the memory controller clock.
+		 * That over-broad skip then silently cost WiFi (found
+		 * 2026-07-30). The MEMC clock's dev_id is literally
+		 * "pxa2xx-pcmcia", and pxa2xx_drv_pcmcia_probe() does a
+		 * devm_clk_get() and converts ANY failure into -ENODEV --
+		 * which really_probe() logs at pr_debug level only. So the
+		 * PCMCIA socket driver silently never bound, no socket ever
+		 * appeared, hostap_cs was never auto-loaded, there was no
+		 * wlan0, and dmesg said nothing at all about why.
 		 *
-		 * This is a targeted unblock, NOT a fix -- the underlying
-		 * reason registration hangs is still unknown and wants a
-		 * proper root-cause once the boot path is otherwise healthy.
+		 * So keep skipping MEMC only in kernels built WITHOUT PCMCIA
+		 * support -- i.e. the bootstrap, which only mounts JFFS2 and
+		 * kexecs stage 2, has no possible consumer for this clock, is
+		 * the configuration the hang was actually observed in, and is
+		 * where a hang costs the most (a dead device needing an mtd1
+		 * reflash). Register it wherever PCMCIA does exist (stage 2),
+		 * which genuinely needs it: pxa2xx_configure_sockets() derives
+		 * real memory-controller timings from clk_get_rate() on this
+		 * clock, so substituting a dummy fixed-rate clock would
+		 * mis-time card accesses rather than fix anything.
+		 *
+		 * LCD ("pxa2xx-fb") stays skipped in both: this board's display
+		 * is the external W100 on nCS_2 driven by w100fb, the PXA LCD
+		 * controller is unused, and no pxa2xx-fb device is ever
+		 * registered -- so that clock has no consumer either way.
+		 *
+		 * Skipping is still safe in itself: NOT registering a clock
+		 * does not disable it; each CKEN bit keeps whatever value the
+		 * bootloader left. This remains a containment measure, NOT a
+		 * root-cause fix -- why registration hangs is still open, and
+		 * is now finally testable with a real framebuffer console on
+		 * both kernels instead of counted LED blinks.
 		 */
-		/*
-		 * WORKAROUND (2026-07-29, piko project): skip the LCD and
-		 * static memory-controller clocks.
-		 *
-		 * Registering one of these hangs this board solid -- the loop
-		 * never returns. Which of the two is at fault is not pinned
-		 * down: they are the last two entries, use the same macro and
-		 * the same parents, and telling their LED index apart (15 vs
-		 * 16) proved unreliable by eye.
-		 *
-		 * Skipping is safe: NOT registering a clock does not disable
-		 * it -- each CKEN bit keeps whatever the bootloader left, so
-		 * LCD and external-memory timing are untouched. We simply
-		 * never hand these two to the common clock framework. This
-		 * bootstrap kernel only has to mount JFFS2 and kexec stage 2;
-		 * it drives no display and needs no runtime control of the
-		 * memory controller.
-		 *
-		 * Deliberately silent -- printk here runs before timers are
-		 * live. A targeted unblock, NOT a root-cause fix.
-		 */
-		if (clks[i].dev_id &&
-		    (!strcmp(clks[i].dev_id, "pxa2xx-pcmcia") ||
-		     !strcmp(clks[i].dev_id, "pxa2xx-fb")))
+		if (clks[i].dev_id && !strcmp(clks[i].dev_id, "pxa2xx-fb"))
+			continue;
+		if (!IS_ENABLED(CONFIG_PCMCIA_PXA2XX) && clks[i].dev_id &&
+		    !strcmp(clks[i].dev_id, "pxa2xx-pcmcia"))
 			continue;
 
 		pxa_clk = kzalloc_obj(*pxa_clk);
