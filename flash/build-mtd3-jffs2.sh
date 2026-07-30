@@ -23,23 +23,21 @@ set -eu
 # over the image's life) made it run 30+ minutes without finishing, while
 # `jffs2dump` reads the exact same file end-to-end in under 30 seconds.
 # Unpacking + a single fresh non-incremental build sidesteps that
-# bookkeeping entirely and is dramatically faster. tools/jffs2-unpack.py
-# does the unpacking (jffs2reader only supports single-directory listing
-# and single-file dump, no bulk/recursive extraction, so this walks the
-# tree by hand); it skips any file jffs2reader's small internal buffer
-# can't hold (e.g. old kernel images) or a compression method it doesn't
-# support -- both classes of skip are fine here since anything genuinely
-# needed is provided by the overlay anyway, and the script reports skips
-# so a real gap wouldn't go unnoticed.
+# bookkeeping entirely and is dramatically faster.
 #
-# GOTCHA when spot-checking the OUTPUT image by hand: `jffs2reader -d`
-# chokes internally on a big file's data nodes (the same buffer limit as
-# above) and silently drops its own tracking of that file's PARENT
-# directory too -- e.g. `jffs2reader out.jffs2 -d /` will not list `boot`
-# at all once `/boot/zImage-full` is  ~6MB, even though the image is
-# genuinely fine. Confirmed 2026-07-30: `jffs2dump -c out.jffs2 | grep
-# name` still shows the real dirent/inode nodes correctly in this same
-# case. Trust jffs2dump over jffs2reader for verifying a built image.
+# NOT using jffs2reader for the unpack either (2026-07-30, found the hard
+# way -- a full combined mtd1+mtd3 flash + a real kexec segfault on
+# hardware): jffs2reader SILENTLY corrupts substantial files (every ELF
+# binary/kernel module tested over ~50KB) while still exiting 0 and
+# producing the RIGHT byte count -- only the content is garbage (every
+# ELF section header entry zeroed). `jffs2dump`-based verification of the
+# built image still looked fine, because jffs2dump only reads node
+# metadata, never decompresses content -- it can't catch this class of
+# corruption at all. tools/jffs2-mount-extract.sh replaces the unpack
+# step: it loads a real mtdram device, writes the base image into it, and
+# mounts it with the actual kernel jffs2 driver (the same code that runs
+# on real hardware) -- proven byte-correct where jffs2reader was not.
+# This needs root (modprobe + mount), which the two prior tools didn't.
 #
 # Usage:
 #   flash/build-mtd3-jffs2.sh <base-mtd3.jffs2> [output.jffs2]
@@ -49,6 +47,10 @@ set -eu
 #   ERASEBLOCK   NAND eraseblock size (default 0x4000 = 16KiB, matches this
 #                device's Samsung 128MiB part -- see docs/DEADLETTER-NAND-RECOVERY.md
 #                and piko-install.c's ERASE_SIZE)
+#
+# Needs root for the unpack step (tools/jffs2-mount-extract.sh) -- either
+# run this whole script with sudo, or ensure passwordless sudo is set up
+# for that one script; it shells out via `sudo` internally either way.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_JFFS2="${1:?usage: flash/build-mtd3-jffs2.sh <base-mtd3.jffs2> [output.jffs2]}"
@@ -68,10 +70,6 @@ esac
 
 if ! command -v mkfs.jffs2 >/dev/null 2>&1; then
     echo "build-mtd3-jffs2: mkfs.jffs2 not found (apt install mtd-utils)" >&2
-    exit 1
-fi
-if ! command -v jffs2reader >/dev/null 2>&1; then
-    echo "build-mtd3-jffs2: jffs2reader not found (apt install mtd-utils)" >&2
     exit 1
 fi
 
@@ -123,9 +121,9 @@ done
     chmod "$mode" "$dst"
 done
 
-echo "==> unpacking base image $BASE_JFFS2 (this walks the tree via jffs2reader, no bulk-extract exists)"
+echo "==> unpacking base image $BASE_JFFS2 (via the real kernel jffs2 driver -- needs sudo)"
 MERGED="$STAGE/merged"
-python3 "$REPO/tools/jffs2-unpack.py" "$BASE_JFFS2" "$MERGED"
+sudo "$REPO/tools/jffs2-mount-extract.sh" "$BASE_JFFS2" "$MERGED"
 
 echo "==> overlaying kernel + modules + rootfs/ on top of the unpacked base"
 cp -a "$OVERLAY/." "$MERGED/"
