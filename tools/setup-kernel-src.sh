@@ -128,6 +128,16 @@ copy_in "$REPO/modules/clk-pxa/clk_pxa_patched.c"     drivers/clk/pxa/clk-pxa.c
 # PATCHED comment in the file itself.
 copy_in "$REPO/modules/mach-pxa/pxa25x_patched.c"     arch/arm/mach-pxa/pxa25x.c
 
+# spi-pxa2xx-platform.c requested the SSP port twice (once in
+# pxa2xx_spi_init_pdata(), again in probe()); pxa_ssp_request() only
+# matches a port with use_count == 0, so the second one always failed and
+# probe fell back to a zeroed ssp_device with irq == 0 ("cannot get IRQ 0",
+# probe fails -EINVAL). That took down the whole Corgi SPI bus, and with it
+# ads7846 (touchscreen), corgi-lcd (backlight) and max1111 (battery ADC).
+# See the PATCHED comments in the file itself.
+echo "==> applying the pxa2xx-spi double-SSP-request fix"
+copy_in "$REPO/modules/spi/spi_pxa2xx_platform_patched.c" drivers/spi/spi-pxa2xx-platform.c
+
 echo "==> applying reference current-driver snapshots"
 copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
 copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c

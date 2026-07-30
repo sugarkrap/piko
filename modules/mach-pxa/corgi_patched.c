@@ -633,11 +633,19 @@ static struct gpiod_lookup_table corgi_udc_gpio_table = {
 #if IS_ENABLED(CONFIG_SPI_PXA2XX)
 /*
  * pxa2xx-spi shares the SSP port that the pxa25x-ssp core driver already
- * enumerated (matched via pxa_ssp_request() on port id = pdev->id + 1).
- * corgi_spi_device_info.id=1 -> port_id=1 -> pxa25x_device_ssp (SSP1).
+ * enumerated (matched via pxa_ssp_request() on port id = pdev->id + 1 --
+ * drivers/soc/pxa/ssp.c does that +1 translation itself, with the comment
+ * "PXA2xx/3xx SSP ports starts from 1 and the internal pdev->id starts
+ * from 0"). pxa25x_device_ssp (arch/arm/mach-pxa/devices.c) is .id = 0,
+ * so it lands on port_id 1 -- hence .id = 1 here.
  * We must still tell the driver which SSP variant it is and how many chip
  * selects exist, or pxa2xx_spi_init_pdata() bails with "missing platform
  * data" / creates only one chip select.
+ *
+ * NB: getting this right is necessary but NOT sufficient -- stock
+ * spi-pxa2xx-platform.c requests the SSP twice and the second request
+ * always fails, which is what actually kept this bus down. See
+ * modules/spi/spi_pxa2xx_platform_patched.c.
  */
 static const struct property_entry corgi_spi_properties[] = {
 	PROPERTY_ENTRY_U32("intel,spi-pxa2xx-type", PXA25x_SSP),

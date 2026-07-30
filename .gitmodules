@@ -40,3 +40,9 @@
 [submodule "libXext"]
 	path = userspace/src/libXext
 	url = https://gitlab.freedesktop.org/xorg/lib/libxext.git
+[submodule "xkbcomp"]
+	path = userspace/src/xkbcomp
+	url = https://gitlab.freedesktop.org/xorg/app/xkbcomp.git
+[submodule "xev"]
+	path = userspace/src/xev
+	url = https://gitlab.freedesktop.org/xorg/app/xev.git
