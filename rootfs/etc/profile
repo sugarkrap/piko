@@ -2,6 +2,12 @@
 # /bin/login, zsh reads it too when invoked as a login shell before ~/.zprofile).
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export TERM=linux
+
+# Software living on the SD card (/mnt/card/.zaurus). Sourced rather than
+# inlined so /etc/zshrc gets exactly the same behaviour from one file.
+# Harmless with no card inserted -- see the file for why the PATH entry is
+# added unconditionally.
+[ -r /etc/zaurus-card.sh ] && . /etc/zaurus-card.sh
 export TERMINFO=/usr/share/terminfo
 export PAGER=less
 export EDITOR=vi

@@ -1,0 +1,77 @@
+#!/bin/sh
+# sdapps: show what software the inserted SD card provides, and make it
+# usable in the CURRENT shell.
+#
+# Single word, no punctuation, per AGENTS.md -- this gets typed on the
+# device's own keyboard, which makes / : [ ] | painful.
+#
+# Two jobs:
+#   1. Report whether a card is mounted and what is in /mnt/card/.zaurus.
+#   2. Explain how to refresh a shell that was started before the card went
+#      in. /etc/zaurus-card.sh already puts the card's bin directory on PATH
+#      unconditionally, so nothing needs adding -- but both ash and zsh cache
+#      "command not found" lookups, so a shell that already tried to run
+#      mplayer before the card was in keeps failing until its hash is
+#      cleared.
+#
+# Deliberately does NOT execute anything from the card. Auto-running code
+# off removable media as root is how you turn "someone lent me a card" into
+# a root compromise.
+set -eu
+
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_BIN="$CARD_ROOT/usr/bin"
+
+if ! grep -q ' /mnt/card ' /proc/mounts 2>/dev/null; then
+    echo "No SD card mounted at /mnt/card."
+    echo
+    echo "If a card IS inserted, mount it with:  mount /mnt/card"
+    echo "(Corgi's card-detect does not reliably signal insertion, so the"
+    echo " automatic mdev hook sometimes misses it -- see /usr/sbin/sdcard.)"
+    exit 0
+fi
+
+echo "SD card mounted at /mnt/card."
+
+if [ ! -d "$CARD_BIN" ]; then
+    echo "No software directory on this card ($CARD_BIN not present)."
+    echo
+    echo "To make a card carry software, create:"
+    echo "    /mnt/card/.zaurus/usr/bin"
+    echo "and put binaries there. It is already on PATH."
+    exit 0
+fi
+
+echo "Software directory: $CARD_BIN"
+echo
+
+found=0
+for f in "$CARD_BIN"/*; do
+    [ -f "$f" ] || continue
+    if [ -x "$f" ]; then
+        echo "  $(basename "$f")"
+        found=$((found + 1))
+    else
+        echo "  $(basename "$f")   (NOT executable -- chmod +x it)"
+    fi
+done
+
+if [ "$found" -eq 0 ]; then
+    echo "  (nothing executable found)"
+fi
+
+echo
+case ":$PATH:" in
+    *":$CARD_BIN:"*)
+        echo "PATH already includes it."
+        ;;
+    *)
+        echo "WARNING: $CARD_BIN is NOT on PATH."
+        echo "Expected /etc/zaurus-card.sh to add it -- check it is present"
+        echo "and sourced from /etc/profile and /etc/zshrc."
+        ;;
+esac
+
+# Clear the shell's command hash. This script runs in its own process, so it
+# cannot do that for the parent -- tell the user the one word to type.
+echo "If a command here still reports 'not found', type:  hash -r"

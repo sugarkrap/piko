@@ -114,6 +114,7 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/netinfo
 !rootfs/usr/sbin/ver
 !rootfs/usr/sbin/cardinfo
+!rootfs/usr/sbin/sdapps
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
@@ -138,6 +139,18 @@ userspace/src/microwindows/
 userspace/src/wireless_tools.29/
 userspace/src/wpa_supplicant-2.10/
 userspace/src/statusbar/
+userspace/src/alsa-lib-*/
+userspace/src/alsa-utils-*/
+# tools/build-alsa.sh output: full dev install (headers/.la/.pc) and the
+# pruned runtime-only payload meant to be copied to the device -- both
+# regenerated from tools/build-alsa.sh, not source.
+userspace/stage-alsa/
+userspace/stage-alsa-runtime/
+# tools/build-mplayer.sh: vendored MPlayer-1.5 release tarball + source tree
+# (bundles its own ffmpeg/ snapshot -- ~130MB extracted), and its staged
+# device payload (a single statically-linked mplayer binary).
+userspace/src/MPlayer-*/
+userspace/stage-mplayer/
 # compiled host tools (built from the tracked .c next to them)
 userspace/src/md5sum
 # xsha1-compat: sha1.c/sha1.h are tracked source, libmd.* + sha1.o are

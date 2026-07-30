@@ -1,6 +1,9 @@
 export TERM=linux
 export HOME=/root
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+# Software living on the SD card (/mnt/card/.zaurus). Same file /etc/profile
+# sources, so ash and zsh behave identically. Harmless with no card in.
+[ -r /etc/zaurus-card.sh ] && . /etc/zaurus-card.sh
 FPATH=/usr/share/zsh/5.9/functions:$FPATH
 autoload -Uz compinit && compinit -u
 autoload -Uz promptinit && promptinit

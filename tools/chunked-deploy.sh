@@ -103,12 +103,17 @@ REPO="${REPO:-$DEFAULT_REPO}"
 # a clean checkout that has not built them yet -- section 8 skips silently).
 MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
 ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
-# Where MPlayer lands. It is ~16 MiB against a ~68 MiB root jffs2, which is
-# a big chunk of a filesystem that also needs room to garbage-collect, so
-# this is overridable -- set MPLAYER_DEST=/mnt/card/mplayer to keep it off
-# flash entirely (the card is mounted automatically when the destination is
-# under /mnt/card).
-MPLAYER_DEST="${MPLAYER_DEST:-/usr/bin/mplayer}"
+# Heavy software lives on the SD card, not on the ~68 MiB root jffs2.
+# /mnt/card/.zaurus is the hidden overlay described in
+# rootfs/etc/zaurus-card.sh; its usr/bin is already on PATH (unconditionally,
+# so it costs nothing when no card is inserted). MPlayer alone is ~16 MiB,
+# which is a quarter of the root filesystem.
+#
+# Override MPLAYER_DEST to put it somewhere else (e.g. /usr/bin/mplayer to
+# force it onto flash anyway). A destination under /mnt/ is not charged
+# against the root filesystem budget.
+CARD_ROOT="${CARD_ROOT:-/mnt/card/.zaurus}"
+MPLAYER_DEST="${MPLAYER_DEST:-$CARD_ROOT/usr/bin/mplayer}"
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
 
 if [ ! -d "$REPO" ]; then
@@ -416,6 +421,19 @@ send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
 
+# 7b. SD-card software overlay. /etc/zaurus-card.sh puts
+# /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
+# does not exist is simply skipped, so this costs nothing with no card in,
+# and a shell started before insertion still finds card software after).
+# profile/zshrc source it so ash and zsh behave identically; sdapps
+# reports what a card provides.
+send_file "$REPO/rootfs/etc/zaurus-card.sh" "/etc/zaurus-card.sh"
+send_file "$REPO/rootfs/etc/profile"        "/etc/profile"
+send_file "$REPO/rootfs/etc/zshrc"          "/etc/zshrc"
+send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
+ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
+ssh_do "chmod 0755 /usr/sbin/sdapps"
+
 # 8. Userspace media payload: MPlayer + the ALSA runtime config tree.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
@@ -488,16 +506,34 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
                 ssh_do "chmod 0755 /usr/$b"
             done
         fi
+        # Heavy apps: card-only. If there is no card, skip them rather than
+        # falling back to flash -- that is the whole point of the split.
         if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
-            # Corgi's pxamci card-detect does not reliably signal insertion,
-            # so /mnt/card is often not mounted even with a card present --
-            # writing there unmounted would silently land on the root jffs2
-            # instead, which is exactly what we are trying to avoid.
             case "$MPLAYER_DEST" in
-                /mnt/card/*) ssh_do "mount /mnt/card 2>/dev/null || true" ;;
+            /mnt/card/*)
+                # Corgi's pxamci card-detect does not reliably signal
+                # insertion, so /mnt/card is frequently NOT mounted even
+                # with a card physically present. Writing to an unmounted
+                # /mnt/card silently lands on the root jffs2 -- a 16 MiB
+                # file in exactly the place we are trying to protect -- so
+                # mount first and then VERIFY, rather than trusting it.
+                ssh_do "mount /mnt/card 2>/dev/null || true"
+                if ssh_do "grep -q ' /mnt/card ' /proc/mounts && echo yes || echo no" | grep -q yes; then
+                    ssh_do "mkdir -p '$(dirname "$MPLAYER_DEST")'"
+                    send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
+                    ssh_do "chmod 0755 '$MPLAYER_DEST'"
+                else
+                    echo "==> no SD card mounted -- SKIPPING heavy apps (MPlayer)."
+                    echo "    Heavy software is card-only by design; the root jffs2"
+                    echo "    has no room for it. Insert a card and re-run, or set"
+                    echo "    MPLAYER_DEST=/usr/bin/mplayer to force it onto flash."
+                fi
+                ;;
+            *)
+                send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
+                ssh_do "chmod 0755 '$MPLAYER_DEST'"
+                ;;
             esac
-            send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
-            ssh_do "chmod 0755 '$MPLAYER_DEST'"
         fi
     fi
 fi
