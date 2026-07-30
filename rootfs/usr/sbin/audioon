@@ -57,3 +57,11 @@ load_ko snd-pcm-oss.ko
 # silence it was written to fix was two kernel bugs, since fixed: the
 # missing pxa2xx-i2s DMA slave map and the never-set SACR0_BCKD.
 # See docs/DEADLETTER-AUDIO-I2S-SILENT.md.
+
+# OSS compatibility nodes (snd-mixer-oss/snd-pcm-oss above provide them, but
+# mdev does not always create them).
+[ -e /dev/mixer ] || mknod /dev/mixer c 14 0
+[ -e /dev/dsp ] || mknod /dev/dsp c 14 3
+
+echo "audio stack loaded"
+ls -l /dev/dsp /dev/mixer

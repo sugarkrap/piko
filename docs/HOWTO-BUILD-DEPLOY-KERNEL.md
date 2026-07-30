@@ -60,6 +60,14 @@ This does four things, in order, and stops immediately if any step fails:
    it re-applied.
 3. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
    logging full (untruncated) output to `/tmp/kbuild-<timestamp>.log`.
+3b. **Builds the cross-compiled userspace** via `tools/build-userspace.sh`
+   — `userspace/src/md5sum`, then ALSA (`tools/build-alsa.sh`), then
+   MPlayer (`tools/build-mplayer.sh`). That order is a hard dependency:
+   MPlayer links `libasound.a` out of `userspace/stage-alsa`. Every step is
+   idempotent, so this is cheap once built. Skip it with
+   `--skip-userspace` (which also forwards `--no-userspace` to
+   `chunked-deploy.sh`, so a stale staged payload isn't shipped either).
+   The X11/matchbox stack is **not** built here — see that script's header.
 4. **Deploys** by calling `tools/chunked-deploy.sh`, which pushes (over a
    known-flaky WiFi link, chunked + retried + size-verified):
    - the new `zImage` → `/boot/zImage-full` (auto-backs up the old one to
@@ -70,7 +78,28 @@ This does four things, in order, and stops immediately if any step fails:
      `soc_common`, `pxa2xx_base`, `pxa2xx_sharpsl`, `hostap`, `hostap_cs`,
      `lib80211` + its WEP/CCMP/TKIP crypto modules, `libarc4`)
    - the `audioon`/`audinfo` helper scripts (single-word names, per
-     `AGENTS.md`'s device-keyboard typing constraint)
+     `AGENTS.md`'s device-keyboard typing constraint), sent verbatim from
+     `rootfs/usr/sbin/` — they used to be inline heredocs in
+     `chunked-deploy.sh`, which created a second source of truth that
+     silently overwrote committed edits to the tracked files
+   - the media payload: MPlayer plus the `/usr/share/alsa` config tree and
+     `aplay`/`amixer`/`alsactl`. Everything is statically linked, so the
+     only "shared" dependency is that config tree — `libasound` opens
+     `alsa.conf` by absolute path at runtime even when linked statically,
+     and without it every PCM open fails with
+     `Unknown PCM cards.pcm.default`.
+
+     MPlayer is ~16 MiB against a ~68 MiB root jffs2. A preflight refuses
+     the payload rather than half-deploying if it would leave under 4 MiB
+     free (jffs2 needs room to garbage-collect, and a full root is not
+     recoverable over SSH on this board). To keep it off flash entirely:
+
+     ```sh
+     MPLAYER_DEST=/mnt/card/mplayer tools/build-and-deploy.sh root@<ip>
+     ```
+
+     An `/mnt/card` destination is mounted automatically first and is not
+     charged against the root filesystem budget.
 
 It does **not** reboot the device automatically — you do that manually
 once you're ready:

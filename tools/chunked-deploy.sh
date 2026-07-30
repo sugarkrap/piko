@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -21,10 +21,13 @@ set -eu
 # adapters and the Zaurus is only reachable via one of them.
 # --target user@host sets the SSH destination explicitly. A positional
 # user@host is also accepted for backwards compatibility.
+# --no-userspace skips the MPlayer + ALSA-runtime payload (section 8). That
+# payload is also skipped automatically when the staged trees do not exist
+# or when the device lacks free space -- see section 8 for why the space
+# check refuses rather than half-deploying.
 # --kernel-only skips every module/script/helper deployment step below and
-# only ships /boot/zImage-full (still preceded by the md5sum bootstrap and
-# the compr=zlib remount preflight). Useful when iterating on a kernel-only
-# change (e.g. the JFFS2 compressor fix itself) where redeploying modules
+# only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
+# Useful when iterating on a kernel-only change where redeploying modules
 # that haven't changed just adds time and extra risk on the flaky link.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
@@ -42,6 +45,7 @@ set -eu
 ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
+NO_USERSPACE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -62,6 +66,10 @@ while [ $# -gt 0 ]; do
             ;;
         --kernel-only)
             KERNEL_ONLY=1
+            shift
+            ;;
+        --no-userspace)
+            NO_USERSPACE=1
             shift
             ;;
         --help|-h)
@@ -91,6 +99,16 @@ fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DEFAULT_REPO="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO="${REPO:-$DEFAULT_REPO}"
+# Staged userspace payloads produced by tools/build-userspace.sh (absent on
+# a clean checkout that has not built them yet -- section 8 skips silently).
+MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
+ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
+# Where MPlayer lands. It is ~16 MiB against a ~68 MiB root jffs2, which is
+# a big chunk of a filesystem that also needs room to garbage-collect, so
+# this is overridable -- set MPLAYER_DEST=/mnt/card/mplayer to keep it off
+# flash entirely (the card is mounted automatically when the destination is
+# under /mnt/card).
+MPLAYER_DEST="${MPLAYER_DEST:-/usr/bin/mplayer}"
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
 
 if [ ! -d "$REPO" ]; then
@@ -289,28 +307,6 @@ else
     echo "==> remote md5sum NOT available -- falling back to size-only verification"
 fi
 
-# 0b. Force zlib compression for this deploy's writes, regardless of
-# whatever JFFS2 compressor mode the CURRENTLY-RUNNING kernel defaults to.
-# A `rootflags=compr=zlib` baked into the kernel we're about to *ship* only
-# takes effect once that kernel is the one running -- it does nothing for
-# the write we are about to perform right now, which happens under
-# whichever kernel is already live. Left alone, a live kernel using the
-# default CMODE_PRIORITY compressor selection can pick LZO for
-# /boot/zImage-full, and the bootstrap kernel (CONFIG_JFFS2_LZO not set,
-# see kernel.config-corgi-7.1.4-minimal) can't decompress it --
-# "jffs2: compression type 0x07 not available", unbootable until the .bak
-# is restored (see docs/DEADLETTER-* for the history of this failure).
-if remount_out="$(ssh_do "mount -o remount,compr=zlib / 2>&1")"; then
-    echo "==> remounted / with compr=zlib (forces zlib for this deploy's writes)"
-    [ -n "$remount_out" ] && echo "    $remount_out"
-else
-    echo "WARNING: remount compr=zlib on / failed -- the currently-running" >&2
-    echo "         kernel may not support the compr= mount option. Writes" >&2
-    echo "         below may still pick LZO under CMODE_PRIORITY, which the" >&2
-    echo "         bootstrap kernel cannot decompress. Proceeding anyway." >&2
-    echo "         remote error: $remount_out" >&2
-fi
-
 # 1. Stage-2 kernel (kernel-panic fix)
 send_file "$KERNEL_DIR/arch/arm/boot/zImage" "/boot/zImage-full"
 
@@ -407,74 +403,104 @@ send_file "$REPO/rootfs/etc/wifi-up.sh" "/etc/wifi-up.sh"
 ssh_do "chmod 0755 /etc/wifi-up.sh"
 
 # 7. audioon / audinfo helper scripts (single-word, per AGENTS.md typing
-# constraint -- generated inline here as self-contained heredocs; the
-# deploy-audio-stack.sh script that originally staged them is gone, so
-# this is now the only place they're produced).
-cat > "$STAGE/audioon" << 'EOF_AUDIOON'
-#!/bin/sh
-set -eu
-KVER="$(uname -r)"
-MD="/lib/modules/${KVER}/zaurus-audio"
-
-load_ko() {
-    ko="$1"
-    # module names in lsmod always use underscores even when the .ko file
-    # on disk uses dashes (e.g. snd-timer.ko -> "snd_timer" in lsmod) --
-    # comparing against the raw dashed name here always failed to match,
-    # so an already-loaded module would get re-inserted and insmod would
-    # fail with "File exists" (found 2026-07-26 while bringing up audio).
-    name="$(echo "${ko%.ko}" | tr '-' '_')"
-    if lsmod 2>/dev/null | grep -q "^${name} "; then
-        return 0
-    fi
-    insmod "$MD/$ko"
-}
-
-load_ko soundcore.ko
-load_ko snd.ko
-load_ko snd-timer.ko
-load_ko snd-pcm.ko
-load_ko snd-pcm-dmaengine.ko
-load_ko snd-pxa2xx-lib.ko
-# snd-soc-core is built with CONFIG_SND_SOC_AC97_BUS=y, so it references
-# ac97_bus_type/snd_ac97_reset unconditionally even though this device's
-# codec (WM8731) is I2S, not AC97 -- those symbols live in ac97_bus.ko and
-# snd-ac97-codec.ko, which must be loaded first or snd-soc-core.ko fails
-# with "unknown symbol in module" (found 2026-07-26).
-load_ko ac97_bus.ko
-load_ko snd-ac97-codec.ko
-load_ko snd-soc-core.ko
-load_ko snd-soc-pxa2xx.ko
-load_ko snd-soc-pxa2xx-i2s.ko
-load_ko snd-soc-wm8731.ko
-load_ko snd-soc-wm8731-i2c.ko
-load_ko snd-soc-corgi.ko
-load_ko snd-mixer-oss.ko
-load_ko snd-pcm-oss.ko
-
-[ -e /dev/mixer ] || mknod /dev/mixer c 14 0
-[ -e /dev/dsp ] || mknod /dev/dsp c 14 3
-
-echo "audio stack loaded"
-ls -l /dev/dsp /dev/mixer
-EOF_AUDIOON
-
-cat > "$STAGE/audinfo" << 'EOF_AUDINFO'
-#!/bin/sh
-set -eu
-uname -a
-echo "-- lsmod (audio) --"
-lsmod | grep -E 'snd|wm8731|corgi|regmap|i2c' || true
-echo "-- /proc/asound --"
-ls -la /proc/asound || true
-cat /proc/asound/cards 2>/dev/null || true
-echo "-- device nodes --"
-ls -l /dev/dsp /dev/mixer 2>/dev/null || true
-EOF_AUDINFO
-
-send_file "$STAGE/audioon" "/usr/sbin/audioon"
-send_file "$STAGE/audinfo" "/usr/sbin/audinfo"
+# constraint). These are TRACKED FILES under rootfs/usr/sbin/ -- send them
+# verbatim rather than regenerating them from heredocs here.
+#
+# They used to be inline heredocs in this script, which quietly created a
+# second source of truth: rootfs/usr/sbin/audioon and the heredoc drifted
+# apart (the heredoc grew the /dev/dsp + /dev/mixer mknod lines, the tracked
+# file grew mixer documentation), and an edit committed to the tracked file
+# was silently overwritten on the next full deploy by the stale heredoc.
+# Found 2026-07-30. Single source of truth now: rootfs/usr/sbin/.
+send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
+send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
+
+# 8. Userspace media payload: MPlayer + the ALSA runtime config tree.
+#
+# Skipped entirely with --no-userspace (or when the staged trees are absent,
+# e.g. a clean checkout that has not run tools/build-userspace.sh yet).
+#
+# What actually has to ship, and why it is so short:
+#   * mplayer          -- fully static (no NEEDED entries at all), so there
+#                         are no libraries to ship alongside it.
+#   * /usr/share/alsa  -- REQUIRED even though libasound is linked
+#                         statically into mplayer/aplay: alsa-lib opens
+#                         alsa.conf at runtime by absolute path. Without it
+#                         every PCM open fails with
+#                         "Unknown PCM cards.pcm.default".
+#   * aplay/amixer/alsactl -- also static; small, and the only way to test
+#                         or adjust the audio path on the device.
+# Only the config files this board can actually use are sent (the upstream
+# tree also carries ~70 cards/*.conf for hardware that does not exist here);
+# each send_file is several SSH round trips over a slow, flaky link.
+if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; then
+    # Preflight: JFFS2 needs free space to garbage-collect. Filling the root
+    # filesystem on this board is not a recoverable mistake over SSH, so
+    # refuse up front instead of half-deploying and wedging it.
+    need=0
+    # Only count MPlayer against the root filesystem if that is where it is
+    # actually going; an SD-card destination costs the root nothing.
+    MPLAYER_ON_ROOT=1
+    case "$MPLAYER_DEST" in /mnt/*) MPLAYER_ON_ROOT=0 ;; esac
+    MPLAYER_SIZED=""
+    [ "$MPLAYER_ON_ROOT" -eq 1 ] && MPLAYER_SIZED="$MPLAYER_STAGE/usr/bin/mplayer"
+    for f in $MPLAYER_SIZED \
+             "$ALSA_STAGE/usr/bin/aplay" "$ALSA_STAGE/usr/bin/amixer" \
+             "$ALSA_STAGE/usr/sbin/alsactl"; do
+        # Explicit if, not `[ -f ] && ...`: under `set -e` a false test at
+        # the end of a loop body makes the loop return non-zero and aborts
+        # the whole deploy.
+        if [ -f "$f" ]; then
+            need=$((need + $(wc -c < "$f")))
+        fi
+    done
+    need_kb=$(((need / 1024) + 512))          # + slack for the config tree
+    avail_kb="$(ssh_do "df /usr | tail -n 1" | awk '{print $4}')"
+    case "$avail_kb" in ''|*[!0-9]*) avail_kb=0 ;; esac
+
+    echo "==> userspace payload: needs ~${need_kb} KiB, device has ${avail_kb} KiB free on /"
+    if [ "$avail_kb" -gt 0 ] && [ "$need_kb" -gt "$((avail_kb - 4096))" ]; then
+        echo "SKIPPING userspace payload: not enough free space." >&2
+        echo "  Leaving at least 4 MiB headroom on the root jffs2 is deliberate --" >&2
+        echo "  it needs room to garbage-collect, and a full root is not something" >&2
+        echo "  you can recover from over SSH on this board." >&2
+        echo "  Free space first, or stage MPlayer on the SD card instead:" >&2
+        echo "    ssh $TARGET 'mount /mnt/card'" >&2
+        echo "    ssh $TARGET 'cat > /mnt/card/mplayer' < $MPLAYER_STAGE/usr/bin/mplayer" >&2
+    else
+        if [ -d "$ALSA_STAGE" ]; then
+            ssh_do "mkdir -p /usr/share/alsa/cards /usr/share/alsa/pcm /usr/share/alsa/ctl /var/lib/alsa"
+            for rel in share/alsa/alsa.conf \
+                       share/alsa/cards/aliases.conf \
+                       share/alsa/ctl/default.conf; do
+                if [ -f "$ALSA_STAGE/usr/$rel" ]; then
+                    send_file "$ALSA_STAGE/usr/$rel" "/usr/$rel"
+                fi
+            done
+            for f in "$ALSA_STAGE"/usr/share/alsa/pcm/*.conf; do
+                [ -f "$f" ] || continue
+                send_file "$f" "/usr/share/alsa/pcm/$(basename "$f")"
+            done
+            for b in bin/aplay bin/amixer sbin/alsactl; do
+                [ -f "$ALSA_STAGE/usr/$b" ] || continue
+                send_file "$ALSA_STAGE/usr/$b" "/usr/$b"
+                ssh_do "chmod 0755 /usr/$b"
+            done
+        fi
+        if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
+            # Corgi's pxamci card-detect does not reliably signal insertion,
+            # so /mnt/card is often not mounted even with a card present --
+            # writing there unmounted would silently land on the root jffs2
+            # instead, which is exactly what we are trying to avoid.
+            case "$MPLAYER_DEST" in
+                /mnt/card/*) ssh_do "mount /mnt/card 2>/dev/null || true" ;;
+            esac
+            send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
+            ssh_do "chmod 0755 '$MPLAYER_DEST'"
+        fi
+    fi
+fi
 
 ssh_do "rm -rf '$REMOTE_STAGE'"
 
@@ -484,5 +510,8 @@ echo "Kernel panic fix + sound modules are staged at:"
 echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
+    echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
+fi
 echo ""
 echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"

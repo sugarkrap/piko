@@ -25,7 +25,7 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [user@host]
 # Example:
 #   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -40,10 +40,17 @@ set -eu
 # /boot/zImage-full and skips every module/script/helper deploy step.
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
+# --skip-userspace skips building the cross-compiled userspace
+# (tools/build-userspace.sh: md5sum + ALSA + MPlayer) and forwards
+# --no-userspace to chunked-deploy.sh so it does not ship a stale staged
+# payload either. The userspace build is idempotent and therefore cheap once
+# built, so this is mainly for when the toolchain or a vendored source tree
+# is in a knowingly broken state and you just need the kernel out.
 
 ADAPTER=""
 FORCE_KERNEL_SRC=0
 KERNEL_ONLY=0
+SKIP_USERSPACE=0
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -57,6 +64,10 @@ while [ $# -gt 0 ]; do
             ;;
         --kernel-only)
             KERNEL_ONLY=1
+            shift
+            ;;
+        --skip-userspace)
+            SKIP_USERSPACE=1
             shift
             ;;
         *)
@@ -139,19 +150,34 @@ if ! (
 fi
 echo "==> build OK"
 
-echo "==> cross-compiling userspace/src/md5sum.c (deployed first, so every"
-echo "    subsequent file transfer can be content-verified, not just size-checked)..."
-GCC="${CROSS_COMPILE}gcc"
-if ! "$GCC" -march=armv5te -O2 -static -Wall -Wextra \
-        -o "$REPO/userspace/src/md5sum" "$REPO/userspace/src/md5sum.c"; then
-    echo "FAILED: could not build userspace/src/md5sum" >&2
-    exit 1
+# Userspace (md5sum + ALSA + MPlayer). Delegated to tools/build-userspace.sh
+# rather than open-coded here -- it is the single entry point for every
+# cross-built userspace component, and each step it runs is idempotent, so
+# this is cheap on every subsequent invocation once things are built.
+#
+# md5sum in particular has to exist before chunked-deploy.sh runs: it is
+# deployed first so every later transfer is content-verified rather than
+# only byte-counted (silent truncation over this WiFi link is a real,
+# repeatedly-observed failure mode, not a hypothetical).
+#
+# Skipped for --kernel-only, which deploys nothing but the zImage anyway.
+if [ "$KERNEL_ONLY" -eq 1 ]; then
+    echo "==> --kernel-only: skipping the userspace build"
+elif [ "$SKIP_USERSPACE" -eq 1 ]; then
+    echo "==> --skip-userspace: not building userspace components"
+else
+    echo "==> building userspace (md5sum + ALSA + MPlayer) via tools/build-userspace.sh..."
+    if ! (
+        export PATH TOOLCHAIN_BIN_DIR CROSS_COMPILE
+        sh "$REPO/tools/build-userspace.sh"
+    ); then
+        echo "FAILED: userspace build did not complete." >&2
+        echo "Re-run tools/build-userspace.sh directly to see the full output," >&2
+        echo "or pass --skip-userspace to deploy the kernel without it." >&2
+        exit 1
+    fi
+    echo "==> userspace build OK"
 fi
-STRIP="${GCC%gcc}strip"
-if command -v "$STRIP" >/dev/null 2>&1; then
-    "$STRIP" "$REPO/userspace/src/md5sum"
-fi
-echo "==> md5sum build OK"
 
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> deploying to $TARGET (zImage only)..."
@@ -164,6 +190,10 @@ if [ -n "$ADAPTER" ]; then
 fi
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     set -- --kernel-only "$@"
+fi
+# Nothing was built, so don't let chunked-deploy ship a stale staged payload.
+if [ "$SKIP_USERSPACE" -eq 1 ]; then
+    set -- --no-userspace "$@"
 fi
 export REPO KERNEL_DIR
 exec "$REPO/tools/chunked-deploy.sh" "$@"
