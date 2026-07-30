@@ -1,0 +1,16 @@
+diff --git a/nls/Makefile.am b/nls/Makefile.am
+index cabaf40e..516d01e1 100644
+--- a/nls/Makefile.am
++++ b/nls/Makefile.am
+@@ -126,7 +126,10 @@ CLEANFILES += $(nobase_x11locale_DATA)
+ 
+ if HAVE_PERL
+ TESTS_ENVIRONMENT = $(PERL)
+-TESTS = $(srcdir)/compose-check.pl
++TESTS = compose-check.pl
++
++compose-check.pl: $(srcdir)/compose-check.pl
++	cp $< $@
+ 
+ COMPOSE_CHARTS = $(locales:%=%/Compose.xml)
+ doc_sources += $(locales:%=Compose/%.xml)
