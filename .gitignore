@@ -171,3 +171,6 @@ modules/nand/hostap-patched/
 # Kernel build output blobs are tracked directly as zImage-* (small enough).
 
 toolchain/
+# tools/build-thirdparty-deps.sh download cache (upstream tarballs,
+# re-fetched and sha256-verified on demand)
+userspace/.thirdparty-cache/

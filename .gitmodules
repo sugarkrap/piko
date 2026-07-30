@@ -46,3 +46,15 @@
 [submodule "xev"]
 	path = userspace/src/xev
 	url = https://gitlab.freedesktop.org/xorg/app/xev.git
+[submodule "matchbox-desktop"]
+	path = userspace/src/matchbox-desktop
+	url = https://git.yoctoproject.org/matchbox-desktop-2
+[submodule "libmatchbox"]
+	path = userspace/src/libmatchbox
+	url = https://git.yoctoproject.org/libmatchbox
+[submodule "libXrender"]
+	path = userspace/src/libXrender
+	url = https://gitlab.freedesktop.org/xorg/lib/libxrender.git
+[submodule "libXft"]
+	path = userspace/src/libXft
+	url = https://gitlab.freedesktop.org/xorg/lib/libxft.git
