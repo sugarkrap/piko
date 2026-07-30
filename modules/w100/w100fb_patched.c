@@ -23,6 +23,10 @@
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/init.h>
+/* ktime_get()/ktime_before() for the vsync wall-clock deadline, and
+ * preemptible() to decide whether that wait may sleep. */
+#include <linux/ktime.h>
+#include <linux/preempt.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/platform_device.h>
@@ -54,10 +58,15 @@ static void calc_hsync(struct w100fb_par *par);
 static void w100_init_graphic_engine(struct w100fb_par *par);
 struct w100_pll_info *w100_get_xtal_table(unsigned int freq);
 
-/* 0: vline IRQ status wait, 1: CRTC frame counter change wait */
+/*
+ * 0: vline IRQ status wait (works -- the only usable mode on Corgi)
+ * 1: CRTC frame counter change wait (mmCRTC_FRAME is stuck at 0 on Corgi,
+ *    so this always times out here; kept for other w100 boards)
+ */
 static int w100_vsync_mode;
 module_param_named(vsync_mode, w100_vsync_mode, int, 0644);
-MODULE_PARM_DESC(vsync_mode, "w100 vsync wait mode (0=irq,1=frame)");
+MODULE_PARM_DESC(vsync_mode,
+	"w100 vsync wait mode (0=vline irq status, default; 1=CRTC frame counter, non-functional on Corgi)");
 
 static bool w100_vsync_debug;
 module_param_named(vsync_debug, w100_vsync_debug, bool, 0644);
@@ -631,26 +640,29 @@ static int w100fb_pan_display(struct fb_var_screeninfo *var,
 		return -EINVAL;
 
 	/*
-	 * FIX (2026-07-30, piko project): do NOT fail the pan on a vsync
-	 * timeout.
-	 *
-	 * w100_vsync() times out on this hardware ("w100fb: vsync wait timed
-	 * out" -- the vline status bit in mmGEN_INT_STATUS never asserts;
-	 * root cause still open, try vsync_mode=1 for the frame-counter
-	 * wait instead). Propagating -ETIMEDOUT made pan_display fail
-	 * outright, which breaks double-buffering / panning for every
-	 * userspace consumer (X11/matchbox, quake-fb) even though the pan
-	 * itself is perfectly capable of proceeding.
+	 * Do NOT fail the pan on a vsync timeout.
 	 *
 	 * A failed vsync wait means only "we could not sync to the retrace",
-	 * i.e. possible tearing -- not "the pan is impossible". Degrade
-	 * gracefully: carry on and program the new scanout offset. The
-	 * timeout is still reported (rate-limited) inside w100_vsync(), so
-	 * this stays visible rather than silently swallowed.
+	 * i.e. possible tearing -- not "the pan is impossible". Propagating
+	 * -ETIMEDOUT made pan_display fail outright, which breaks
+	 * double-buffering / panning for every userspace consumer
+	 * (X11/matchbox, quake-fb) even though the pan itself is perfectly
+	 * capable of proceeding. Degrade gracefully: carry on and program the
+	 * new scanout offset. Any timeout is still reported (rate-limited)
+	 * inside w100_vsync(), so it stays visible rather than swallowed.
 	 *
-	 * The mode-set path (w100fb_activate_var) already ignores this
-	 * return value for the same reason, which is why the framebuffer
-	 * console works despite the timeouts.
+	 * The mode-set path (w100fb_activate_var) ignores the return value
+	 * for the same reason.
+	 *
+	 * CORRECTION (2026-07-30): an earlier version of this comment claimed
+	 * the vline status bit "never asserts" on this hardware and suggested
+	 * vsync_mode=1 as a workaround. Both were wrong, and measuring said
+	 * so: with vsync_mode=0 the wait succeeds consistently (8/8 via
+	 * FBIO_WAITFORVSYNC) at a ~39 ms period, and the only timeout ever
+	 * logged is a single one during the very first mode set at boot,
+	 * before the CRTC is running. vsync_mode=1 is the path that cannot
+	 * work here -- see the note on mmCRTC_FRAME in w100_vsync(). The
+	 * defensive handling below is still correct and is kept.
 	 */
 	w100_vsync();
 
@@ -1766,31 +1778,95 @@ static void w100_suspend(u32 mode)
 	}
 }
 
+/*
+ * Poll interval / budget for the vsync wait.
+ *
+ * MEASURED ON HARDWARE (Corgi, 480x640 mode, 2026-07-30): the vline status
+ * bit re-asserts every ~39 ms (~25.6 Hz), NOT the ~16.8 ms a 60 Hz panel
+ * would give. The old budget was an iteration count -- 30000 x udelay(1) --
+ * commented as "30[ms] > 16.8[ms]". Both halves of that were wrong here:
+ * each iteration also does a readl over the slow external bus, so 30000
+ * iterations actually burned ~61 ms of wall time (measured), and the period
+ * it was being compared against is ~39 ms, not 16.8 ms. The result was a
+ * budget whose real duration depended on bus timing and which sat close
+ * enough to the true period to be luck-of-the-draw under load.
+ *
+ * Use an explicit wall-clock deadline instead, generous enough to cover
+ * ~2.5 frames at the measured rate.
+ */
+#define W100_VSYNC_TIMEOUT_MS	100
+
+/*
+ * Wait for the vline status bit, sleeping rather than spinning where we
+ * are allowed to.
+ *
+ * This is safe *because the bit is latched*: mmGEN_INT_STATUS is
+ * write-1-to-clear, so once the vline event happens the bit stays set
+ * until we clear it. A coarse poll therefore cannot miss the event, it
+ * only costs a little latency in noticing it. That property is what makes
+ * sleeping legitimate here -- do not convert this to a level-sensitive
+ * read without revisiting it.
+ *
+ * The busy-wait it replaces mattered: w100fb_pan_display() calls this on
+ * every pan, so a double-buffered userspace (MPlayer -vo fbdev, X11) was
+ * spending up to a full frame period spinning at 100% CPU on a 400 MHz
+ * PXA255 that needs those cycles to decode.
+ *
+ * pan_display can in principle be reached from fbcon in a non-sleepable
+ * context, so fall back to a (still much coarser) delay when we are not
+ * preemptible rather than assuming process context.
+ */
+static void w100_vsync_pause(void)
+{
+	if (preemptible())
+		usleep_range(500, 1000);
+	else
+		udelay(100);
+}
+
 static int w100_vsync(void)
 {
 	u32 cntl, stat;
 	u32 tmp;
-	int timeout = 30000;  /* VSync timeout = 30[ms] > 16.8[ms] */
+	ktime_t deadline = ktime_add_ms(ktime_get(), W100_VSYNC_TIMEOUT_MS);
+	/*
+	 * Track success explicitly instead of inferring it from "budget left".
+	 * The old code returned 0 whenever the iteration counter had not hit
+	 * zero, which conflated "saw the vline assert" with "ran out of clear
+	 * attempts but still had counter left", and reported a timeout when
+	 * the clear phase alone had exhausted the budget.
+	 */
+	bool got_vline = false;
 
 	if (w100_vsync_mode == 1) {
 		u32 start = readl(remapped_regs + mmCRTC_FRAME);
 
-		while (timeout > 0) {
+		/*
+		 * NOTE: this mode does not work on Corgi and cannot be used as
+		 * a fallback. mmCRTC_FRAME reads back as a hardwired 0x0 on
+		 * this board and never increments -- so does mmCRTC_FRAME_VPOS
+		 * (verified 2026-07-30 by sampling both over /dev/mem while the
+		 * panel was actively displaying). This path is therefore an
+		 * unconditional ~timeout here. It is kept only because the
+		 * counter may be live on other w100 boards; an earlier comment
+		 * in w100fb_pan_display() recommended vsync_mode=1 as the
+		 * workaround for vsync trouble, which was actively wrong advice.
+		 */
+		while (ktime_before(ktime_get(), deadline)) {
 			u32 cur = readl(remapped_regs + mmCRTC_FRAME);
 
 			if (cur != start)
 				return 0;
-			udelay(1);
-			timeout--;
+			w100_vsync_pause();
 		}
 
 		if (w100_vsync_debug) {
 			cntl = readl(remapped_regs + mmGEN_INT_CNTL);
 			stat = readl(remapped_regs + mmGEN_INT_STATUS);
-			pr_warn_ratelimited("w100fb: vsync(frame) timeout start=%#x cur=%#x int_cntl=%#x int_stat=%#x\n",
+			pr_warn_ratelimited("w100fb: vsync(frame) timeout start=%#x cur=%#x int_cntl=%#x int_stat=%#x (mmCRTC_FRAME is stuck at 0 on Corgi -- use vsync_mode=0)\n",
 					   start, readl(remapped_regs + mmCRTC_FRAME), cntl, stat);
 		} else {
-			pr_warn_ratelimited("w100fb: vsync(frame) wait timed out\n");
+			pr_warn_ratelimited("w100fb: vsync(frame) wait timed out (mmCRTC_FRAME is stuck at 0 on Corgi -- use vsync_mode=0)\n");
 		}
 		return -ETIMEDOUT;
 	}
@@ -1818,20 +1894,24 @@ static int w100_vsync(void)
 	/*
 	 * Wait for a clean edge: first ensure any stale pending status is gone,
 	 * then wait for the next assertion.
+	 *
+	 * Both loops share the single wall-clock deadline, so a slow/stuck
+	 * clear phase can no longer silently eat the whole budget and leave
+	 * the second loop no time to see a perfectly good assertion.
 	 */
-	while (timeout > 0) {
+	while (ktime_before(ktime_get(), deadline)) {
 		if (!(readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002))
 			break;
 		writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
-		udelay(1);
-		timeout--;
+		w100_vsync_pause();
 	}
 
-	while(timeout > 0) {
-		if (readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002)
+	while (ktime_before(ktime_get(), deadline)) {
+		if (readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002) {
+			got_vline = true;
 			break;
-		udelay(1);
-		timeout--;
+		}
+		w100_vsync_pause();
 	}
 
 	/* disable vline irq */
@@ -1840,7 +1920,7 @@ static int w100_vsync(void)
 	/* clear vline irq status */
 	writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
 
-	if (timeout <= 0) {
+	if (!got_vline) {
 		if (w100_vsync_debug) {
 			cntl = readl(remapped_regs + mmGEN_INT_CNTL);
 			stat = readl(remapped_regs + mmGEN_INT_STATUS);
