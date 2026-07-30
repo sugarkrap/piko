@@ -63,15 +63,26 @@ fi
 echo
 case ":$PATH:" in
     *":$CARD_BIN:"*)
-        echo "PATH already includes it."
+        echo "PATH already includes it -- just type the name, e.g.  mplayer"
+        echo "If it still reports 'not found', type:  hash -r"
+        echo "(both ash and zsh cache failed lookups, so a shell that tried"
+        echo " before the card was in keeps failing until the hash is cleared)"
         ;;
     *)
-        echo "WARNING: $CARD_BIN is NOT on PATH."
-        echo "Expected /etc/zaurus-card.sh to add it -- check it is present"
-        echo "and sourced from /etc/profile and /etc/zshrc."
+        # Distinguish "genuinely misconfigured" from the far more common
+        # "this shell simply never read /etc/profile". Non-login shells --
+        # `ssh host 'cmd'`, scripts, anything with -c -- do not source it,
+        # which is normal Unix behaviour and not a fault.
+        if [ -r /etc/zaurus-card.sh ] && grep -q zaurus-card /etc/profile 2>/dev/null; then
+            echo "Not on PATH in THIS shell, which is normal: non-login shells"
+            echo "(ssh 'cmd', scripts, sh -c) never read /etc/profile."
+            echo
+            echo "For this shell:      . /etc/zaurus-card.sh"
+            echo "Or just log in on the device console, where it is automatic."
+        else
+            echo "WARNING: $CARD_BIN is NOT on PATH, and the setup looks broken."
+            echo "Expected /etc/zaurus-card.sh to exist and be sourced from"
+            echo "/etc/profile and /etc/zshrc. Redeploy with tools/chunked-deploy.sh."
+        fi
         ;;
 esac
-
-# Clear the shell's command hash. This script runs in its own process, so it
-# cannot do that for the parent -- tell the user the one word to type.
-echo "If a command here still reports 'not found', type:  hash -r"
