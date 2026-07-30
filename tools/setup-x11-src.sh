@@ -90,6 +90,14 @@ echo "==> xserver: font-util compat macros"
 # compiled-in default font path (AC_DEFINE_DIR only eval's twice).
 copy_in "$PATCHES/fontutil-compat.m4" "$SRC/xserver/m4/fontutil-compat.m4"
 
+echo "==> xserver: kdrive evdev absolute-pointer (touchscreen) support"
+# Stock kdrive evdev drives relative pointers only -- EV_ABS was debug
+# output with no event enqueued, and BTN_TOUCH (0x14a) fell outside the
+# BTN_MOUSE..BTN_JOYSTICK range its button handler accepts. Net effect:
+# the ads7846 touchscreen fed events to X and the cursor never moved.
+# See docs/HOWTO-X11-TOUCHSCREEN.md (incl. how to re-run calibration).
+apply_patch "$SRC/xserver" "$PATCHES/xserver-kdrive-evdev-absolute.patch"
+
 echo "==> libfontenc: same font-util compat macros"
 copy_in "$PATCHES/fontutil-compat.m4" "$SRC/libfontenc/m4/fontutil-compat.m4"
 
