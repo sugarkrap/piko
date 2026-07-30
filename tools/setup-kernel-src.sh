@@ -122,6 +122,12 @@ copy_in "$REPO/modules/clk-pxa/timer_pxa_patched.c"   drivers/clocksource/timer-
 copy_in "$REPO/modules/clk-pxa/clk_pxa25x_patched.c"  drivers/clk/pxa/clk-pxa25x.c
 copy_in "$REPO/modules/clk-pxa/clk_pxa_patched.c"     drivers/clk/pxa/clk-pxa.c
 
+# pxa25x.c adds the "pxa2xx-i2s" rx/tx DMA slave-map entries that mainline
+# only ever defined for pxa27x -- without them dma_request_slave_channel()
+# returns NULL and ASoC fails PCM open with -ENXIO on this board. See the
+# PATCHED comment in the file itself.
+copy_in "$REPO/modules/mach-pxa/pxa25x_patched.c"     arch/arm/mach-pxa/pxa25x.c
+
 echo "==> applying reference current-driver snapshots"
 copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
 copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c
@@ -280,6 +286,12 @@ echo "==> applying the Corgi ASoC sound driver"
 copy_in "$REPO/modules/sound-pxa/corgi.c"   sound/soc/pxa/corgi.c
 copy_in "$REPO/modules/sound-pxa/Kconfig"   sound/soc/pxa/Kconfig
 copy_in "$REPO/modules/sound-pxa/Makefile"  sound/soc/pxa/Makefile
+# pxa2xx-i2s.c fixes the clock-provider switch in set_dai_fmt: the
+# SND_SOC_DAIFMT_{BP,BC}_{FP,FC} aliases are codec-centric, so the old
+# BP_FP/BC_FP cases never matched corgi's CBC_CFC request and the CPU
+# never drove BITCLK (silent playback, DMA armed but never requested).
+# See the PATCHED comment in the file itself.
+copy_in "$REPO/modules/sound-pxa/pxa2xx-i2s_patched.c" sound/soc/pxa/pxa2xx-i2s.c
 
 echo "==> applying kernel.config-corgi-$KERNEL_VERSION"
 copy_in "$REPO/kernel.config-corgi-$KERNEL_VERSION" .config

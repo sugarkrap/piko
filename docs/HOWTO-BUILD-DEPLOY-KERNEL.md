@@ -137,6 +137,27 @@ Expect: new kernel version/build date, all WiFi/PCMCIA + sound modules
 `Live` with no errors, zero hits in the dmesg grep, `wlan0` up with an
 IP and an associated AP in `iwconfig`.
 
+### Verifying audio actually plays
+
+The sound card registering is **not** evidence that audio works — it can
+register, open, and report `state: RUNNING` while transferring nothing. Two
+extra checks are cheap and catch the real failure modes (see
+`docs/DEADLETTER-AUDIO-I2S-SILENT.md`):
+
+```sh
+amixer cset numid=11 'Headphone'    # REQUIRED: default 'Off' hard-mutes via GPIO
+amixer cset numid=12 'On'
+grep pxa-dma /proc/interrupts       # note the count
+aplay -d 4 /root/test-mono22k.wav   # must return exit 0, not hang
+grep pxa-dma /proc/interrupts       # count MUST have increased
+```
+
+A `pxa-dma` count that does not move means the I2S link is enabled but
+unclocked — samples are never transferred no matter what ALSA reports. A
+hang (rather than an error) is the same failure. Note there is no `kill`
+applet in this busybox, so a hung `aplay` holds the PCM open until
+`softreboot`.
+
 ## If it goes wrong (no post-kexec panic fallback)
 
 The bootstrap's kexec fallback only covers `kexec -l` (load) failures —

@@ -86,16 +86,38 @@ There is no replacement.
   `.dbk` (`docs/DEADLETTER-NAND-RECOVERY.md`) — but never rely on it; avoid
   the mistake instead.
 
-## Current state (2026-07-30)
-The bootstrap kernel boots successfully on real hardware as of tonight
-(2026-07-30) — see `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md` for the
-full chain of fixes that took. It does not yet reach a working stage 2:
-`home` currently holds an older stage-2 `zImage-full` built without
-framebuffer support, so kexec into it (if it even completes) is headless.
-A stage-2 rebuild with `CONFIG_FB_W100=y` is in progress. Once that lands,
-stage 2's own login/service-stack state (BusyBox init + inittab + rcS +
-mdev, zsh login as `root`/`zaurus` or `piko`/`piko`, wireless-tools +
-wpa_supplicant + hostap/Prism2 for WiFi, dropbear for SSH) needs to be
-re-verified on real hardware — treat prior claims about it working end to
-end as unconfirmed until then. See `docs/archive/DEADLETTER-WIFI-SSH.md`
-for the WiFi data-path history.
+## Current state (2026-07-30, late)
+The full two-stage chain works on real hardware and is **verified live**,
+not inferred:
+
+- **Bootstrap boots + kexecs into stage 2.** See
+  `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md` for the chain of fixes.
+- **Stage 2 boots to a login/shell** with the w100 framebuffer up.
+- **WiFi + SSH work.** The board holds a real DHCP lease (verified at
+  `10.208.47.72` — *not* the `10.208.47.22` static fallback in
+  `wifi-up.sh`, which is what a broken data path looks like) and dropbear
+  accepts both password (`root`/`zaurus`) and key auth. Required the
+  hostap `skb->cb` fix (`docs/archive/DEADLETTER-HOSTAP-SKB-CB.md`) and
+  restoring the MEMC clock (skipping it silently killed PCMCIA).
+- **Audio plays.** Needed two independent mainline fixes plus a mandatory
+  mixer setting — see `docs/DEADLETTER-AUDIO-I2S-SILENT.md`. Do not treat
+  a registered sound card as working audio; verify the `pxa-dma` interrupt
+  count actually moves.
+
+Not yet verified: MPlayer video playback (built via `tools/build-mplayer.sh`,
+staged at `userspace/stage-mplayer/`, not yet run on hardware), and the
+w100 vsync timeout (worked around in `w100fb_pan_display()`, root cause
+still open).
+
+**Routine updates no longer need a NAND flash.** With the device reachable
+over WiFi, use `tools/build-and-deploy.sh` (rebuild + chunked SSH deploy)
+followed by `softreboot` (self-kexec). Reserve the SD-card recovery flash
+for bootstrap/`mtd1` changes or an unreachable board.
+
+> Anything under `kernel-src/` is **regenerated** by
+> `tools/setup-kernel-src.sh` from tracked sources in `modules/`. Editing
+> `kernel-src/` directly survives until the next `--force-kernel-src`, then
+> disappears with no warning. Every kernel fix must land in `modules/` with
+> a matching `copy_in` line, and the honest way to prove it did is to run
+> `build-and-deploy.sh --force-kernel-src` and confirm the affected object
+> changes md5 while the others do not.

@@ -38,3 +38,18 @@ load_ko snd-soc-wm8731-i2c.ko
 load_ko snd-soc-corgi.ko
 load_ko snd-mixer-oss.ko
 load_ko snd-pcm-oss.ko
+
+# Un-mute the output path. corgi_ext_control() drives the physical mute
+# GPIOs from the "Jack Function" control, and its default (CORGI_HP_OFF)
+# asserts BOTH mute lines -- so a freshly loaded card is hard-muted at the
+# hardware level no matter what the volume controls say, and "Speaker
+# Function" alone does NOT release it (it gates a different DAPM pin).
+# Without this, playback runs to completion with correct DMA activity and
+# produces total silence. See docs/DEADLETTER-AUDIO-I2S-SILENT.md.
+# Non-fatal: alsa-utils may not be installed, and the module load above is
+# still useful on its own. Tested by path, not `command -v` -- this
+# busybox ash has no `command` builtin (see tools/chunked-deploy.sh).
+if [ -x /usr/bin/amixer ]; then
+    /usr/bin/amixer cset numid=11 'Headphone' >/dev/null 2>&1 || true
+    /usr/bin/amixer cset numid=12 'On'        >/dev/null 2>&1 || true
+fi
