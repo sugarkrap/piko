@@ -39,17 +39,21 @@ load_ko snd-soc-corgi.ko
 load_ko snd-mixer-oss.ko
 load_ko snd-pcm-oss.ko
 
-# Un-mute the output path. corgi_ext_control() drives the physical mute
-# GPIOs from the "Jack Function" control, and its default (CORGI_HP_OFF)
-# asserts BOTH mute lines -- so a freshly loaded card is hard-muted at the
-# hardware level no matter what the volume controls say, and "Speaker
-# Function" alone does NOT release it (it gates a different DAPM pin).
-# Without this, playback runs to completion with correct DMA activity and
-# produces total silence. See docs/DEADLETTER-AUDIO-I2S-SILENT.md.
-# Non-fatal: alsa-utils may not be installed, and the module load above is
-# still useful on its own. Tested by path, not `command -v` -- this
-# busybox ash has no `command` builtin (see tools/chunked-deploy.sh).
-if [ -x /usr/bin/amixer ]; then
-    /usr/bin/amixer cset numid=11 'Headphone' >/dev/null 2>&1 || true
-    /usr/bin/amixer cset numid=12 'On'        >/dev/null 2>&1 || true
-fi
+# Deliberately does NOT touch the mixer. The driver's power-on defaults are
+# already the correct speaker configuration and are verified audible on
+# hardware as-is (2026-07-30):
+#
+#   Jack Function   = Off  -> "no jack plugged in": mutes the HEADPHONE
+#                             outputs (MUTE_L/MUTE_R low) and leaves the
+#                             speaker path alone. It does NOT mean "muted".
+#   Speaker Function = On  -> enables the "Ext Spk" DAPM widget, whose
+#                             power event drives the APM_ON GPIO, i.e. the
+#                             speaker amplifier.
+#   Master Playback  = 121/127 (~0 dB), plenty.
+#
+# An earlier revision of this script forced Jack Function=Headphone here,
+# on the mistaken belief that "Off" was a hard mute. That is backwards --
+# it routes audio to the (empty) headphone jack. The real cause of the
+# silence it was written to fix was two kernel bugs, since fixed: the
+# missing pxa2xx-i2s DMA slave map and the never-set SACR0_BCKD.
+# See docs/DEADLETTER-AUDIO-I2S-SILENT.md.

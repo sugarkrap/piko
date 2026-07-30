@@ -145,12 +145,16 @@ extra checks are cheap and catch the real failure modes (see
 `docs/DEADLETTER-AUDIO-I2S-SILENT.md`):
 
 ```sh
-amixer cset numid=11 'Headphone'    # REQUIRED: default 'Off' hard-mutes via GPIO
-amixer cset numid=12 'On'
 grep pxa-dma /proc/interrupts       # note the count
 aplay -d 4 /root/test-mono22k.wav   # must return exit 0, not hang
 grep pxa-dma /proc/interrupts       # count MUST have increased
 ```
+
+No `amixer` step is needed — the driver's defaults (`Jack Function=Off`,
+`Speaker Function=On`, volume 121/127) are already the correct **speaker**
+configuration and are verified audible as-is. `Jack Function=Off` means "no
+jack plugged in", not "muted"; setting it to `Headphone` routes audio to the
+headphone jack and will make the speaker test look broken.
 
 A `pxa-dma` count that does not move means the I2S link is enabled but
 unclocked — samples are never transferred no matter what ALSA reports. A

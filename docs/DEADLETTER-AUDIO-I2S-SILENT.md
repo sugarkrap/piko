@@ -151,25 +151,59 @@ hanging.
 "clocked and draining" from "enabled but dead".** A constant value means no
 clock, no matter what every other status bit claims.
 
-## Third thing: the mute GPIO (not a bug — required mixer state)
+## Third thing: there is NO required mixer step (correcting an earlier claim)
 
-Even with both kernel fixes, output is silent until userspace sets the
-machine-driver mixer. `corgi_ext_control()` asserts the physical mute GPIOs
-for every jack setting except the routed ones, and the default is `Off`:
-```c
-case CORGI_HP_OFF:
-default:
-    gpiod_set_value_cansleep(priv->gpiod_mute_l, 0);
-    gpiod_set_value_cansleep(priv->gpiod_mute_r, 0);   /* HARD MUTE */
+An earlier revision of this document asserted that output stayed silent
+until userspace ran `amixer cset numid=11 'Headphone'`, and called that step
+mandatory. **That was wrong, in the most misleading possible direction, and
+it is worth understanding why so the mistake is not repeated.**
+
+The driver's power-on defaults are already the correct speaker
+configuration, and are verified audible on hardware with no `amixer` call at
+all:
+
+| control | default | meaning |
+|---|---|---|
+| `Jack Function` | `Off` (4) | **"no jack plugged in"** — mutes the HEADPHONE outputs, leaves the speaker path alone |
+| `Speaker Function` | `On` (0) | enables the `Ext Spk` widget, whose power event drives the `APM_ON` speaker-amplifier GPIO |
+| `Master Playback Volume` | 121/127 (~0 dB) | plenty |
+
+`Off` does **not** mean "muted". `corgi_ext_control()`'s `mute_l`/`mute_r`
+GPIOs gate the **headphone** outputs only (and note the polarity reads
+backwards: `1` = un-muted — `corgi_shutdown()`'s "Unmute HP outputs" comment
+sets them to `1`). Forcing `Jack Function=Headphone` therefore routes audio
+to an empty headphone jack, which is the opposite of what a speaker test
+wants.
+
+Verified by reading the SCOOP GPIOs directly during playback in the default
+configuration:
 ```
-So this is mandatory before playback:
-```sh
-amixer cset numid=11 'Headphone'    # Jack Function: Off -> Headphone
-amixer cset numid=12 'On'           # Speaker Function
+MUTE_L bit4  dir=OUT out=0    <- headphone muted (correct for speaker)
+MUTE_R bit5  dir=OUT out=0
+APM_ON bit7  dir=OUT out=1    <- SPEAKER AMPLIFIER ENABLED
+APM_ON sampled 10x: 1(0080) 1(0080) 1(0080) ...
 ```
-`Speaker Function` alone is **not** enough — `Jack Function` gates the mute
-GPIOs independently of it. (`numid=` values are stable for this card; by
-name they are `'Jack Function'` and `'Speaker Function'`.)
+
+> **SCOOP GPIO off-by-one trap.** These are SCOOP GPIOs, not PXA GPIOs, and
+> `arch/arm/common/scoop.c` maps gpio offset *N* to register bit ***N+1***
+> (`gpwr |= 1 << (offset + 1)`). So `MUTE_L`(3)→bit 4, `MUTE_R`(4)→bit 5,
+> `APM_ON`(6)→**bit 7**. Reading the un-shifted bits shows `APM_ON = 0`
+> during playback and "proves" the amplifier is dead when it is in fact on.
+> This cost a full misdiagnosis before the shift was spotted.
+
+### How the wrong conclusion got reached
+
+The original silence was real — with no DMA at all (causes 1 and 2 above),
+nothing could ever be audible. After fixing those, the remaining silence was
+attributed to the mute GPIO and "fixed" by forcing `Headphone`, **without
+re-testing the untouched defaults**. Because the two kernel fixes had
+already made it work, the unnecessary workaround appeared to be part of the
+solution and was written up as mandatory.
+
+The lesson is the same one this repo keeps re-learning: after fixing a root
+cause, **re-test the original configuration before keeping any workaround
+added along the way.** A workaround that is merely harmless still becomes
+false documentation.
 
 ## Where the fixes live (tracked — read this before trusting a rebuild)
 
