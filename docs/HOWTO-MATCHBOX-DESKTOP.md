@@ -101,9 +101,20 @@ Confirm the summary says `Building Standalone: no`. `--x-includes` /
   includes `<xsettings-client.h>` unqualified while libmb installs it
   under `include/libmb/`.
 
-**matchbox-panel** and **matchbox-common** need no special flags.
-matchbox-common is architecture-independent -- no `.c` files anywhere, no
-ELF output; `--host` only makes configure complete.
+**matchbox-panel** needs `--enable-proc-apm`, or you get no battery
+applet:
+
+    ./configure --host=$HOST --build=x86_64-pc-linux-gnu --prefix=/usr \
+        --enable-proc-apm
+
+Confirm the summary says `Building mb-applet-battery: yes, with
+/proc/apm`. That flag is ours (`modules/x11/matchbox-panel-battery-proc-apm.patch`,
+applied by `tools/setup-x11-src.sh`) -- see "Panel applets" below for why
+neither upstream backend works here.
+
+**matchbox-common** needs no special flags. It is
+architecture-independent -- no `.c` files anywhere, no ELF output;
+`--host` only makes configure complete.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
@@ -131,10 +142,74 @@ Start it with:
 
     DISPLAY=:0 matchbox-session &
 
-`matchbox-session` (from matchbox-common) launches `matchbox-desktop`,
-`matchbox-panel --orientation south`, and `matchbox-window-manager`. It
-prefers `$HOME/.matchbox/session` then `/etc/matchbox/session`, so you
-can override the default trio without patching anything.
+`matchbox-session` (from matchbox-common) prefers
+`$HOME/.matchbox/session`, then `/etc/matchbox/session`, then its own
+built-in trio of `matchbox-desktop`, `matchbox-panel --orientation south`
+and `matchbox-window-manager`. The payload ships
+`modules/x11/matchbox-session` as `/etc/matchbox/session`, so the applet
+list is tracked source -- see below.
+
+---
+
+## Panel applets
+
+`matchbox-panel` does not contain its applets; each is a separate binary
+that docks itself into the panel over XEMBED. The panel starts them, and
+**which** it starts is the part that bites.
+
+The tree has six applets. Four build with no extra work:
+
+| Applet | Notes |
+|---|---|
+| `mb-applet-menu-launcher` | the app menu |
+| `mb-applet-clock` | clock |
+| `mb-applet-system-monitor` | CPU + memory bars |
+| `mb-applet-launcher` | generic launcher button; instantiate once per app as `-l <icon.png> <command>` |
+
+`mb-applet-battery` needs `--enable-proc-apm` (see above). Upstream offers
+two backends and this board can use neither: `HAVE_APM_H` wants `apm.h`
+plus `-lapm` from Debian's apmd, which we do not cross-build, and
+`USE_ACPI_LINUX` reads `/proc/acpi`, which does not exist here. Without
+the flag, configure just drops the applet from `bin_PROGRAMS` and says
+`Building mb-applet-battery: no ( enable ACPI? )` -- easy to miss. The
+same patch fixes the `.desktop` install, which upstream gates on
+`WANT_APM` alone, so the ACPI backend never installed a menu entry
+either.
+
+Expect a percentage and no time estimate: the provider is `sharpsl_pm`,
+whose `apm_get_power_status` fills in AC status, battery status/flag and
+percentage but leaves `time`/`units` at the kernel's `-1` and `"?"`.
+
+`mb-applet-wireless` is **not** built. It needs `iwlib.h` and `-liw` from
+wireless-tools, which is not in the staging tree; configure drops it
+silently the same way.
+
+`mb-launcher-term.desktop` is installed but not started -- its wrapper
+execs `rxvt` or `xterm` and the payload ships neither.
+
+### Two applets is the default, not a bug
+
+If the panel only shows a menu and a clock, nothing is broken. With no
+`--default-apps`, `matchbox-panel` uses its compiled-in `DEFAULT_SESSIONS`
+= `"mb-applet-menu-launcher,mb-applet-clock"` (`src/session.c:3`). The
+other applets are installed and working, just never launched.
+
+`/etc/matchbox/session` passes the list we want. It also passes
+**`--no-session`, which is not optional**: if `$HOME/.matchbox/mbdock.session`
+exists, the panel reads it and ignores `--default-apps` entirely
+(`src/session.c:73-99`) -- and the panel *writes* that file on every clean
+exit. So any device that has ever run the panel has a stale two-applet
+list on disk that would silently win. `--no-session` also stops it being
+rewritten, which is what we want on an appliance.
+
+All `--default-apps` entries dock at the same gravity (the right of a
+south-oriented panel) in list order. Per-applet left/right placement needs
+the `mbdock.session` file format instead, which is not worth
+reintroducing the stale-state problem for.
+
+`tools/build-matchbox-payload.sh` fails if the session file names an
+applet that is not in the payload -- otherwise the panel just logs a
+session timeout per missing one and comes up looking half-broken.
 
 ---
 

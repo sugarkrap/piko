@@ -104,6 +104,33 @@ cp "$STAGE"/usr/share/fonts/truetype/dejavu/*.ttf \
    "$PAYLOAD/usr/share/fonts/truetype/dejavu/"
 cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 
+# The session file decides which panel applets actually run. Without it
+# matchbox-session falls through to its built-in default, which starts
+# matchbox-panel with no arguments -- and the panel's compiled-in default
+# is only menu-launcher + clock. See the file's own comments.
+mkdir -p "$PAYLOAD/etc/matchbox"
+cp "$REPO/modules/x11/matchbox-session" "$PAYLOAD/etc/matchbox/session"
+chmod 755 "$PAYLOAD/etc/matchbox/session"
+
+# Every applet the session asks for must be in the payload, or the panel
+# just logs a session timeout per missing one and carries on looking
+# half-broken. Cheaper to catch it here than on the device.
+# Evaluate just the APPLETS= lines rather than pattern-matching them, so
+# reformatting the list in that file cannot silently defeat this check.
+applets="$(sh -c "$(grep '^APPLETS=' "$REPO/modules/x11/matchbox-session")
+                  echo \"\$APPLETS\"" | tr ',' ' ')"
+[ -n "$applets" ] || { echo "FAILED: parsed no applets from modules/x11/matchbox-session" >&2; exit 1; }
+for a in $applets; do
+    if [ ! -f "$PAYLOAD/usr/bin/$a" ]; then
+        echo "FAILED: /etc/matchbox/session runs $a but it is not in the payload." >&2
+        echo "Rebuild matchbox-panel (mb-applet-battery needs --enable-proc-apm;" >&2
+        echo "see docs/HOWTO-MATCHBOX-DESKTOP.md) or drop it from" >&2
+        echo "modules/x11/matchbox-session." >&2
+        exit 1
+    fi
+    echo "    applet: $a"
+done
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.

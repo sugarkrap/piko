@@ -1,0 +1,148 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -56,6 +56,11 @@
+   [  --enable-acpi-linux   Use Linux ACPI rather than APM for battery info],
+      enable_acpi_linux=$enableval, enable_acpi_linux=no )
+ 
++AC_ARG_ENABLE(proc-apm,
++  [  --enable-proc-apm     Use Linux /proc/apm (APM emulation) for battery info,
++                          no libapm required],
++     enable_proc_apm=$enableval, enable_proc_apm=no )
++
+ PKG_CHECK_MODULES(LIBMB, libmb >= 1.6,,
+ 	         AC_MSG_ERROR([*** Required Matchbox Library (libmb) 1.6 not installed ***]))
+ 
+@@ -186,7 +191,10 @@
+ 
+ miniapm_enabled="no ( enable ACPI? )"
+ 
+-if test x$enable_acpi_linux = xyes; then
++if test x$enable_proc_apm = xyes; then
++  AC_DEFINE(USE_PROC_APM, [1], [Use /proc/apm to get battery status])
++  miniapm_enabled="yes, with /proc/apm"
++elif test x$enable_acpi_linux = xyes; then
+   miniapm_enabled="yes, with ACPI"
+ else
+   AC_CHECK_HEADERS(apm.h, enable_linux_apm=yes, enable_linux_apm=no)
+@@ -204,7 +212,14 @@
+ 
+ AM_CONDITIONAL(WANT_APM, test x"$miniapm_enabled" = xyes)
+ 
+-AM_CONDITIONAL(WANT_ACPI, test x$enable_acpi_linux = xyes)
++dnl /proc/apm wins over ACPI (see the elif above), so keep the automake
++dnl conditionals mutually exclusive -- otherwise both blocks in
++dnl applets/Makefile.am fire and mb-applet-battery lands in bin_PROGRAMS
++dnl twice with a duplicate _SOURCES assignment.
++AM_CONDITIONAL(WANT_ACPI, test x$enable_acpi_linux = xyes \
++                          && test x$enable_proc_apm != xyes)
++
++AM_CONDITIONAL(WANT_PROC_APM, test x$enable_proc_apm = xyes)
+ 
+ 
+ dnl ------ wireless checks --------------------------------------------------
+--- a/applets/Makefile.am
++++ b/applets/Makefile.am
+@@ -32,6 +32,12 @@
+   mb_applet_battery_LDADD   =        $(LIBMB_LIBS) $(SN_LIBS)
+ endif
+ 
++if WANT_PROC_APM
++  bin_PROGRAMS += mb-applet-battery
++  mb_applet_battery_SOURCES   =      mb-applet-battery.c
++  mb_applet_battery_LDADD   =        $(LIBMB_LIBS) $(SN_LIBS)
++endif
++
+ 
+ LDADD = $(LIBMB_LIBS) $(SN_LIBS)
+ 
+--- a/applets/mb-applet-battery.c
++++ b/applets/mb-applet-battery.c
+@@ -134,7 +134,70 @@
+ 
+ #endif
+ 
+-#ifdef USE_ACPI_LINUX
++#ifdef USE_PROC_APM
++
++/* Read battery state straight out of /proc/apm, as provided by the kernel's
++ * APM emulation layer (CONFIG_APM_EMULATION).  This avoids a dependency on
++ * libapm/apm.h, which is what the HAVE_APM_H path below needs.
++ *
++ * Format (drivers/char/apm-emulation.c, proc_apm_show):
++ *   driver-ver bios-ver flags ac-line batt-status batt-flag batt-life% time units
++ * e.g.  "1.13 1.2 0x03 0x01 0x03 0x09 98% -1 ?"
++ *
++ * On this board the provider is sharpsl_pm, whose apm_get_power_status only
++ * fills in ac_line_status, battery_status, battery_flag and battery_life --
++ * it leaves time and units alone, so they stay at the kernel's defaults of
++ * -1 and "?".  Expect no runtime estimate here, only a percentage; every
++ * consumer of TIME_LEFT in this applet is guarded on "> 0", so -1 is fine.
++ */
++
++#define PROC_APM_PATH "/proc/apm"
++
++static int
++read_apm(int *values)
++{
++  FILE *f;
++  char  units[16];
++  char  line[256];
++  int   ac = -1, batt_status = 0, batt_flag = 0, percent = -1, time_left = -1;
++
++  values[TIME_LEFT]  = -1;
++  values[PERCENTAGE] = -1;
++  values[AC_POWER]   = 0;
++
++  f = fopen(PROC_APM_PATH, "r");
++  if (f == NULL)
++    return 0;
++
++  if (fgets(line, sizeof(line), f) == NULL)
++    {
++      fclose(f);
++      return 0;
++    }
++  fclose(f);
++
++  units[0] = '\0';
++
++  if (sscanf(line, "%*s %*s %*x %x %x %x %d%% %d %15s",
++	     &ac, &batt_status, &batt_flag, &percent, &time_left, units) < 4)
++    return 0;
++
++  /* This applet counts TIME_LEFT in MINUTES: the tooltip prints
++   * TIME_LEFT/60 as hours and TIME_LEFT%60 as minutes, and
++   * time_left_alerts[] holds { 0, 2, 5, 10, 20 }.  /proc/apm reports
++   * either unit and says which in the last field, so scale seconds down
++   * rather than minutes up.  */
++  if (time_left > 0 && units[0] == 's')	/* "sec" */
++    time_left /= 60;
++
++  values[TIME_LEFT]  = time_left;
++  values[PERCENTAGE] = percent;
++  values[AC_POWER]   = (ac == 1) ? AC_LINE_STATUS_ON : 0;
++
++  return 1;
++}
++
++#elif defined(USE_ACPI_LINUX)
+ 
+ #define ACPI_PREFIX	"/proc/acpi"
+ #define BAT_PREFIX	"battery/BAT0"
+--- a/applets/dotdesktop/Makefile.am
++++ b/applets/dotdesktop/Makefile.am
+@@ -12,6 +12,14 @@
+    files += mb-applet-battery.desktop
+ endif
+ 
++if WANT_ACPI
++   files += mb-applet-battery.desktop
++endif
++
++if WANT_PROC_APM
++   files += mb-applet-battery.desktop
++endif
++
+ if WANT_WIFI
+    files +=  mb-applet-wireless.desktop 
+ endif

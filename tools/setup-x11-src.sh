@@ -113,4 +113,19 @@ echo "==> matchbox-window-manager: build fixes"
 apply_patch "$SRC/matchbox-window-manager" "$PATCHES/matchbox-gconf-m4-fallback.patch"
 apply_patch "$SRC/matchbox-window-manager" "$PATCHES/matchbox-missing-includes.patch"
 
+echo "==> matchbox-panel: battery applet via /proc/apm"
+# mb-applet-battery has two upstream backends and we can use neither:
+# HAVE_APM_H wants apm.h + -lapm from Debian's apmd, which we do not
+# cross-build, and USE_ACPI_LINUX reads /proc/acpi, which this board does
+# not have. So configure silently dropped the applet from bin_PROGRAMS
+# and the panel had no battery indicator to load.
+#
+# The kernel is built with CONFIG_APM_EMULATION=y + CONFIG_SHARPSL_PM=y,
+# so /proc/apm carries real charge state from the Sharp PM driver. This
+# adds --enable-proc-apm, which parses that file directly and needs no
+# new library. It also fixes the .desktop install, which upstream gates
+# on WANT_APM alone -- so the ACPI backend never installed a menu entry
+# either.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-battery-proc-apm.patch"
+
 echo "==> X11 submodules ready to configure"
