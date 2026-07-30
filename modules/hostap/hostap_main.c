@@ -855,23 +855,41 @@ void hostap_setup_dev(struct net_device *dev, local_info_t *local,
 		break;
 	case HOSTAP_INTERFACE_MASTER:
 		/*
-		 * FIX (2026-07-23, RE-APPLIED 2026-07-30): make the master
-		 * noqueue -- complementary to the skb->cb padding fix in
-		 * hostap_wlan.h (see the long comment there).
+		 * The master MUST keep a real qdisc -- do NOT set IFF_NO_QUEUE
+		 * here (tried 2026-07-23, re-applied and reverted 2026-07-30).
 		 *
-		 * With that padding, `magic` moves to cb[8], which lands inside
-		 * struct qdisc_skb_cb's private data[] region -- memory a real
-		 * qdisc's enqueue is free to write. Marking the master
-		 * IFF_NO_QUEUE means no qdisc enqueue runs on it at all, so
-		 * data[] (and hostap's metadata living there) stays intact.
+		 * hostap's flow control depends on it. prism2_transmit() does
+		 * netif_stop_queue(local->dev) on EVERY frame, from inside the
+		 * master's own ndo_start_xmit, and only reopens it later from
+		 * the hardware IRQ (prism2_transmit_cb / prism2_alloc_ev). The
+		 * next packet is meant to sit in the master's qdisc until then
+		 * -- which is exactly why the AP and data interfaces below are
+		 * IFF_NO_QUEUE and defer to "main radio device queue".
 		 *
-		 * NOT sufficient on its own: qdisc_pkt_len_init() writes
-		 * cb[0..7] BEFORE __dev_queue_xmit() ever checks for noqueue,
-		 * so the padding fix is the mandatory half. A first attempt
-		 * using only this change still had the magic clobbered.
+		 * With noqueue there is no qdisc to hold it: __dev_queue_xmit()
+		 * sees netif_xmit_stopped(), skips the transmit, and frees the
+		 * skb with "Virtual device %s asks to queue packet!". The loss
+		 * is invisible -- hostap_data_start_xmit() discards
+		 * dev_queue_xmit()'s return and reports NETDEV_TX_OK anyway, so
+		 * wlan0's tx_packets still climbs. On an 802.11b card the
+		 * stopped window is ~1ms, so a 1Hz ping looks perfect while any
+		 * back-to-back traffic (ssh, scp, DHCP, ARP+reply) bleeds
+		 * packets. That is the "WiFi is flaky" report.
+		 *
+		 * It was added as a complement to the skb->cb padding fix in
+		 * hostap_wlan.h, on the theory that a real qdisc's enqueue may
+		 * write qdisc_skb_cb's private data[] where `magic` now lives
+		 * (cb[8]). True in general -- fq_codel writes data[0..7] -- but
+		 * not here: this kernel is built with CONFIG_NET_SCHED unset, so
+		 * the only qdiscs that exist are the built-in pfifo_fast and
+		 * noqueue, and pfifo_fast_enqueue() never touches data[]. The
+		 * padding is sufficient on its own.
+		 *
+		 * If CONFIG_NET_SCHED is ever enabled, the answer is to pin the
+		 * master to a cb-safe qdisc (tc qdisc replace dev wifi0 root
+		 * pfifo_fast), NOT to bring this flag back.
 		 * See docs/archive/DEADLETTER-HOSTAP-SKB-CB.md.
 		 */
-		dev->priv_flags |= IFF_NO_QUEUE;
 		dev->netdev_ops = &hostap_master_ops;
 		break;
 	default:

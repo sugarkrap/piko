@@ -53,7 +53,12 @@ u16          tc_classid;/* cb[6..7] */
 and `qdisc_pkt_len_init()` writes **both `pkt_len` and `pkt_segs`** on every
 `dev_queue_xmit`. So `pkt_segs = 1` overwrote `magic` (offset 4) → `0x...0001`.
 
-## Fix (two parts)
+## Fix
+
+> **2026-07-30, second revision:** this was originally written as a two-part
+> fix. **Part 2 (`IFF_NO_QUEUE`) was wrong and has been reverted** — it caused
+> a second, separate failure. Only part 1 is the fix. See
+> "Part 2 was wrong" below before re-applying anything from this document.
 
 **1. Enlarge the padding** so `magic` sits past the whole fixed
 `qdisc_skb_cb` head (`hostap_wlan.h`):
@@ -65,27 +70,56 @@ This is the load-bearing fix — it directly protects the magic from the
 `pkt_len`+`pkt_segs` write that `qdisc_pkt_len_init()` does on *every*
 `dev_queue_xmit`, regardless of qdisc.
 
-**2. `IFF_NO_QUEUE` on the master** (`hostap_main.c`,
-`HOSTAP_INTERFACE_MASTER` case) — complementary: `magic` now lives in the
-qdisc *private `data[]`* region (cb[8..27]), which a real qdisc's enqueue
-could write. Making the master noqueue means no enqueue runs, so `data[]`
-(and the metadata after `magic`) stays intact:
-```c
-case HOSTAP_INTERFACE_MASTER:
-    dev->priv_flags |= IFF_NO_QUEUE;
-    dev->netdev_ops = &hostap_master_ops;
-    break;
-```
+This is the whole fix. Struct stays well under the 48-byte `skb->cb` limit
+(~28 bytes). Rebuild the `hostap` module, reinstall to
+`nand-root/lib/modules/7.1.4/`, flash mtd3. The patched sources live in the
+**tracked** `modules/hostap/` (kernel-src is gitignored and gets rebuilt from
+it by `tools/setup-kernel-src.sh` — that is how the first version of this fix
+was silently lost).
 
-> NOTE: `IFF_NO_QUEUE` alone is NOT enough — `qdisc_pkt_len_init()` writes
-> `cb[0..5]` *before* the noqueue check in `__dev_queue_xmit`, so the
-> padding fix is mandatory. First attempt used only the noqueue change and
-> the magic was still clobbered.
+## Part 2 was wrong: `IFF_NO_QUEUE` on the master (reverted 2026-07-30)
 
-Both patched sources saved to `nand/hostap-patched/` (kernel-src is
-gitignored). Rebuild the `hostap` module, reinstall to
-`nand-root/lib/modules/7.1.4/`, flash mtd3. Struct stays well under the
-48-byte `skb->cb` limit (~28 bytes).
+The original fix also set `dev->priv_flags |= IFF_NO_QUEUE` on the master, on
+the theory that `magic` now lives in the qdisc *private `data[]`* region
+(cb[8..27]) which a real qdisc's enqueue could write, so removing the qdisc
+protects it.
+
+**Do not re-apply this.** It fixed nothing and broke the link a second way —
+this is what the "our WiFi is flaky compared to Cacko" report was.
+
+- **It was never needed.** The concern is real in general (`fq_codel` writes
+  `data[0..7]`), but this kernel is built with `CONFIG_NET_SCHED` unset, so
+  the only qdiscs in existence are the built-in `pfifo_fast` and `noqueue`,
+  and `pfifo_fast_enqueue()` never touches `data[]`. The padding alone is
+  airtight here.
+- **It actively breaks TX.** `prism2_transmit()` (`hostap_hw.c`) calls
+  `netif_stop_queue(local->dev)` on **every** frame, from inside the master's
+  own `ndo_start_xmit`, and only reopens the queue later from the hardware
+  IRQ (`prism2_transmit_cb`, `prism2_alloc_ev`). The next packet is supposed
+  to wait in the master's qdisc — that is precisely why the AP and data
+  interfaces *are* `IFF_NO_QUEUE`, with the upstream comment "use main radio
+  device queue". Take the master's queue away and `__dev_queue_xmit()` sees
+  `netif_xmit_stopped(txq)`, skips the transmit, and frees the skb via
+  `net_crit_ratelimited("Virtual device %s asks to queue packet!")`
+  (`net/core/dev.c`).
+- **The loss is invisible in the counters.** `hostap_data_start_xmit()` does
+  `dev_queue_xmit(skb); return NETDEV_TX_OK;` — the return value is
+  discarded, so `wlan0`'s `tx_packets` climbs for packets that were dropped.
+  On an 802.11b card the stopped window is ~1 ms, so a 1 Hz ping never
+  collides with it and looks perfect, while ssh/scp/DHCP/ARP+reply bleed
+  packets continuously.
+
+**On-device check:** `dmesg | grep 'asks to queue'`. Any hit means the master
+is noqueue and this regression is back.
+
+If `CONFIG_NET_SCHED` is ever enabled, pin the master to a cb-safe qdisc
+(`tc qdisc replace dev wifi0 root pfifo_fast`) — do not reach for
+`IFF_NO_QUEUE`.
+
+> Historical note: `IFF_NO_QUEUE` alone was also never sufficient for the
+> original bug — `qdisc_pkt_len_init()` writes `cb[0..7]` *before* the
+> noqueue check in `__dev_queue_xmit`, so the first attempt (noqueue only)
+> still had the magic clobbered. It was wrong in both directions.
 
 ## Related config that had to be right first
 
