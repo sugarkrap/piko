@@ -854,6 +854,24 @@ void hostap_setup_dev(struct net_device *dev, local_info_t *local,
 		dev->header_ops = &hostap_80211_ops;
 		break;
 	case HOSTAP_INTERFACE_MASTER:
+		/*
+		 * FIX (2026-07-23, RE-APPLIED 2026-07-30): make the master
+		 * noqueue -- complementary to the skb->cb padding fix in
+		 * hostap_wlan.h (see the long comment there).
+		 *
+		 * With that padding, `magic` moves to cb[8], which lands inside
+		 * struct qdisc_skb_cb's private data[] region -- memory a real
+		 * qdisc's enqueue is free to write. Marking the master
+		 * IFF_NO_QUEUE means no qdisc enqueue runs on it at all, so
+		 * data[] (and hostap's metadata living there) stays intact.
+		 *
+		 * NOT sufficient on its own: qdisc_pkt_len_init() writes
+		 * cb[0..7] BEFORE __dev_queue_xmit() ever checks for noqueue,
+		 * so the padding fix is the mandatory half. A first attempt
+		 * using only this change still had the magic clobbered.
+		 * See docs/archive/DEADLETTER-HOSTAP-SKB-CB.md.
+		 */
+		dev->priv_flags |= IFF_NO_QUEUE;
 		dev->netdev_ops = &hostap_master_ops;
 		break;
 	default:

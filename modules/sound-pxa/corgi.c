@@ -394,10 +394,41 @@ static int corgi_wm8731_init(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
+/*
+ * FIX (2026-07-30, piko project): platform is COMP_DUMMY(), not
+ * COMP_PLATFORM("pxa-pcm-audio").
+ *
+ * On this kernel BOTH the CPU DAI component (pxa_i2s_component in
+ * sound/soc/pxa/pxa2xx-i2s.c) and the standalone platform component
+ * (pxa2xx_soc_platform in sound/soc/pxa/pxa2xx-pcm.c) register the SAME
+ * .pcm_new = pxa2xx_soc_pcm_new. snd_soc_pcm_component_new() calls
+ * pcm_new on EVERY component in the link, so listing both made
+ * pxa2xx_soc_pcm_new run twice. The second call hits
+ *
+ *     if (snd_BUG_ON(substream->dma_buffer.dev.type))
+ *             return -EINVAL;
+ *
+ * in preallocate_pages() (sound/core/pcm_memory.c), because the first
+ * call already set dma_buffer.dev.type. Observed on real hardware as a
+ * WARNING backtrace through preallocate_pages ->
+ * snd_pcm_set_managed_buffer_all -> pxa2xx_soc_pcm_new, followed by
+ * "ASoC: can't create pcm WM8731 :-22", "snd_soc_register_card() failed:
+ * -22", and "probe with driver corgi-audio failed with error -22" -- i.e.
+ * NO sound card registered at all.
+ *
+ * Dropping the platform component is safe and is strictly a gain: the CPU
+ * DAI component provides a SUPERSET of the platform component's ops
+ * (both have pcm_new/open/close/hw_params/prepare/trigger/pointer; only
+ * the CPU DAI additionally has suspend/resume). Mainline folded PCM/DMA
+ * support into pxa2xx-i2s.c and pxa2xx-pcm.c is a leftover that no
+ * longer belongs in the link.
+ *
+ * NOTE: sound/soc/pxa/spitz.c has the identical latent bug upstream.
+ */
 SND_SOC_DAILINK_DEFS(wm8731,
 	DAILINK_COMP_ARRAY(COMP_CPU("pxa2xx-i2s")),
 	DAILINK_COMP_ARRAY(COMP_CODEC("wm8731.0-001b", "wm8731-hifi")),
-	DAILINK_COMP_ARRAY(COMP_PLATFORM("pxa-pcm-audio")));
+	DAILINK_COMP_ARRAY(COMP_DUMMY()));
 
 static struct snd_soc_dai_link corgi_dai = {
 	.name = "WM8731",

@@ -925,7 +925,36 @@ struct hostap_interface {
  * TO SEE THE DAY.
  */
 struct hostap_skb_tx_data {
-	unsigned int __padding_for_default_qdiscs;
+	/*
+	 * FIX (2026-07-23, RE-APPLIED 2026-07-30 -- see below): 8 bytes, not 4.
+	 *
+	 * hostap stashes `magic` + `iface` in skb->cb, then hands the frame to
+	 * the master via dev_queue_xmit(). On modern kernels dev_queue_xmit()
+	 * runs qdisc_pkt_len_init(), which writes the fixed head of
+	 * struct qdisc_skb_cb over the same memory:
+	 *
+	 *     unsigned int pkt_len;    // cb[0..3]
+	 *     u16          pkt_segs;   // cb[4..5]
+	 *     u16          tc_classid; // cb[6..7]
+	 *
+	 * With only 4 bytes of padding, `magic` sat at cb[4..7], so
+	 * net/core/dev.c's `qdisc_skb_cb(skb)->pkt_segs = 1;` overwrote its low
+	 * half: 0xf08a36a2 -> 0xf08a0001. hostap_master_start_xmit() then saw a
+	 * corrupt magic and dropped EVERY data frame -- the card associates
+	 * (LinkStatus=1) and rx counters climb, but nothing passes, so there is
+	 * no ARP, no DHCP, no ping. hostap predates dev_queue_xmit() touching cb.
+	 *
+	 * 8 bytes moves `magic` to cb[8], clear of that whole fixed head.
+	 * Total struct is ~28 bytes, well under skb->cb's 48-byte limit.
+	 *
+	 * WHY THIS CAME BACK: the original 2026-07-23 fix was only ever saved
+	 * to modules/nand/hostap-patched/, which .gitignore excludes, so it was
+	 * never in the tree tools/setup-kernel-src.sh rebuilds from and vanished
+	 * on the next reconstruction. It is applied HERE, in the tracked source,
+	 * for that reason -- do not move it back out.
+	 * See docs/archive/DEADLETTER-HOSTAP-SKB-CB.md.
+	 */
+	unsigned int __padding_for_default_qdiscs[2];
 	u32 magic; /* HOSTAP_SKB_TX_DATA_MAGIC */
 	u8 rate; /* transmit rate */
 #define HOSTAP_TX_FLAGS_WDS BIT(0)
@@ -937,6 +966,33 @@ struct hostap_skb_tx_data {
 	unsigned long jiffies; /* queueing timestamp */
 	unsigned short ethertype;
 };
+
+/*
+ * GUARD (2026-07-30, piko project): make the skb->cb layout invariant a
+ * BUILD failure rather than a silent runtime one.
+ *
+ * `magic` must start at or after byte 8 of skb->cb, because
+ * qdisc_pkt_len_init() -- which runs on EVERY dev_queue_xmit() -- writes
+ * struct qdisc_skb_cb's fixed head over cb[0..7]:
+ *     unsigned int pkt_len;    // cb[0..3]
+ *     u16          pkt_segs;   // cb[4..5]
+ *     u16          tc_classid; // cb[6..7]
+ * If `magic` overlaps that, net/core/dev.c's `pkt_segs = 1` corrupts it
+ * (0xf08a36a2 -> 0xf08a0001) and hostap_master_start_xmit() silently
+ * drops every single data frame: the card associates and rx counters
+ * climb, but no ARP/DHCP/ping ever completes.
+ *
+ * This bug has now been introduced TWICE -- once upstream, and once here
+ * when the original fix was lost because it lived only in a gitignored
+ * directory. These assertions ensure a third time cannot happen quietly:
+ * shrink the padding and the kernel simply will not compile.
+ * See docs/archive/DEADLETTER-HOSTAP-SKB-CB.md.
+ */
+static_assert(offsetof(struct hostap_skb_tx_data, magic) >= 8,
+	      "hostap_skb_tx_data.magic overlaps qdisc_skb_cb's fixed head; "
+	      "__padding_for_default_qdiscs is too small");
+static_assert(sizeof(struct hostap_skb_tx_data) <= 48,
+	      "hostap_skb_tx_data exceeds the 48-byte skb->cb limit");
 
 
 #ifndef PRISM2_NO_DEBUG

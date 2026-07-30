@@ -625,15 +625,34 @@ static int w100fb_pan_display(struct fb_var_screeninfo *var,
 {
 	struct w100fb_par *par = info->par;
 	unsigned long offset;
-	int ret;
 
 	if (var->xoffset != 0 || var->yoffset + info->var.yres >
 				 info->var.yres_virtual)
 		return -EINVAL;
 
-	ret = w100_vsync();
-	if (ret)
-		return ret;
+	/*
+	 * FIX (2026-07-30, piko project): do NOT fail the pan on a vsync
+	 * timeout.
+	 *
+	 * w100_vsync() times out on this hardware ("w100fb: vsync wait timed
+	 * out" -- the vline status bit in mmGEN_INT_STATUS never asserts;
+	 * root cause still open, try vsync_mode=1 for the frame-counter
+	 * wait instead). Propagating -ETIMEDOUT made pan_display fail
+	 * outright, which breaks double-buffering / panning for every
+	 * userspace consumer (X11/matchbox, quake-fb) even though the pan
+	 * itself is perfectly capable of proceeding.
+	 *
+	 * A failed vsync wait means only "we could not sync to the retrace",
+	 * i.e. possible tearing -- not "the pan is impossible". Degrade
+	 * gracefully: carry on and program the new scanout offset. The
+	 * timeout is still reported (rate-limited) inside w100_vsync(), so
+	 * this stays visible rather than silently swallowed.
+	 *
+	 * The mode-set path (w100fb_activate_var) already ignores this
+	 * return value for the same reason, which is why the framebuffer
+	 * console works despite the timeouts.
+	 */
+	w100_vsync();
 
 	offset = w100fb_scanout_offset(par, var->yoffset);
 	writel(W100_FB_BASE + ((offset * BITS_PER_PIXEL / 8) & ~0x03UL),
