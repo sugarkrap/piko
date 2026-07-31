@@ -13,6 +13,13 @@ set -eu
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
+#     and usr/sbin/piko-smf-write, the NAND writer it drives
+#   - boot/zImage-smf, the mtd1 bootstrap kernel, when one is present
+#
+# One package covers the whole ROM, but the smf/mtd1 half is never written
+# as part of applying it -- piko-update skips it entirely unless it really
+# changed, and even then defers to a manual `smfcommit` after a successful
+# reboot. See docs/HOWTO-OFFLINE-UPDATE.md.
 #
 # This is the offline counterpart to tools/chunked-deploy.sh (which pushes
 # the same kind of update live over SSH). Use this one when the device
@@ -100,6 +107,28 @@ fi
 STRIP="${GCC%gcc}strip"
 command -v "$STRIP" >/dev/null 2>&1 && "$STRIP" "$STAGE/piko-update" || true
 manifest_add "$STAGE/piko-update" "usr/sbin/piko-update" 755
+
+# piko-update execs this for all NAND I/O on the smf partition (compare,
+# backup, write) rather than carrying a second copy of the FTL mapping
+# logic -- see the header of userspace/src/piko-update.c. It has to ship in
+# the same package so the two always move together.
+echo "==> cross-compiling flash/piko-smf-write.c"
+"$GCC" -march=armv5te -O2 -static -Wall -Wextra \
+    -o "$STAGE/piko-smf-write" "$REPO/flash/piko-smf-write.c"
+command -v "$STRIP" >/dev/null 2>&1 && "$STRIP" "$STAGE/piko-smf-write" || true
+manifest_add "$STAGE/piko-smf-write" "usr/sbin/piko-smf-write" 755
+
+# The mtd1 bootstrap kernel. Shipping it in every package is deliberate and
+# is NOT a per-update flash: piko-update compares it against what mtd1
+# already holds and does nothing when they match, which is nearly always.
+# Only a genuine change stages /boot/smf-pending for a manual `smfcommit`.
+if [ -f "$REPO/flash/zImage-mtd1-bootstrap" ]; then
+    echo "==> including bootstrap image (flash/zImage-mtd1-bootstrap)"
+    manifest_add "$REPO/flash/zImage-mtd1-bootstrap" "boot/zImage-smf" 644
+else
+    echo "==> no flash/zImage-mtd1-bootstrap -- package will not carry a bootstrap image"
+    echo "# bootstrap: not included (no flash/zImage-mtd1-bootstrap present)" >> "$MANIFEST"
+fi
 
 echo "==> packaging rootfs/ overlay (etc/, usr/sbin/, init -- whatever's there)"
 ( cd "$REPO/rootfs" && find . -type f ) | sed 's#^\./##' | while read -r rel; do

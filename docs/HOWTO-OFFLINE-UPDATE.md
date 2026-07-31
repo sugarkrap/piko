@@ -13,12 +13,25 @@ updates the running system directly, no network involved at all.*
 |---|---|
 | Device boots, WiFi/SSH work | `tools/build-and-deploy.sh` — see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md` |
 | Device boots, but WiFi/SSH is unavailable or you'd rather not depend on it | **`piko-update`** (this doc) |
-| Device unreachable / unbootable, or the `smf`/mtd1 bootstrap partition itself needs to change | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
+| Iterating on the bootstrap kernel with the device on WiFi | `flash/run-stage2-smf-update.sh` |
+| Device unreachable / unbootable | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
 
-`piko-update` only ever touches the `home` partition (mtd3) — the same
-territory `chunked-deploy.sh` already updates live over SSH (stage-2
-kernel, modules, `/etc`, `/usr/sbin`). It never does raw NAND I/O and
-never touches `smf`/mtd1; that stays `flash/picoupdate.sh`'s job.
+`piko-update` is the single updater for the whole ROM — one package covers
+both partitions. But they are not equally dangerous, and the mechanism
+deliberately keeps them apart.
+
+| | `home` (mtd3) | `smf` (mtd1) |
+|---|---|---|
+| Holds | userspace, `/etc`, stage-2 kernel + modules | the tiny kexec bootstrap kernel |
+| Seen by the updater as | ordinary files on a live JFFS2 filesystem | raw NAND behind the Sharp FTL |
+| Installing means | `rename()` into place | erase + reprogram blocks |
+| If it goes wrong | boot `zImage-full.bak`, or fix it over SSH | **the board does not boot, and there is no serial or USB to recover through** |
+| How often | every package | only when the bootstrap really changed, and only on an explicit second command |
+
+Both *can* be written while the system runs — nothing executes from either
+partition at runtime, because the bootstrap kexec'd the stage-2 kernel
+into RAM at boot. The asymmetry isn't whether a write is possible, it's
+whether a torn write is survivable. See "Updating the bootstrap" below.
 
 ## Building a package
 
@@ -88,7 +101,11 @@ What happens, in order:
    panic-recovery procedure in `docs/HOWTO-BUILD-DEPLOY-KERNEL.md` already
    looks for (`cp zImage-full.bak zImage-full; reboot`, done by hand at
    the console since there's no serial/USB cable).
-4. The device reboots via `softreboot` (the proven-safe kexec self-jump —
+4. If the package carries a bootstrap image (`boot/zImage-smf`), it is
+   compared against what `smf` actually holds. Identical — the normal case
+   — and nothing happens. Different, and `/boot/smf-pending` is written.
+   **No NAND is erased or written here either way.**
+5. The device reboots via `softreboot` (the proven-safe kexec self-jump —
    this hardware's normal reboot path is indistinguishable from a hard
    poweroff, see `softreboot`'s own comments).
 
@@ -98,6 +115,54 @@ Useful flags:
   sanity-check a package before committing to it.
 - `--no-reboot` — installs but leaves the reboot to you (run `softreboot`
   by hand when ready).
+- `--commit-smf` — see below. Also reachable as `smfcommit`.
+
+## Updating the bootstrap
+
+Every package can carry the mtd1 bootstrap kernel, and shipping it costs
+nothing: `piko-update` compares it against what's already in flash
+(`piko-smf-write --compare`, read-only) and does nothing at all when they
+match. Since the bootstrap changes maybe twice a year, essentially every
+update takes that path and never goes near NAND.
+
+When it *has* changed, the write is still not done there and then:
+
+1. `piko-update` records `/boot/smf-pending` and reboots into the
+   newly-installed stage-2 — **the old bootstrap is untouched and still
+   working at this point.**
+2. If the device comes back up, that reboot has just proved the new kernel
+   and rootfs boot. `rcS` prints a reminder at the console.
+3. You plug in the AC adapter and type:
+
+   ```
+   smfcommit
+   ```
+
+4. That re-verifies the staged image's MD5, re-checks that flash really
+   differs, takes a **verified** full-partition backup to
+   `/boot/smf-backup-<hash>.bin`, then erases and writes, and finally
+   verifies the readback before clearing the marker.
+5. The new bootstrap takes effect at the next **cold** boot.
+
+If the device *doesn't* come back up in step 2, don't run `smfcommit` —
+the old bootstrap is still in place, which is the whole point of the
+ordering.
+
+Note this is the reverse of `docs/FLASH-MTD1-MTD3-SAFE.md`, which flashes
+mtd1 *before* mtd3. That procedure recovers a board that is already down;
+this one runs on a board that currently boots, where a working mtd1 is the
+only thing keeping it recoverable. Same constraint, opposite order.
+
+`smfcommit` refuses on battery power (`--force` overrides). Losing power
+partway through the erase+program window is the realistic way to lose this
+board. If `/proc/apm` can't be read at all it warns and continues rather
+than blocking — a sensor that is merely broken shouldn't make the tool
+unusable — so check the adapter yourself.
+
+There is no A/B slot for the bootstrap and there can't be: the Sharp
+bootloader reads a fixed logical address (917504), so a second copy
+elsewhere in the partition could never be selected. The ~5 MB free above
+the kernel slot is not usable for this.
 
 **Config files and userspace binaries are always overwritten, no conflict
 detection.** If you've hand-edited something under `/etc` or `/usr/sbin`,

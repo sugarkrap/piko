@@ -413,7 +413,7 @@ static int run_nandlogical(const char *mtd_dev, const char *mode, const char *ad
  * session that found it): the Sharp FTL stores 3 redundant copies of each
  * physical block's logical block number in OOB bytes 8-13 of that block's
  * first page (format: 16-bit value = (logical_block << 1) | even_parity,
- * see flash/pico-smf-write.c's ftl_encode/ftl_decode for the original
+ * see flash/piko-smf-write.c's ftl_encode/ftl_decode for the original
  * derivation). Physical block order has no fixed relationship to logical
  * order at all (block 0 mapped to logical 16 in that forensic sample) --
  * so the only trustworthy way to confirm a write "took" at the FTL level

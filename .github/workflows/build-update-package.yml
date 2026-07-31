@@ -14,6 +14,18 @@ name: Build piko-update package
 # this device for real once already (DEADLETTER-WIFI-SSH.md). A package
 # that fails this is never uploaded.
 #
+# The package also carries usr/sbin/piko-smf-write and (when one is
+# present locally) the boot/zImage-smf bootstrap kernel. QEMU's spitz has
+# no Sharp-FTL smf partition, so the smoke test cannot flash one -- it
+# instead pins down that the smf paths stay inert: the writer ships, a dry
+# run stages no bootstrap write, and --commit-smf with nothing pending is
+# a clean no-op. The real NAND write only ever happens on hardware, by
+# hand, via `smfcommit` (docs/HOWTO-OFFLINE-UPDATE.md).
+#
+# Note CI never carries a bootstrap image: flash/zImage-* is gitignored,
+# so CI packages are always "no bootstrap included". That is the intended
+# fallback, not a failure.
+#
 # If kernel-src reconstruction itself fails for some other reason (a
 # kernel.org hiccup, an oldconfig failure, etc.), the job falls back to a
 # rootfs-only package (piko-update + rootfs/ overlay, no kernel bump)
@@ -34,6 +46,9 @@ on:
       - "userspace/src/**"
       - "rootfs/**"
       - "flash/build-update-package.sh"
+      # Compiled into the package and exec'd by piko-update for every smf
+      # operation, so a change here changes what ships.
+      - "flash/piko-smf-write.c"
       - "tools/setup-kernel-src.sh"
       - "flash/qemu-smoke-test.sh"
       - "modules/**"

@@ -1,22 +1,65 @@
 /*
- * piko-update -- apply a piko-update package (kernel + modules + rootfs
- * overlay) to the running "home" partition (mtd3), entirely offline: no
+ * piko-update -- apply a piko-update package to this device, offline: no
  * WiFi, no SSH, no second computer. Point it at a package staged on the SD
  * card and it does what tools/chunked-deploy.sh does over SSH, but locally:
  *
  *   piko-update /mnt/card/update.tar [--dry-run] [--no-reboot]
+ *   piko-update --commit-smf [--force]
  *
- * home is a normal writable JFFS2 filesystem while the device is running
- * (see docs/HOWTO-BUILD-DEPLOY-KERNEL.md) -- this tool never touches the
- * smf/mtd1 bootstrap partition or does any raw NAND I/O; that stays
- * flash/picoupdate.sh's job.
+ * This is the single updater for the whole ROM. It covers both partitions,
+ * but they are NOT equally dangerous and the mechanism keeps them apart:
+ *
+ *   home (mtd3)  -- a normal writable JFFS2 filesystem while the device is
+ *                   running (docs/HOWTO-BUILD-DEPLOY-KERNEL.md). Userspace,
+ *                   /etc, and the stage-2 kernel all live here as ordinary
+ *                   files. Replacing them is a rename(). Reversible, no raw
+ *                   NAND I/O, no way to lose the board.
+ *
+ *   smf (mtd1)   -- the raw NAND bootstrap partition holding the tiny
+ *                   kexec loader kernel. Nothing executes from it at
+ *                   runtime (it kexec'd into RAM at boot), so it *can* be
+ *                   written live -- but a torn write leaves a board that
+ *                   does not boot, and there is no serial and no USB to
+ *                   recover through. The only floor is a human with an SD
+ *                   card and the Sharp maintenance menu
+ *                   (docs/FLASH-MTD1-MTD3-SAFE.md).
+ *
+ * So an smf image in a package is never written during the same run that
+ * installs home. Instead:
+ *
+ *   1. The image rides in the package as an ordinary file, boot/zImage-smf,
+ *      staged and MD5-verified by exactly the same code as everything else.
+ *   2. After home is installed, its content is compared against what mtd1
+ *      actually holds (piko-smf-write --compare, read-only). Identical is
+ *      the common case -- the bootstrap changes maybe twice a year -- and
+ *      then nothing happens at all. This is what makes shipping the
+ *      bootstrap in every package free rather than a recurring brick risk.
+ *   3. Only if it differs is /boot/smf-pending written, and the device
+ *      reboots into the newly installed stage-2 *first*.
+ *   4. The NAND write happens later, by hand, via `smfcommit` (which runs
+ *      piko-update --commit-smf) -- once the new kernel and rootfs have
+ *      demonstrably booted. That reboot is the checkpoint: it means only
+ *      one half of the boot chain is ever in question at a time.
+ *
+ * Note this is the reverse of docs/FLASH-MTD1-MTD3-SAFE.md's SD-card
+ * order, which does mtd1 before mtd3. That procedure is reviving a board
+ * that is already down; this one is running on a board that currently
+ * boots, and a working mtd1 is the only thing keeping it recoverable.
  *
  * On this device we can never assume the running ROM has tar/unzip/gzip/
  * md5sum available as external commands -- that's exactly why the
  * chunked-deploy.sh comments mention this rootfs's busybox has no md5sum
- * built in. So this binary is fully self-contained: it reads plain
- * (uncompressed) POSIX ustar directly with its own minimal reader, and
- * hashes with the from-scratch MD5 in md5.h. No forked-out tools at all.
+ * built in. So this binary is self-contained for archive handling: it
+ * reads plain (uncompressed) POSIX ustar with its own minimal reader and
+ * hashes with the from-scratch MD5 in md5.h.
+ *
+ * The one thing it does exec is /usr/sbin/piko-smf-write, for NAND I/O
+ * only. That is not a walk-back of the no-external-tools rule -- the rule
+ * is about busybox applets that may not exist on an unknown ROM.
+ * piko-smf-write ships in this same package, at a known path, and its FTL
+ * mapping code is the byte-verified path for this partition. Duplicating
+ * that logic here to avoid a fork() would create two implementations of
+ * the one routine that can brick the board, free to drift apart.
  *
  * Package format: a plain ustar archive whose first entry is a file named
  * "MANIFEST" -- a text file, one line per shipped file:
@@ -52,6 +95,9 @@
  *   5. Reboots via /usr/sbin/softreboot (kexec self-jump), never a raw
  *      reboot() -- this hardware's normal restart path is indistinguishable
  *      from a hard poweroff (see softreboot's own comments).
+ *   6. An smf write is gated on a *verified* full-partition backup and on
+ *      mains power, and is never automatic: it takes a deliberate second
+ *      command after a successful boot.
  *
  * Cross-compile (same toolchain as the rest of userspace/src):
  *   GCC=.../arm-buildroot-linux-uclibcgnueabi-gcc
@@ -71,6 +117,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "md5.h"
@@ -82,6 +129,29 @@
 #define LOCK_PATH       "/tmp/piko-update.lock"
 #define SOFTREBOOT      "/usr/sbin/softreboot"
 #define ZIMAGE_PATH     "boot/zImage-full"
+
+/* smf / mtd1 bootstrap partition.
+ *
+ * SMF_LADDR and SMF_MAX are the *logical* NAND geometry of the kernel slot
+ * and are not ours to choose -- the Sharp bootloader reads a fixed logical
+ * address. Both numbers are load-bearing and documented in AGENTS.md and
+ * docs/DEADLETTER-MTD1-OFFSET.md. Do not "clean them up".
+ *
+ * The partition is found by NAME, never by number: this rootfs's mainline
+ * kernel numbers it mtd0 while the Cacko/recovery kernel the SD-card
+ * installer runs under calls the same partition mtd1 (AGENTS.md). A
+ * hardcoded mtdN here would write the wrong partition under one of them. */
+#define SMF_LADDR       917504
+#define SMF_MAX         1294336
+#define SMF_IMAGE_PATH  "/boot/zImage-smf"
+#define SMF_PENDING     "/boot/smf-pending"
+#define SMF_WRITER      "/usr/sbin/piko-smf-write"
+#define SMF_PENDING_MAGIC "PIKO-SMF-PENDING 1"
+
+/* piko-smf-write --compare exit codes; anything else means "undetermined",
+ * which must never be treated as "already up to date". */
+#define SMF_CMP_SAME    0
+#define SMF_CMP_DIFFERS 3
 
 struct tar_header {
     char name[100];
@@ -630,15 +700,383 @@ static void apply_update(void)
     printf("piko-update: %d file(s) installed.\n", manifest_count);
 }
 
+/* ---------------------------------------------------------------------- *
+ * smf / mtd1 bootstrap partition                                          *
+ * ---------------------------------------------------------------------- */
+
+/* Runs SMF_WRITER and returns its exit status, or -1 if it could not be
+ * run at all. -1 and "nonzero exit" are deliberately distinguishable:
+ * callers must not read "couldn't exec" as any kind of answer about what
+ * is in flash. */
+static int run_writer(char *const args[])
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        execv(SMF_WRITER, args);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+    if (!WIFEXITED(status))
+        return -1;
+    if (WEXITSTATUS(status) == 127)
+        return -1;
+    return WEXITSTATUS(status);
+}
+
+/* Locates the smf partition by name in /proc/mtd. See SMF_LADDR's comment
+ * for why this is never a hardcoded mtdN. */
+static int find_smf_mtd(char *out, size_t outsz)
+{
+    FILE *f = fopen("/proc/mtd", "r");
+    char line[256];
+    int found = 0;
+
+    if (!f)
+        return -1;
+    while (fgets(line, sizeof(line), f)) {
+        int n;
+        if (strstr(line, "\"smf\"") && sscanf(line, "mtd%d:", &n) == 1) {
+            snprintf(out, outsz, "/dev/mtd%d", n);
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found ? 0 : -1;
+}
+
+static int md5_file(const char *path, char *hex_out)
+{
+    int fd = open(path, O_RDONLY);
+    unsigned char buf[BLOCK_SIZE * 8];
+    unsigned char digest[16];
+    md5_ctx ctx;
+    ssize_t n;
+
+    if (fd < 0)
+        return -1;
+    md5_init(&ctx);
+    while ((n = read(fd, buf, sizeof(buf))) > 0)
+        md5_update(&ctx, buf, (size_t)n);
+    close(fd);
+    if (n < 0)
+        return -1;
+    md5_final(&ctx, digest);
+    md5_to_hex(digest, hex_out);
+    return 0;
+}
+
+/* Fills *ac (1 mains, 0 battery, -1 unknown) and *pct (or -1 unknown).
+ * Returns -1 if /proc/apm could not be read or parsed at all. */
+static int read_apm(int *ac, int *pct)
+{
+    FILE *f = fopen("/proc/apm", "r");
+    char driver[32];
+    int maj, min;
+    unsigned aflags, ac_raw, bstat, bflag;
+    int percent;
+    int got;
+
+    *ac = -1;
+    *pct = -1;
+    if (!f)
+        return -1;
+    got = fscanf(f, "%31s %d.%d 0x%x 0x%x 0x%x 0x%x %d%%",
+                 driver, &maj, &min, &aflags, &ac_raw, &bstat, &bflag, &percent);
+    fclose(f);
+    if (got < 5)
+        return -1;
+
+    if (ac_raw == 0x01)
+        *ac = 1;
+    else if (ac_raw == 0x00)
+        *ac = 0;
+
+    if (got >= 8 && percent >= 0 && percent <= 100)
+        *pct = percent;
+    return 0;
+}
+
+/* Returns 0 if it is acceptable to erase the bootstrap partition now.
+ *
+ * A torn smf write is unrecoverable on this board, and the window is long
+ * (full-partition backup, then erase+program). Losing power inside it is
+ * the realistic way to lose the board, so this refuses on battery.
+ *
+ * If /proc/apm cannot be read it warns and continues rather than blocking:
+ * this board's APM has been unreliable before (it reported -1% until the
+ * sharpsl param block was restored), and a sensor that is merely broken
+ * must not make the updater permanently unusable. Explicit "on battery" is
+ * a refusal; "no idea" is a warning. --force overrides either. */
+static int power_ok(int force)
+{
+    int ac, pct;
+
+    if (read_apm(&ac, &pct) < 0) {
+        printf("piko-update: WARNING: cannot read /proc/apm -- power state unknown.\n");
+        printf("piko-update:          Make sure the AC adapter is connected.\n");
+        return 0;
+    }
+
+    if (ac == 1) {
+        if (pct >= 0)
+            printf("piko-update: power: on AC (battery %d%%)\n", pct);
+        else
+            printf("piko-update: power: on AC\n");
+        return 0;
+    }
+
+    if (ac == 0) {
+        fprintf(stderr, "piko-update: refusing to write smf on battery power.\n");
+        fprintf(stderr, "piko-update: connect the AC adapter and run smfcommit again.\n");
+        if (force)
+            fprintf(stderr, "piko-update: --force given, continuing anyway.\n");
+        return force ? 0 : -1;
+    }
+
+    printf("piko-update: WARNING: /proc/apm reports AC status as unknown.\n");
+    printf("piko-update:          Make sure the AC adapter is connected.\n");
+    return 0;
+}
+
+/* Asks the writer whether mtd1 already holds exactly `image`.
+ * Returns the writer's exit code, or -1 if it could not be consulted. */
+static int smf_compare(const char *mtd_dev, const char *image)
+{
+    char laddr[32], maxsz[32];
+    char *args[8];
+
+    snprintf(laddr, sizeof(laddr), "%u", (unsigned)SMF_LADDR);
+    snprintf(maxsz, sizeof(maxsz), "%u", (unsigned)SMF_MAX);
+
+    args[0] = (char *)"piko-smf-write";
+    args[1] = (char *)"--compare";
+    args[2] = (char *)mtd_dev;
+    args[3] = (char *)image;
+    args[4] = laddr;
+    args[5] = maxsz;
+    args[6] = NULL;
+
+    return run_writer(args);
+}
+
+static void smf_write_pending(const char *md5hex)
+{
+    FILE *f = fopen(SMF_PENDING, "w");
+
+    if (!f)
+        die("could not record pending smf update in %s: %s",
+            SMF_PENDING, strerror(errno));
+    fprintf(f, "%s\n%s  %s\n", SMF_PENDING_MAGIC, md5hex, SMF_IMAGE_PATH);
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+    sync();
+}
+
+static void smf_notice_pending(void)
+{
+    printf("\n");
+    printf("  ============================================================\n");
+    printf("   BOOTSTRAP UPDATE PENDING\n");
+    printf("  \n");
+    printf("   This package also updates the smf boot partition, which\n");
+    printf("   is NOT being written now. The device will reboot into the\n");
+    printf("   new system first.\n");
+    printf("  \n");
+    printf("   If it comes back up fine, plug in the AC adapter and type:\n");
+    printf("  \n");
+    printf("       smfcommit\n");
+    printf("  \n");
+    printf("   If it does not come back up, do NOT run that -- the old\n");
+    printf("   bootstrap is still in place and still works.\n");
+    printf("  ============================================================\n");
+    printf("\n");
+}
+
+/* Called after home (mtd3) has been installed. Decides whether an smf
+ * write is needed later, and never performs one. */
+static void smf_stage_pending(void)
+{
+    char mtd_dev[64];
+    char hex[33];
+    int cmp;
+
+    if (access(SMF_IMAGE_PATH, F_OK) != 0)
+        return;                 /* package carries no bootstrap image */
+
+    if (md5_file(SMF_IMAGE_PATH, hex) < 0)
+        die("could not hash %s: %s", SMF_IMAGE_PATH, strerror(errno));
+
+    if (find_smf_mtd(mtd_dev, sizeof(mtd_dev)) < 0) {
+        printf("piko-update: no \"smf\" partition in /proc/mtd -- "
+               "skipping bootstrap update.\n");
+        return;
+    }
+
+    cmp = smf_compare(mtd_dev, SMF_IMAGE_PATH);
+    if (cmp == SMF_CMP_SAME) {
+        printf("piko-update: bootstrap (smf) already up to date, nothing to do.\n");
+        unlink(SMF_PENDING);    /* clear any stale marker */
+        return;
+    }
+
+    if (cmp != SMF_CMP_DIFFERS) {
+        /* Could not get a confident answer. Record it as pending rather
+         * than dropping it -- the commit step re-checks everything and
+         * will refuse loudly if things are still wrong. Silently skipping
+         * would leave the user believing the bootstrap was updated. */
+        printf("piko-update: WARNING: could not compare %s against %s.\n",
+               SMF_IMAGE_PATH, mtd_dev);
+        printf("piko-update:          Recording it as pending to be safe.\n");
+    }
+
+    smf_write_pending(hex);
+    smf_notice_pending();
+}
+
+/* piko-update --commit-smf: the deliberate second step, run by hand after
+ * the new system has booted. This is the only code path that erases NAND. */
+static void smf_commit(int force)
+{
+    char mtd_dev[64];
+    char want[33], have[33];
+    char backup[MAX_PATH];
+    char laddr[32], maxsz[32];
+    char line[256];
+    FILE *f;
+    int cmp, rc;
+    char *args[8];
+
+    f = fopen(SMF_PENDING, "r");
+    if (!f) {
+        printf("piko-update: no bootstrap update is pending (%s absent).\n",
+               SMF_PENDING);
+        printf("piko-update: nothing to do.\n");
+        return;
+    }
+    if (!fgets(line, sizeof(line), f) ||
+        strncmp(line, SMF_PENDING_MAGIC, strlen(SMF_PENDING_MAGIC)) != 0) {
+        fclose(f);
+        die("%s is not a pending-update marker this version understands",
+            SMF_PENDING);
+    }
+    if (fscanf(f, "%32s", want) != 1 || !is_hex32(want)) {
+        fclose(f);
+        die("%s has no usable checksum line", SMF_PENDING);
+    }
+    fclose(f);
+
+    if (access(SMF_IMAGE_PATH, F_OK) != 0)
+        die("%s is pending but %s is missing -- re-run the package",
+            SMF_PENDING, SMF_IMAGE_PATH);
+
+    /* Re-hash rather than trusting the earlier verify: the image has sat
+     * on flash across at least one reboot since it was checked. */
+    if (md5_file(SMF_IMAGE_PATH, have) < 0)
+        die("could not hash %s: %s", SMF_IMAGE_PATH, strerror(errno));
+    if (strcmp(want, have) != 0)
+        die("%s changed since it was staged (expected %s, got %s) -- "
+            "refusing to flash it", SMF_IMAGE_PATH, want, have);
+    printf("piko-update: pending image verified: %s (%s)\n", SMF_IMAGE_PATH, have);
+
+    if (find_smf_mtd(mtd_dev, sizeof(mtd_dev)) < 0)
+        die("no \"smf\" partition found in /proc/mtd");
+    printf("piko-update: smf partition: %s\n", mtd_dev);
+
+    if (access(SMF_WRITER, X_OK) != 0)
+        die("%s is missing or not executable", SMF_WRITER);
+
+    cmp = smf_compare(mtd_dev, SMF_IMAGE_PATH);
+    if (cmp == SMF_CMP_SAME) {
+        printf("piko-update: %s already holds this image -- nothing to write.\n",
+               mtd_dev);
+        unlink(SMF_PENDING);
+        sync();
+        return;
+    }
+    if (cmp != SMF_CMP_DIFFERS)
+        die("could not read %s to compare it (writer exit %d) -- "
+            "not erasing a partition I cannot read", mtd_dev, cmp);
+
+    if (power_ok(force) < 0)
+        exit(1);
+
+    /* Take the backup as its own verified step before anything is erased,
+     * so a bad backup is discovered while the board still boots. */
+    snprintf(backup, sizeof(backup), "/boot/smf-backup-%.8s.bin", have);
+    printf("piko-update: backing up %s to %s ...\n", mtd_dev, backup);
+
+    args[0] = (char *)"piko-smf-write";
+    args[1] = (char *)"--backup";
+    args[2] = mtd_dev;
+    args[3] = backup;
+    args[4] = NULL;
+    rc = run_writer(args);
+    if (rc != 0)
+        die("backup of %s failed (writer exit %d) -- nothing was erased", mtd_dev, rc);
+    sync();
+
+    printf("\n");
+    printf("  *** WRITING BOOTSTRAP PARTITION -- DO NOT POWER OFF ***\n\n");
+
+    snprintf(laddr, sizeof(laddr), "%u", (unsigned)SMF_LADDR);
+    snprintf(maxsz, sizeof(maxsz), "%u", (unsigned)SMF_MAX);
+    args[0] = (char *)"piko-smf-write";
+    args[1] = mtd_dev;
+    args[2] = (char *)SMF_IMAGE_PATH;
+    args[3] = laddr;
+    args[4] = maxsz;
+    args[5] = NULL;
+    rc = run_writer(args);
+    sync();
+
+    if (rc != 0) {
+        fprintf(stderr, "\npiko-update: smf write FAILED (writer exit %d).\n", rc);
+        fprintf(stderr, "piko-update: a verified backup is at %s\n", backup);
+        fprintf(stderr, "piko-update: DO NOT power off. The running system is\n");
+        fprintf(stderr, "piko-update: still fine -- see docs/FLASH-MTD1-MTD3-SAFE.md\n");
+        fprintf(stderr, "piko-update: before rebooting.\n");
+        exit(1);
+    }
+
+    /* The writer verifies its own payload readback (its Step 7), so
+     * reaching here means the flash content was confirmed. */
+    unlink(SMF_PENDING);
+    sync();
+
+    printf("\npiko-update: bootstrap updated and verified.\n");
+    printf("piko-update: backup kept at %s\n", backup);
+    printf("piko-update: the new bootstrap takes effect at the next COLD boot.\n");
+}
+
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s <package.tar> [--dry-run] [--no-reboot]\n", prog);
+    fprintf(stderr,
+        "usage: %s <package.tar> [--dry-run] [--no-reboot]\n"
+        "       %s --commit-smf [--force]\n"
+        "\n"
+        "  --dry-run     verify the package, change nothing\n"
+        "  --no-reboot   install but leave the reboot to you\n"
+        "  --commit-smf  write a pending bootstrap update to the smf\n"
+        "                partition (also available as `smfcommit`)\n"
+        "  --force       with --commit-smf, proceed on battery power\n",
+        prog, prog);
     exit(1);
 }
 
 int main(int argc, char **argv)
 {
     const char *archive_path = NULL;
+    int commit_smf = 0;
+    int force = 0;
     int i;
     int lockfd;
 
@@ -647,12 +1085,16 @@ int main(int argc, char **argv)
             dry_run = 1;
         else if (strcmp(argv[i], "--no-reboot") == 0)
             no_reboot = 1;
+        else if (strcmp(argv[i], "--commit-smf") == 0)
+            commit_smf = 1;
+        else if (strcmp(argv[i], "--force") == 0)
+            force = 1;
         else if (!archive_path)
             archive_path = argv[i];
         else
             usage(argv[0]);
     }
-    if (!archive_path)
+    if (commit_smf ? archive_path != NULL : archive_path == NULL)
         usage(argv[0]);
 
     lockfd = open(LOCK_PATH, O_CREAT | O_RDWR, 0644);
@@ -660,6 +1102,14 @@ int main(int argc, char **argv)
         die("could not open lock file %s: %s", LOCK_PATH, strerror(errno));
     if (flock(lockfd, LOCK_EX | LOCK_NB) < 0)
         die("another piko-update is already running (lock held on %s)", LOCK_PATH);
+
+    /* Held under the same lock as a package install: committing a
+     * bootstrap write while an install is mid-flight would be exactly the
+     * concurrency the lock exists to prevent. */
+    if (commit_smf) {
+        smf_commit(force);
+        return 0;
+    }
 
     rmtree(STAGING_DIR);
     if (mkdir_p(STAGING_DIR) < 0)
@@ -675,6 +1125,9 @@ int main(int argc, char **argv)
 
     apply_update();
     rmtree(STAGING_DIR);
+
+    /* Only after home is installed, and never a write -- see the header. */
+    smf_stage_pending();
 
     if (no_reboot) {
         printf("piko-update: done. Run softreboot manually when ready.\n");
