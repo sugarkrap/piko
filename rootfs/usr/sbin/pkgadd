@@ -1,0 +1,197 @@
+#!/bin/sh
+# pkgadd: install a package (.ipk), either into the NAND root or onto the
+# SD card.
+#
+# Single word, and every common form is typable without / : [ ] | --
+# AGENTS.md, the device keyboard cannot produce those characters. That is
+# why this takes a NUMBER from a listing rather than a path:
+#
+#   pkgadd              list installable .ipk files it can find, numbered
+#   pkgadd 2            install number 2 into the NAND root
+#   pkgadd 2 card       install number 2 onto the SD card
+#   pkgadd FILE         install an explicit path into the NAND root
+#   pkgadd FILE card    install an explicit path onto the SD card
+#
+# Over SSH from a laptop, the FILE forms are the convenient ones. On the
+# device itself, drop the .ipk on the SD card from a PC, insert it, and
+# type `pkgadd` then `pkgadd 1`.
+#
+# See also:  pkglist (what is installed), pkgdel (remove), deskscan
+#            (refresh the desktop), sdapps (what the card provides).
+
+OPKG=/usr/bin/opkg
+CONF=/etc/opkg/opkg.conf
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT=/mnt/card
+
+# Where to look for .ipk files, in order. The card's own packages
+# directory first, then the card root (people copy files to the top level
+# of a card from a PC without making directories), then the usual
+# scratch spots for an scp'd file.
+SEARCH="$CARD_ROOT/packages $CARD_MNT /tmp /root"
+
+card_mounted() {
+    grep -q " $CARD_MNT " /proc/mounts 2>/dev/null
+}
+
+list_candidates() {
+    n=0
+    for d in $SEARCH; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.ipk; do
+            [ -f "$f" ] || continue
+            n=$((n + 1))
+            echo "$n $f"
+        done
+    done
+}
+
+if [ ! -x "$OPKG" ]; then
+    echo "pkgadd: $OPKG is missing -- opkg is not installed on this device."
+    exit 1
+fi
+
+# --- no arguments: just show what is available ------------------------
+if [ $# -eq 0 ]; then
+    echo "Installable packages found:"
+    echo
+    # Counted separately rather than incremented inside the loop: each
+    # side of a pipeline runs in its own process here, so a counter set
+    # in the loop body would be lost when the subshell exits.
+    found="$(list_candidates | wc -l)"
+    list_candidates | while read num path; do
+        echo "  $num  $(basename "$path")"
+        echo "         $path"
+    done
+    if [ "$found" -eq 0 ]; then
+        echo "  (none)"
+        echo
+        echo "Looked in:"
+        for d in $SEARCH; do echo "    $d"; done
+        echo
+        if card_mounted; then
+            echo "An SD card IS mounted. Put .ipk files in its .zaurus/packages"
+            echo "directory, or just at the top level of the card."
+        else
+            echo "No SD card is mounted. Insert one, or copy an .ipk to /tmp."
+        fi
+        exit 0
+    fi
+    echo
+    echo "Install number N with:   pkgadd N"
+    echo "Onto the SD card with:   pkgadd N card"
+    exit 0
+fi
+
+# --- resolve argument 1 to a file -------------------------------------
+ARG="$1"
+DEST_ARG="${2:-root}"
+
+case "$ARG" in
+    ''|*[!0-9]*)
+        # Not a plain number: treat as a path.
+        PKGFILE="$ARG"
+        ;;
+    *)
+        PKGFILE="$(list_candidates | while read num path; do
+                       [ "$num" = "$ARG" ] && echo "$path"
+                   done)"
+        if [ -z "$PKGFILE" ]; then
+            echo "pkgadd: no package number $ARG. Run pkgadd with no arguments to list."
+            exit 1
+        fi
+        ;;
+esac
+
+if [ ! -f "$PKGFILE" ]; then
+    echo "pkgadd: no such file: $PKGFILE"
+    exit 1
+fi
+
+# --- resolve the destination ------------------------------------------
+# This is the part that has to fail rather than improvise. opkg is
+# perfectly willing to install to a path whose filesystem is not mounted:
+# /mnt/card is a real directory on the jffs2 root, so with no card in the
+# slot a card install would quietly land ON THE NAND, under a directory
+# that then shadows the real card the next time one is inserted -- and it
+# would eat the ~68 MiB root while looking like it worked.
+#
+# (This is also why /etc/opkg/opkg.conf does not declare the card as a
+# `dest`: opkg mkdir's every declared destination while merely parsing
+# the config, so even `opkg list-installed` would create that tree. The
+# card destination is added here, at runtime, only once it is real.)
+case "$DEST_ARG" in
+    root|nand|"")
+        DEST_OPTS=""
+        DEST_NAME="root"
+        WHERE="the NAND root filesystem"
+        ;;
+    card|sd)
+        if ! card_mounted; then
+            echo "pkgadd: no SD card is mounted at $CARD_MNT -- refusing."
+            echo
+            echo "Nothing was installed. Insert a card and try again, or"
+            echo "install to the NAND instead with:  pkgadd $ARG"
+            echo
+            echo "(Installing to $CARD_ROOT with no card mounted would write"
+            echo " to the NAND root, not to any card, and the files would be"
+            echo " hidden the moment a real card was inserted.)"
+            exit 1
+        fi
+        DEST_OPTS="--add-dest card:$CARD_ROOT -d card"
+        DEST_NAME="card"
+        WHERE="the SD card ($CARD_ROOT)"
+        ;;
+    *)
+        echo "pkgadd: unknown destination '$DEST_ARG'. Use 'card' or leave it out."
+        exit 1
+        ;;
+esac
+
+echo "Installing $(basename "$PKGFILE") to $WHERE ..."
+echo
+
+OUT="$("$OPKG" --conf "$CONF" $DEST_OPTS install "$PKGFILE" 2>&1)"
+RC=$?
+echo "$OUT"
+
+if [ "$RC" -eq 0 ]; then
+    echo
+    echo "Installed to $DEST_NAME."
+    # Nothing to do about the desktop here: matchbox-desktop watches the
+    # application directories with inotify and reloads on its own when a
+    # .desktop file appears (see src/mbdesktop_watch.c). `deskscan`
+    # exists if it ever needs a manual nudge.
+    exit 0
+fi
+
+# --- explain the failure ----------------------------------------------
+# opkg's own message for a rejected architecture is "Not selecting <pkg>
+# due to incompatible architecture" followed by "Unknown package", which
+# is accurate but tells the user nothing about WHY this device refuses
+# their file. Translate it.
+#
+# This is string matching on another program's output, which is fragile
+# by nature -- so it only ever ADDS an explanation. If opkg's wording
+# changes, the user still sees opkg's real message above, and this block
+# simply stops firing. It never suppresses anything.
+case "$OUT" in
+    *"incompatible architecture"*|*"no valid architecture"*|*"unsupported"*)
+        echo
+        echo "==> REFUSED: this package is not built for this system."
+        echo
+        echo "Almost certainly an original Sharp/Zaurus-era .ipk. Those are"
+        echo "built for ARM OABI against glibc 2.2.2, usually installing into"
+        echo "/home/QtPalmtop for Qtopia. This system is ARM EABI with uClibc"
+        echo "and no Qtopia, so the binaries inside cannot be loaded at all --"
+        echo "it is a different ABI, not merely an old package."
+        echo
+        echo "Retro-compatibility is not ready yet, so these are refused"
+        echo "rather than half-installed. Nothing was written."
+        echo
+        echo "Packages built by this project's tools/make-ipk.sh declare"
+        echo "'Architecture: piko' and install normally."
+        ;;
+esac
+
+exit "$RC"

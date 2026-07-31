@@ -116,6 +116,10 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/cardinfo
 !rootfs/usr/sbin/sdapps
 !rootfs/usr/sbin/smfcommit
+!rootfs/usr/sbin/pkgadd
+!rootfs/usr/sbin/pkgdel
+!rootfs/usr/sbin/pkglist
+!rootfs/usr/sbin/deskscan
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
@@ -175,6 +179,7 @@ userspace/stage-target/
 userspace/stage-host/
 # compiled host tools (built from the tracked .c next to them)
 userspace/src/md5sum
+userspace/src/kill
 # xsha1-compat: sha1.c/sha1.h are tracked source, libmd.* + sha1.o are
 # build output from compiling them
 userspace/src/xsha1-compat/*.o

@@ -1,0 +1,70 @@
+#!/bin/sh
+# deskscan: force the Matchbox desktop to rebuild its application menu now.
+#
+# Single word, no punctuation, per AGENTS.md -- this gets typed on the
+# device's own keyboard, which cannot produce / : [ ] | at all.
+#
+# YOU SHOULD NOT NORMALLY NEED THIS. matchbox-desktop watches for the
+# things that change its menu and reloads by itself:
+#
+#   * a .desktop file appearing or disappearing in any of the scanned
+#     application directories (what an opkg install or remove looks like),
+#     via inotify;
+#   * the SD card being inserted or removed, via the mount table, which
+#     is pollable -- see src/mbdesktop_watch.c in matchbox-desktop-classic
+#     for why inotify cannot be used for that part.
+#
+# This is kept for the cases that watching cannot cover: a .desktop file
+# edited in place (no create/delete, so nothing fires), a card whose
+# contents changed while it was in another machine, or simply confirming
+# by hand that the desktop is still alive and listening.
+
+KILL=/usr/local/bin/kill
+found=0
+signalled=0
+
+if [ ! -x "$KILL" ]; then
+    echo "deskscan: $KILL is missing."
+    echo "This busybox has no kill/killall/pkill applet at all, so there is"
+    echo "no other way to signal a process here. Build it with:"
+    echo "    \$GCC -march=armv5te -O2 -static -o kill userspace/src/kill.c"
+    exit 1
+fi
+
+# Match on the process NAME, from /proc/<pid>/comm, rather than by
+# grepping ps output.
+#
+# `ps | grep matchbox-desktop` is the obvious version and it is wrong: ps
+# prints full command lines, so it matches ANY process whose arguments
+# merely mention matchbox-desktop -- including the shell running this
+# script if it was invoked from a command line containing that string.
+# That is not hypothetical; it happened during development, and the
+# result was this script sending SIGHUP to its own caller and killing the
+# session it was run from.
+#
+# comm is truncated to 15 characters by the kernel (TASK_COMM_LEN is 16,
+# including the terminator), and "matchbox-desktop" is 16 characters, so
+# the value actually stored is "matchbox-deskto". Both spellings are
+# accepted so this keeps working if that ever changes.
+for d in /proc/[0-9]*; do
+    [ -r "$d/comm" ] || continue
+    c=$(cat "$d/comm" 2>/dev/null)
+    case "$c" in
+        matchbox-desktop|matchbox-deskto)
+            found=$((found + 1))
+            p=${d#/proc/}
+            if "$KILL" -1 "$p" 2>/dev/null; then
+                signalled=$((signalled + 1))
+            fi
+            ;;
+    esac
+done
+
+if [ "$found" -eq 0 ]; then
+    echo "deskscan: matchbox-desktop is not running -- nothing to refresh."
+    echo "(The graphical session may not have started. Check /tmp/matchbox-session.log)"
+    exit 1
+fi
+
+echo "deskscan: asked $signalled matchbox-desktop process(es) to reload."
+exit 0
