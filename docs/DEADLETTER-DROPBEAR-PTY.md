@@ -95,3 +95,69 @@ live in stage-2 `rcS` (`/etc/shells`, ptmx symlink) and the rebuilt dropbear
 found" in the shell. Enable in busybox config + rebuild if wanted; not
 required for login. piko's home is `chown`ed to piko at boot in rcS (the
 `mkfs.jffs2 -q` squash makes everything root-owned).
+
+---
+
+## Follow-up 2026-07-31 — the build is reproducible now, and file transfer works
+
+Everything above was a **hand build of a gitignored source drop**
+(`userspace/src/dropbear-2025.88/`). That tree is no longer on any disk, so
+until now this project could not rebuild its own SSH server — the one piece
+of software its only remote access path depends on. `tools/build-ssh.sh`
+fixes that: it fetches + SHA-256-verifies dropbear 2025.88, applies both
+fixes from this document as *build steps* rather than as remembered manual
+edits (`#define USE_DEV_PTMX 1` patched into the autoconf-generated
+`config.h`, `--disable-openpty` so `HAVE_OPENPTY` cannot come back), builds
+the single non-`MULTI` binary, and then **verifies the result**: `/dev/ptmx`
+present in the binary's strings, the legacy `Failed to open any /dev/pty`
+fallback path absent. A regression here fails the build instead of failing
+at PTY-allocation time on hardware.
+
+The `syscall_shim.o` above is no longer needed — this project's current
+uClibc toolchain (`tools/build-uclibc-toolchain.sh`) does provide
+`syscall()`. The script proves that with a compile test up front rather than
+assuming it, so a toolchain change surfaces as a clear message instead of
+`undefined reference to syscall` deep in the link.
+
+The same script also builds the two file-transfer binaries the device never
+had:
+
+- **`scp`** — dropbear's own (OpenSSH's `scp.c`, vendored in the dropbear
+  tree but built as a *separate* binary via `make scp`, not part of the
+  server). Needed on the device because the remote end of any
+  `scp file zaurus:/tmp` is `scp -t` running *there*.
+- **`sftp-server`** — **not part of dropbear at all.** Dropbear only ever
+  `exec()`s an external one; `svr-chansession.c` uses `SFTPSERVER_PATH`,
+  which defaults to `/usr/libexec/sftp-server` and is compiled in, not
+  looked up on `$PATH`. The binary comes from OpenSSH portable (10.4p1,
+  `--without-openssl --without-zlib`, `make sftp-server` only).
+
+Both are needed, not one or the other: OpenSSH 9.0+ clients use the **SFTP
+protocol for `scp` by default**, so without `sftp-server` a modern
+`scp file zaurus:` fails until you add `-O`; without `scp`, `-O` and older
+clients fail instead.
+
+`DROPBEAR_SFTPSERVER` is `1` in dropbear's own `default_options.h`, so the
+server already on the device is expected to advertise the sftp subsystem
+already — dropping the binary at `/usr/libexec/sftp-server` should be enough
+with no server change. That was **not verifiable when this was written** (the
+board was offline). Check it on hardware:
+
+```sh
+ssh -i ~/.ssh/zaurus_ed25519 root@<device> -s sftp   # should not exit
+sftp -i ~/.ssh/zaurus_ed25519 root@<device>
+```
+
+If it answers `subsystem request failed`, deploy the rebuilt server:
+`tools/chunked-deploy.sh --replace-dropbear` (rename-aside, old binary kept
+at `/usr/sbin/dropbear.prev`, effective after the next `softreboot`).
+
+**glibc is not an option for these three, static or not.** `sftp-server`
+calls `getpwuid()` and dropbear calls `getpwnam()`/`getspnam()`; glibc routes
+those through NSS, which `dlopen()`s `libnss_files.so.2` **at runtime even
+from a fully static binary**. That file does not exist on this rootfs, so a
+glibc-static `sftp-server` links cleanly, passes a `file`/`readelf` check,
+and then dies with `No user found for uid 0` on the device. `build-ssh.sh`
+greps the built binaries for glibc's NSS strings and refuses rather than
+trusting whoever set `CROSS_COMPILE` — including CI, which uses the apt
+`gcc-arm-linux-gnueabi` for everything else in the same job.

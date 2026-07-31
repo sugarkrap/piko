@@ -165,7 +165,18 @@ the X stage isn't there yet. **`docs/HOWTO-FLTK.md`** has the whole story:
 the four non-obvious configure choices, what is deliberately off, how to
 test it with `fltktest`, and how to cross-build your own FLTK apps.
 
-**6. Pack and deploy.**
+**6. SSH file transfer.** `scp` + OpenSSH's `sftp-server`, plus a
+reproducible rebuild of dropbear itself (both fetched and SHA-256-verified;
+the two cross-compile fixes from `docs/DEADLETTER-DROPBEAR-PTY.md` are
+applied as build steps and then verified in the resulting binary):
+
+    tools/build-ssh.sh
+
+`tools/build-userspace.sh` runs it too. The server binary is staged but
+never installed unless you ask for it (`chunked-deploy.sh
+--replace-dropbear`) -- see that document for why that one is opt-in.
+
+**7. Pack and deploy.**
 
     tools/build-matchbox-payload.sh                 # inspect the tar first
     tools/build-and-deploy.sh --adapter <iface> root@<device-ip>
@@ -175,7 +186,7 @@ and hands off to `chunked-deploy.sh`, which ships everything and unpacks
 X with `untar`. Useful flags: `--kernel-only`, `--skip-x11`,
 `--no-userspace`, `--force-kernel-src`.
 
-**7. Reboot.** It should come up at the desktop. If X fails,
+**8. Reboot.** It should come up at the desktop. If X fails,
 `/etc/init.d/xsession` drops you to a console login on tty1 instead --
 by design, since inittab respawns it.
 

@@ -73,6 +73,8 @@ on:
       # operation, so a change here changes what ships.
       - "flash/piko-smf-write.c"
       - "tools/setup-kernel-src.sh"
+      - "tools/build-ssh.sh"
+      - "tools/ssh-payload.sh"
       - "tools/build-uclibc-toolchain.sh"
       - "tools/uclibc-toolchain.config"
       - "tools/build-thirdparty-deps.sh"
@@ -160,6 +162,54 @@ jobs:
         if: steps.x11_toolchain.outputs.rc == '0'
         run: |
           ./tools/build-thirdparty-deps.sh
+
+      # scp + sftp-server (+ dbclient/dropbearkey) for the rootfs overlay.
+      # An offline update package is what a device that is NOT reachable
+      # over the network gets -- i.e. exactly the device that most needs
+      # working file transfer the next time round.
+      #
+      # Reuses the uClibc toolchain provisioned above, and genuinely needs
+      # it: these cannot be built with the apt gcc-arm-linux-gnueabi this
+      # job uses for piko-update, even though they are equally static.
+      # glibc routes getpwnam/getpwuid through NSS, which dlopen()s
+      # libnss_files.so.2 at runtime out of a static binary too, and that
+      # file does not exist on this rootfs -- sftp-server would link, pass
+      # every ELF check, and then die with "No user found for uid 0" on
+      # the device. tools/build-ssh.sh refuses to emit such a binary; see
+      # its header.
+      #
+      # Non-fatal for the same reason the X11 steps are: a package with
+      # the rootfs overlay and no SSH payload is still a real, useful
+      # offline update, and better than no artifact at all.
+      - name: Cache dropbear/OpenSSH release tarballs
+        if: steps.x11_toolchain.outputs.rc == '0'
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/src/dropbear-*.tar.bz2
+            userspace/src/openssh-*.tar.gz
+          key: ssh-tarballs-${{ hashFiles('tools/build-ssh.sh') }}
+          save-always: true
+
+      - name: Build scp + sftp-server (uClibc toolchain)
+        if: steps.x11_toolchain.outputs.rc == '0'
+        id: ssh_payload
+        run: |
+          set +e
+          ./tools/build-ssh.sh
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            {
+              echo "### SSH file transfer payload"
+              echo '```'
+              find userspace/stage-ssh -type f -printf '%10s  %p\n' | sort -k2
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "SSH payload build failed (exit $rc) -- package will ship without scp/sftp-server." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Cache kernel-src reconstruction
         id: kernel-src-cache

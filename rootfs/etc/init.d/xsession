@@ -98,6 +98,30 @@ export DISPLAY
 HOME=/root
 export HOME
 
+# PATH has to be set here, and cannot be inherited. init runs this script
+# with essentially no environment, and nothing in a graphical session ever
+# reads /etc/profile -- that is a login-shell file and this is not a login
+# shell. So the SD card's binary directory, which /etc/zaurus-card.sh puts
+# on PATH for shells, is NOT on PATH for anything launched by tapping an
+# icon unless it is added right here.
+#
+# Without it, an application installed onto a card (pkgadd ... card) gets
+# an icon -- matchbox-desktop scans the card's applications directory --
+# and then silently does nothing when tapped, because matchbox-desktop
+# runs the .desktop file's Exec= line through the shell and the shell
+# cannot find the binary. The icon appearing but not working is a
+# considerably more confusing failure than no icon at all.
+#
+# /usr/local/bin is included because the X server and this project's own
+# small tools live there. zaurus-card.sh is sourced rather than the card
+# path being written out again, so ZAURUS_CARD_ROOT stays defined in
+# exactly one file.
+PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH
+if [ -r /etc/zaurus-card.sh ]; then
+	. /etc/zaurus-card.sh
+fi
+
 # Zaurus keyboard layout: redefines the physical Fn key (which the kernel
 # reports as plain KEY_F3) as ISO_Level3_Shift and maps the Fn symbol
 # layer, so / : [ ] | etc. are typable. Non-fatal -- without it the

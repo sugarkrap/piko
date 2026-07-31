@@ -23,9 +23,19 @@ set -eu
 #   libpng      -- zlib
 #   freetype    -- zlib
 #   fontconfig  -- freetype, expat
+#   libarchive  -- zlib          (for opkg, not for X11 -- see below)
 #
 # Dependency order matters and is NOT checked: build them in the order
 # listed above (which is what the no-argument default does).
+#
+# libarchive is here rather than in tools/build-opkg.sh because it is a
+# generic pinned third-party library like the rest, and because it is a
+# HARD dependency of every opkg that exists: `PKG_CHECK_MODULES(
+# [LIBARCHIVE], [libarchive])` is unconditional in configure.ac as far
+# back as 0.3.0 (checked 0.3.0 / 0.3.5 / 0.3.6, and it is still there at
+# git master). There is no "old opkg with the bundled busybox untar" to
+# retreat to -- that was ipkg, and it predates the 0.x series. Budget for
+# libarchive or do not ship opkg.
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 STAGE="$REPO/userspace/stage-target"
@@ -114,6 +124,17 @@ usr/lib/pkgconfig/fontconfig.pc"
 1feee317ba39b91902b0cbd2987c0c73e6afbfc8f4c096367a5c86c216c036a8 \
 usr/share/X11/xkb/rules/base"
         ;;
+    libarchive)
+        # opkg's archive backend. Only ever asked to read an .ipk, which is
+        # an ar archive (or, for pre-2005 packages, a plain tar.gz) whose
+        # members are control.tar.gz + data.tar.gz -- so ar + tar + gzip is
+        # the entire required feature set. Everything else is turned off in
+        # configure_args() below; see the note there for why that matters
+        # beyond binary size.
+        echo "3.7.7 https://github.com/libarchive/libarchive/releases/download/v3.7.7/libarchive-3.7.7.tar.gz \
+4cc540a3e9a1eebdefa1045d2e4184831100667e6d7d5b315bb1cbc951f8ddff \
+usr/lib/pkgconfig/libarchive.pc"
+        ;;
     dejavu)
         # Not a build -- font data. The device ships with NO fonts at all
         # and no /etc/fonts, so libXft/fontconfig resolve nothing and every
@@ -156,6 +177,34 @@ configure_args() {
         echo "--disable-static --disable-docs --with-arch=arm --sysconfdir=/etc --localstatedir=/var"
         ;;
     expat)      echo "--disable-static --without-docbook --without-examples --without-tests" ;;
+    libarchive)
+        # STATIC-ONLY, deliberately, and the only package here built that
+        # way. opkg is its sole consumer, so a shared libarchive.so would
+        # be an extra ~700KB object on the flash that exactly one binary
+        # ever opens -- and it would put the package manager's own
+        # archive backend inside the set of files the package manager can
+        # overwrite. A bad `opkg install` of a libarchive package would
+        # then leave no working opkg to undo it with. Linked into the
+        # binary, opkg keeps working no matter what it installs.
+        #
+        # The --without-* list is not (only) about size. libarchive
+        # autodetects optional backends from whatever is visible, and this
+        # staging tree already has expat and zlib in it -- so without
+        # --without-expat it silently builds xar support against our
+        # staged expat and grows a dependency nothing asked for. Every
+        # format an .ipk cannot be is turned off explicitly rather than
+        # left to autodetection, so the result does not change when some
+        # unrelated library is added to the stage later.
+        #
+        # acl/xattr are off because uclibc has neither, and leaving them
+        # to configure means a build that breaks the next time this
+        # toolchain is rebuilt with slightly different headers.
+        echo "--disable-shared --enable-static \
+--disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip \
+--disable-acl --disable-xattr --disable-rpath \
+--with-zlib --without-bz2lib --without-libb2 --without-iconv \
+--without-lz4 --without-zstd --without-lzma --without-lzo2 \
+--without-cng --without-openssl --without-xml2 --without-expat" ;;
     xkeyboard-config)
         # --disable-nls avoids needing intltool/gettext for translations
         # nothing on this device will ever read.
