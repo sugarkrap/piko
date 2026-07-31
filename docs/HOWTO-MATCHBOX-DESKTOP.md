@@ -131,6 +131,28 @@ already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
 
+**xev** (`userspace/src/xev`) is a stock X.Org autotools package and
+builds with nothing but the common cross environment above; it links
+against libX11 only, which is already shipped. `tools/build-xev.sh` wraps
+it. The one non-obvious part is that the cross arguments have to go
+through `autogen.sh` rather than a bare `./configure` -- xev's
+`autogen.sh` always runs `$srcdir/configure --enable-maintainer-mode "$@"`
+itself and ignores `NOCONFIGURE`, so calling it without arguments quietly
+configures a *native* build and then dies with "cannot run C compiled
+programs". Its binary is read straight out of `userspace/src/xev/xev`,
+same as xkbcomp/Xfbdev.
+
+xev only ever writes to stdout, so its menu entry
+(`userspace/desktop/xev.desktop`) launches it inside st rather than bare:
+started from the desktop its output would otherwise be inherited from
+matchbox-session, which `/etc/init.d/xsession` redirects to
+`/tmp/matchbox-session.log` -- and `/tmp` here is jffs2 on NAND, not
+tmpfs, so every event line would be a flash write. Both halves of `Exec=`
+are absolute paths because `/usr/local/bin` is not on this device's `PATH`
+(`rootfs/etc/profile`). It reuses matchbox-panel's `mbterm.png` rather
+than shipping an icon of its own; `tools/build-matchbox-payload.sh`
+asserts that pixmap actually landed in the payload.
+
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
 640x480 clamshell. Two upstream bugs in that variant if you use it:

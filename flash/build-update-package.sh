@@ -13,6 +13,8 @@ set -eu
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
+#   - usr/local/bin/xev + its usr/share/applications/xev.desktop launcher
+#     (only if the X11 stack has been built locally -- see "xev" below)
 #
 # This is the offline counterpart to tools/chunked-deploy.sh (which pushes
 # the same kind of update live over SSH). Use this one when the device
@@ -105,6 +107,34 @@ echo "==> packaging rootfs/ overlay (etc/, usr/sbin/, init -- whatever's there)"
 ( cd "$REPO/rootfs" && find . -type f ) | sed 's#^\./##' | while read -r rel; do
     manifest_add "$REPO/rootfs/$rel" "$rel"
 done
+
+# xev + its menu launcher. Same destinations tools/build-matchbox-payload.sh
+# uses, so a device updated this way ends up byte-identical to one that got
+# the full X11 payload over SSH.
+#
+# Optional-if-present, exactly like KERNEL_DIR below: xev links against
+# libX11 from userspace/stage-target, so it only exists once the X11 stack
+# has been built locally. A machine (or a CI job) without that stack still
+# produces a valid, useful package -- just without xev -- rather than
+# hard-failing. It prints which way it went.
+#
+# The icon is deliberately NOT shipped here. xev.desktop points at
+# mbterm.png, which matchbox-panel installs into /usr/share/pixmaps; any
+# device running the desktop already has it, because the panel's applets
+# are what /etc/matchbox/session starts. This package is an incremental
+# overlay onto such a device, so re-shipping a file matchbox-panel owns
+# would only create a second source of truth for it.
+XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
+if [ -f "$XEV_BIN" ]; then
+    echo "==> xev present ($XEV_BIN) -- including it + its .desktop"
+    manifest_add "$XEV_BIN" "usr/local/bin/xev" 755
+    manifest_add "$REPO/userspace/desktop/xev.desktop" \
+                 "usr/share/applications/xev.desktop" 644
+else
+    echo "==> no xev binary at $XEV_BIN -- omitting it from this package"
+    echo "    (build it with tools/build-xev.sh, which needs the X11 stack staged)"
+    echo "# xev: not included (no local build found)" >> "$MANIFEST"
+fi
 
 if [ -d "$KERNEL_DIR" ]; then
     echo "==> KERNEL_DIR present ($KERNEL_DIR) -- including kernel + modules"

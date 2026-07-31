@@ -192,6 +192,23 @@ mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
 cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
 cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
 
+# xev's menu launcher. Categories=System puts it in the "System Tools"
+# vfolder (System.directory carries Match=System in matchbox-common).
+#
+# Unlike st it ships no icon of its own: it reuses mbterm.png, the
+# terminal icon matchbox-panel already installs into /usr/share/pixmaps
+# via D_PANEL above -- xev is a console-output tool and that is the
+# closest thing the stock icon set has. Assert it really landed rather
+# than trusting the merge, or the entry renders with a broken image and
+# the only symptom is a missing icon on the desktop.
+cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
+if [ ! -f "$PAYLOAD/usr/share/pixmaps/mbterm.png" ]; then
+    echo "FAILED: xev.desktop wants mbterm.png but matchbox-panel did not install it." >&2
+    echo "Rebuild matchbox-panel into \$D_PANEL ($D_PANEL), or point" >&2
+    echo "userspace/desktop/xev.desktop's Icon= at a pixmap that is in the payload." >&2
+    exit 1
+fi
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.
