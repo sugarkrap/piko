@@ -265,6 +265,22 @@ jobs:
             echo "kernel-src reconstruction failed (exit $rc) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Discard cached build objects (keep source/config, not stale .o/.ko)
+        # The kernel-src cache above is keyed on config/patches, not on build
+        # state, and is saved unconditionally (save-always) even from a
+        # failed run -- so any .o/.ko left in the tree from a previous,
+        # possibly-interrupted build gets silently reused next time `make`
+        # sees it as up to date. That's exactly how a corrupted
+        # snd-ac97-codec.ko survived multiple CI runs with an identical size
+        # each time (make relinked the .ko/.mod.o but never recompiled the
+        # object underneath it -- there was no CC line for it in the build
+        # log at all): not a packaging bug, a poisoned incremental build.
+        # `make clean` drops generated objects but keeps .config and the
+        # downloaded/patched source, so the expensive part of the cache
+        # (network fetch + patching + oldconfig) is still preserved.
+        if: steps.kernel_src.outputs.rc == '0'
+        run: make -C kernel-src/linux-7.1.4 ARCH=arm clean
+
       - name: Build kernel (zImage + modules)
         if: steps.kernel_src.outputs.rc == '0'
         run: |
