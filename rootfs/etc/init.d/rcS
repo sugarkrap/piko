@@ -179,3 +179,14 @@ echo ""
 
 # --- console keymap: Zaurus C7x0 Fn=AltGr symbol layer (/ : [ ] | { } etc.) ---
 /bin/busybox loadkmap < /etc/zaurus.bmap 2>/dev/null
+
+# --- pending bootstrap (smf) update ---
+# Only ever a notice. The smf write is deliberately NOT automatic: getting
+# here at all is the proof that the newly installed stage-2 boots, and that
+# proof is worthless if this script flashes NAND before anyone sees it.
+# The user decides, with AC connected, by typing smfcommit.
+if test -f /boot/smf-pending; then
+	echo ""
+	echo "  *** bootstrap update pending -- plug in AC and type: smfcommit ***"
+	echo ""
+fi

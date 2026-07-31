@@ -12,6 +12,10 @@ For the panel's applets specifically -- what exists, the four upstream bugs
 that had to be fixed, and why a two-applet panel is the default rather than
 a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
+For **writing our own GUI apps** against this X server, see
+`docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
+cross-compile line for your own programs.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -47,6 +51,8 @@ Nothing builds it. The classic one is `matchbox-desktop-classic`.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
+                                        # and libXrender staged first
 
 The last four are independent of each other once libmatchbox exists and
 can be built in parallel -- but give each its own `DESTDIR`, because they
@@ -131,28 +137,38 @@ already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
 
-**xev** (`userspace/src/xev`) is a stock X.Org autotools package and
-builds with nothing but the common cross environment above; it links
-against libX11 only, which is already shipped. `tools/build-xev.sh` wraps
-it. The one non-obvious part is that the cross arguments have to go
-through `autogen.sh` rather than a bare `./configure` -- xev's
-`autogen.sh` always runs `$srcdir/configure --enable-maintainer-mode "$@"`
-itself and ignores `NOCONFIGURE`, so calling it without arguments quietly
-configures a *native* build and then dies with "cannot run C compiled
-programs". Its binary is read straight out of `userspace/src/xev/xev`,
+**xev** (`userspace/src/xev`) needs no special flags -- it is a stock
+X.Org autotools package, links against libX11 only, and
+`tools/build-x11-stack.sh` already builds it as part of the default
+package list. Its binary is read straight out of `userspace/src/xev/xev`,
 same as xkbcomp/Xfbdev.
 
-xev only ever writes to stdout, so its menu entry
-(`userspace/desktop/xev.desktop`) launches it inside st rather than bare:
-started from the desktop its output would otherwise be inherited from
-matchbox-session, which `/etc/init.d/xsession` redirects to
-`/tmp/matchbox-session.log` -- and `/tmp` here is jffs2 on NAND, not
-tmpfs, so every event line would be a flash write. Both halves of `Exec=`
-are absolute paths because `/usr/local/bin` is not on this device's `PATH`
-(`rootfs/etc/profile`). The launcher and its icon
-(`userspace/desktop/xev.png`, a 32x32 keyboard matching `st.png`'s
-dimensions) ship from the payload script and from
-`flash/build-update-package.sh`, the same two paths st's do.
+Its menu entry (`userspace/desktop/xev.desktop`) launches it **inside st**
+rather than bare, because xev only ever writes to stdout: started from the
+desktop that stdout is inherited from matchbox-session, which
+`/etc/init.d/xsession` redirects to `/tmp/matchbox-session.log` -- and
+`/tmp` here is jffs2 on NAND, not tmpfs, so every event line would be a
+flash write. In a terminal the events are visible live and nothing is
+written. Both halves of `Exec=` are absolute paths, and `Icon=` carries
+its `.png` extension, for the two reasons st.desktop had to be fixed for:
+`/usr/local/bin` is not on this device's `PATH`, and
+`mb_dot_desktop_icon_get_full_path()` never auto-appends an extension.
+
+**FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
+toolkit for writing our own apps against this X server, cross-built as a
+shared library by `tools/build-fltk.sh` and installed **into
+`userspace/stage-target` itself** rather than a stage of its own -- it is
+part of that X sysroot, and anything cross-linking against FLTK later
+needs it on the same include/lib path as libX11. Four of its configure
+choices are not guessable (`--x-includes`/`--x-libraries`, an explicit
+`--enable-xft`, system-vs-bundled image libraries, and building only
+`src/` + the image dirs) and it is the only C++ component in the stack,
+so the payload also ships `libstdc++.so.6`.
+
+**`docs/HOWTO-FLTK.md` covers all of it** -- the build, what is
+deliberately turned off, how to test it on the device with `fltktest`,
+the verified cross-compile line for your own apps, and a troubleshooting
+table. Verified on hardware 2026-07-31.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a

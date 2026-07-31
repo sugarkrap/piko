@@ -13,6 +13,8 @@ set -eu
 #   tools/build-thirdparty-deps.sh      zlib expat libpng freetype
 #                                       fontconfig + the DejaVu faces
 #   tools/setup-x11-src.sh              verify the X submodules are the forks
+#   tools/build-fltk.sh                 libfltk*.so.1.3 + fltktest, into the
+#                                       same staging tree
 #   then configure+make, per component, into the DESTDIRs listed below.
 # See docs/HOWTO-MATCHBOX-DESKTOP.md for the per-component configure
 # lines, which are NOT all obvious (matchbox-desktop in particular needs
@@ -70,7 +72,7 @@ STRIP="$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip"
 # library cannot silently keep shipping the old one.
 LIBS="libX11 libXext libxcb libXau libXdmcp libz libexpat libpng16 \
 libfreetype libfontconfig libXrender libXft libmb libpixman-1 libXfont \
-libfontenc libxkbfile libmd"
+libfontenc libxkbfile libmd libfltk libfltk_images libfltk_forms"
 
 # Binaries that do not come from a component DESTDIR: the X server and the
 # XKB compiler live in the xserver/xkbcomp submodule build trees. xkbcomp
@@ -80,6 +82,10 @@ XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
+# fltktest is the FLTK equivalent of sdltest: proof on real hardware that
+# the shared libfltk we just shipped loads and can draw. tools/build-fltk.sh
+# puts it in the staging tree's own bindir rather than a component DESTDIR.
+FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -107,9 +113,13 @@ for base in $LIBS; do
     fi
 done
 
-# libgcc_s comes from the toolchain, not the staging tree: libexpat needs
-# it and nothing else drags it in.
+# libgcc_s and libstdc++ come from the toolchain, not the staging tree.
+# libexpat needs libgcc_s and nothing else drags it in; libstdc++ arrived
+# with FLTK, the only C++ component in this stack -- every libfltk*.so and
+# fltktest itself has it in DT_NEEDED. -L dereferences the SONAME symlink so
+# one real file lands under the name the loader actually asks for.
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
+cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
 for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON"; do
     if [ ! -d "$d" ]; then
@@ -130,7 +140,8 @@ mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin"
 for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
             "$XKBCOMP_BIN:usr/bin/xkbcomp" \
             "$XEV_BIN:usr/local/bin/xev" \
-            "$ST_BIN:usr/local/bin/st"; do
+            "$ST_BIN:usr/local/bin/st" \
+            "$FLTKTEST_BIN:usr/local/bin/fltktest"; do
     src="${spec%:*}"; dst="${spec##*:}"
     if [ ! -f "$src" ]; then
         echo "FAILED: missing $src -- build that component first" >&2
@@ -192,9 +203,18 @@ mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
 cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
 cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
 
-# xev's menu launcher + icon. Categories=System puts it in the "System
-# Tools" vfolder (System.directory carries Match=System in
-# matchbox-common).
+# pikalibrate's menu launcher + icon (Categories=System, alongside the
+# vfolder named "System Tools"). The binary itself ships separately, via
+# tools/chunked-deploy.sh's SDL section (tools/build-sdl.sh builds it
+# against libSDL, not against anything in this X11 payload) -- only the
+# desktop entry and icon belong here, since matchbox-desktop only reads
+# /usr/share/applications from what this payload deploys.
+cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
+cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
+
+# xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
+# the binary does ship from this payload (see XEV_BIN above) -- it is part
+# of the X11 stack proper.
 cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
 cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
 
