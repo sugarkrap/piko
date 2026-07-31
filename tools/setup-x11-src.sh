@@ -145,11 +145,17 @@ echo "==> matchbox-panel: wireless applet fixes"
 #     and iwlib's strncpy(ifr_name, NULL, IFNAMSIZ) segfaulted. Verified
 #     under qemu-arm: unpacked upstream dies with SIGSEGV during startup
 #     enumeration on any host that has a wireless interface.
-#   - math.h was never included, so rint()/log() were implicitly declared
-#     as returning int -- a hard error on any modern compiler.
+#   - The popup printed signal level and noise with %u straight out of a
+#     raw __u8, so a normal -39dBm displayed as "217dBm". dBm is a signed
+#     8-bit value stuffed in that byte; anything >= 64 needs 0x100
+#     subtracted, which is what iwlib's own printer does.
 #   - configure.ac passed have_libiw=yes as both the found AND not-found
-#     action of AC_CHECK_LIB, so the libiw probe result meant nothing, and
-#     WIRELESS_LIBS omitted -lm that the applet's own math needs.
+#     action of AC_CHECK_LIB, so the libiw probe result meant nothing.
+#
+# The patch also adds the interface's IPv4 address to the popup, and
+# includes math.h directly rather than leaning on iwlib.h to provide it
+# (it does, today -- that is a transitive include we should not depend on,
+# not a bug that was breaking the build).
 #
 # Needs libiw in the staging tree first: tools/build-libiw.sh.
 apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-wireless-applet.patch"

@@ -209,14 +209,22 @@ Then configure must say `Building mb-applet-wireless: yes`. The applet
 links `libiw` statically and gains **no** new `DT_NEEDED` — `-lm` resolves
 inside libc on this uclibc toolchain, which ships only a static `libm.a`.
 
-The applet needed three fixes of its own before it would build or run at
-all (`modules/x11/matchbox-panel-wireless-applet.patch`) — see that patch
-and `setup-x11-src.sh`. The headline one: `find_iwface()` passed
-`Mwd.iface`, assigned only at the end of that same function, so on the
-first wireless interface it was still NULL and iwlib's
+The applet needed fixes of its own
+(`modules/x11/matchbox-panel-wireless-applet.patch`). The headline one:
+`find_iwface()` passed `Mwd.iface`, assigned only at the end of that same
+function, so on the first wireless interface it was still NULL and iwlib's
 `strncpy(ifr_name, NULL, IFNAMSIZ)` segfaulted. Upstream crashes during
-startup enumeration on any machine that actually has a wireless
-interface.
+startup enumeration on any machine that actually has a wireless interface
+— verified under `qemu-arm`. It also printed level and noise with `%u`
+from a raw `__u8`, so a normal `-39dBm` showed as `217dBm`, and it now
+shows the interface's IPv4 address in the popup.
+
+On this board the popup reports `wlan0`, not `wifi0`. `iw_get_stats()`
+**fails** outright on hostap's `wifi0` rather than returning zeros, and
+`find_iwface()` keeps looking until a stats call succeeds — which is what
+its "works round odd issues on Z with host AP" comment is about. Measured
+values are real and live (quality 44→50, level −35 to −42 dBm), unlike
+hostap's TX counters, which always read zero.
 
 `mb-launcher-term.desktop` is installed but not started -- its wrapper
 execs `rxvt` or `xterm` and the payload ships neither.

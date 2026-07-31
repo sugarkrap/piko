@@ -187,13 +187,55 @@ SSH_OPTS="$SSH_OPTS -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new
 KEY="${SSH_KEY:-$HOME/.ssh/zaurus_ed25519}"
 
 echo "==> deploying to $TARGET"
-ssh $SSH_OPTS -i "$KEY" "$TARGET" "cat > /tmp/mb.tar" < "$TARBALL"
+# Verify the CONTENT, not just the length. This link corrupts payloads that
+# arrive at exactly the right size -- observed 2026-07-31, where a
+# byte-complete transfer made untar die on "bad header checksum". Retry the
+# whole transfer on mismatch. md5sum on the device is our own
+# userspace/src/md5sum; fall back to a length check if it is not installed
+# yet, which is better than refusing to deploy at all.
 want="$(wc -c < "$TARBALL")"
-got="$(ssh $SSH_OPTS -i "$KEY" "$TARGET" "wc -c < /tmp/mb.tar" | tr -d ' \r\n')"
-if [ "$want" != "$got" ]; then
-    echo "FAILED: short transfer (sent $want, device has $got)" >&2
-    exit 1
-fi
+want_md5="$(md5sum < "$TARBALL" | cut -d' ' -f1)"
+
+# Probe by USING md5sum, not by asking whether it exists: this device's ash
+# has no `command` builtin (nor kill/killall/nohup), so `command -v` just
+# errors. Anything that is not 32 hex digits means no usable md5sum.
+remote_md5() {
+    ssh $SSH_OPTS -i "$KEY" "$TARGET" \
+        "md5sum < $1 2>/dev/null || /usr/local/bin/md5sum < $1 2>/dev/null" \
+        2>/dev/null | awk '{print $1; exit}'
+}
+have_remote_md5=1
+probe="$(remote_md5 /dev/null)"
+case "$probe" in
+    d41d8cd98f00b204e9800998ecf8427e) ;;   # md5 of empty input
+    *) have_remote_md5=0
+       echo "    no usable md5sum on device -- length check only" ;;
+esac
+
+attempt=1
+while : ; do
+    ssh $SSH_OPTS -i "$KEY" "$TARGET" "cat > /tmp/mb.tar" < "$TARBALL"
+    got="$(ssh $SSH_OPTS -i "$KEY" "$TARGET" "wc -c < /tmp/mb.tar" | tr -d ' \r\n')"
+    if [ "$want" = "$got" ]; then
+        if [ "$have_remote_md5" -eq 0 ]; then
+            echo "    transferred $got bytes"
+            break
+        fi
+        got_md5="$(remote_md5 /tmp/mb.tar)"
+        if [ "$want_md5" = "$got_md5" ]; then
+            echo "    md5 verified ($want_md5)"
+            break
+        fi
+        echo "    attempt $attempt: md5 mismatch (want $want_md5, got $got_md5)" >&2
+    else
+        echo "    attempt $attempt: short transfer (sent $want, device has $got)" >&2
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 5 ]; then
+        echo "FAILED: could not get an intact payload to the device in 5 tries" >&2
+        exit 1
+    fi
+done
 # Unpacking over a *running* binary fails with ETXTBSY ("Text file busy"),
 # and untar stops at the first one -- so a live Matchbox session used to
 # abort the deploy partway through, leaving a half-updated tree.
