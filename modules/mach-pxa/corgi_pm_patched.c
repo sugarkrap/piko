@@ -239,18 +239,57 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 
 static struct platform_device *corgipm_device;
 
+/*
+ * This board does not boot as corgi, shepherd or husky. It comes up with
+ * Sharp's legacy machine number 196 -- or the 19 the bootloader actually
+ * passes in r1 -- both of which are matched by MACHINE_START entries at the
+ * bottom of corgi.c using the same .init_machine as Corgi, so the hardware
+ * is brought up identically. See that comment and
+ * docs/DEADLETTER-MACHINE-ID-196.md.
+ *
+ * The stock gate below is the three machine_is_*() checks alone, which are
+ * therefore all false here: corgipm_init() returned -ENODEV, the
+ * "sharpsl-pm" platform device was never registered, and
+ * apm_get_power_status stayed NULL. /proc/apm then reports nothing but the
+ * kernel's own defaults from proc_apm_show() --
+ *
+ *     1.13 1.2 0x02 0xff 0xff 0xff -1% -1 ?
+ *
+ * -- i.e. AC status, battery status and charge all "unknown". Userspace
+ * battery monitors show a read error and can never see the charger being
+ * plugged in. There was no sharpsl-pm entry in /sys/devices/platform/ at
+ * all, which is the quick way to confirm this.
+ *
+ * Kept as its own predicate rather than extended inline, because the
+ * batfull_irq check below deliberately keys off machine_is_corgi() alone.
+ */
+#define MACH_TYPE_SHARP_LEGACY		196
+#define MACH_TYPE_SHARP_BOOTLOADER	19
+
+static int corgipm_machine_supported(void)
+{
+	return machine_is_corgi() || machine_is_shepherd()
+		|| machine_is_husky()
+		|| machine_arch_type == MACH_TYPE_SHARP_LEGACY
+		|| machine_arch_type == MACH_TYPE_SHARP_BOOTLOADER;
+}
+
 static int corgipm_init(void)
 {
 	int ret;
 
-	if (!machine_is_corgi() && !machine_is_shepherd()
-			&& !machine_is_husky())
+	if (!corgipm_machine_supported())
 		return -ENODEV;
 
 	corgipm_device = platform_device_alloc("sharpsl-pm", -1);
 	if (!corgipm_device)
 		return -ENOMEM;
 
+	/*
+	 * machine_is_corgi() is false for 196/19, so this board takes the
+	 * batfull_irq path -- which is correct: the single Sharp machine
+	 * descriptor that carries nr 196 calls itself "SHARP Shepherd".
+	 */
 	if (!machine_is_corgi())
 	    corgi_pm_machinfo.batfull_irq = 1;
 

@@ -128,4 +128,13 @@ echo "==> matchbox-panel: battery applet via /proc/apm"
 # either.
 apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-battery-proc-apm.patch"
 
+echo "==> matchbox-panel: system-monitor /proc/meminfo parse"
+# mb-applet-system-monitor read /proc/meminfo by FIELD POSITION, matching
+# the field order of 2.6.0. The kernel has inserted fields since --
+# MemAvailable landed third in 3.14 -- so every value after MemFree came
+# out of the wrong line and the unsigned "used" arithmetic underflowed
+# into a huge number. Symptom: a correct CPU bar next to a memory bar
+# showing a nonsense percentage. Now keyed off the labels.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-system-monitor-meminfo.patch"
+
 echo "==> X11 submodules ready to configure"

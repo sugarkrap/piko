@@ -194,5 +194,42 @@ if [ "$want" != "$got" ]; then
     echo "FAILED: short transfer (sent $want, device has $got)" >&2
     exit 1
 fi
-ssh $SSH_OPTS -i "$KEY" "$TARGET" "/usr/local/bin/untar /tmp/mb.tar / && rm -f /tmp/mb.tar"
-echo "==> deployed. Start it with:  DISPLAY=:0 matchbox-session &"
+# Unpacking over a *running* binary fails with ETXTBSY ("Text file busy"),
+# and untar stops at the first one -- so a live Matchbox session used to
+# abort the deploy partway through, leaving a half-updated tree.
+#
+# There is no way to stop the session first: this device's busybox has no
+# kill, killall, pkill or nohup applet, and nothing else can signal a pid.
+# So use the property that ETXTBSY blocks *writing* to a busy executable
+# but not *renaming* it -- the running process keeps its inode, and untar
+# is free to create a fresh file at the original path. Retry per offending
+# file rather than pre-emptively moving things aside, so we only ever touch
+# a path that is both in the payload and genuinely blocking.
+#
+# The .replaced files cannot be deleted while their process lives; they are
+# swept at the start of the next deploy.
+ssh $SSH_OPTS -i "$KEY" "$TARGET" '
+rm -f /usr/bin/*.replaced /usr/local/bin/*.replaced 2>/dev/null
+n=0
+while [ "$n" -lt 20 ]; do
+    out="$(/usr/local/bin/untar /tmp/mb.tar / 2>&1)"
+    if [ -z "${out##*extracted*}" ]; then
+        echo "    $out"
+        rm -f /tmp/mb.tar
+        exit 0
+    fi
+    busy="$(echo "$out" | sed -n "s|^untar: could not create //\.\(/.*\): Text file busy\$|\1|p")"
+    if [ -z "$busy" ]; then
+        echo "$out" >&2
+        exit 1
+    fi
+    mv -f "$busy" "$busy.replaced" || exit 1
+    echo "    in use, moved aside: $busy"
+    n=$((n + 1))
+done
+echo "FAILED: still blocked after $n retries" >&2
+exit 1' || { echo "FAILED: unpack on device failed" >&2; exit 1; }
+echo "==> deployed."
+echo "    A session started before this deploy is still running the OLD"
+echo "    binaries from their original inodes. Reboot, or restart it with:"
+echo "        DISPLAY=:0 matchbox-session &"
