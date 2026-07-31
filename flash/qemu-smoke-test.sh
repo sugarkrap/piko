@@ -83,7 +83,7 @@ cp "$KERNEL_DIR/arch/arm/boot/zImage" "$STAGE/zImage-qemu-variant"
 cp "$STAGE/config.real-device" "$CONFIG"
 
 echo "==> assembling smoke-test initramfs (piko-smoke-init + the actual update.tar payload)"
-mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/lib/modules"
+mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/lib/modules" "$STAGE/root/tmp"
 cp "$STAGE/piko-smoke-init" "$STAGE/root/init"
 chmod 755 "$STAGE/root/init"
 
