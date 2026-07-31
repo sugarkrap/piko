@@ -30,8 +30,9 @@ set -eu
 # matchbox-window-manager, pixman, ...). Those are git submodules that were
 # cross-built and staged into userspace/stage-target by hand; there is no
 # scripted build for them yet, and inventing one blindly here would be worse
-# than saying so. tools/deploy-x11.sh deploys whatever is already staged.
-# If you add a build-x11.sh, wire it in here.
+# than saying so. tools/build-matchbox-payload.sh collects (does not build)
+# whatever is already staged into a deployable tar. If you add a
+# build-x11.sh, wire it in here.
 #
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer), the

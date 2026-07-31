@@ -30,8 +30,13 @@ audio, SD card, MPlayer.
 
 ## READ THIS BEFORE YOU START: what is *not* reproducible yet
 
-Be realistic about the state of things. Three gaps stand between a fresh
-clone and a working build, and none of them are one-liners.
+Be realistic about the state of things. Two gaps stand between a fresh
+clone and a working build, and neither is a one-liner. (A third gap --
+the X.Org/Matchbox stack having no automated build -- was closed on
+2026-07-31: `tools/build-x11-stack.sh` now cross-builds the whole thing,
+and a fresh SD-card flash ships the desktop baked directly into
+`mtd3.jffs2`, not just as a separate live-SSH push. See "The X11/Matchbox
+stack is now automated" below.)
 
 ### 1. The toolchain must be rebuilt (long, but now automated)
 
@@ -67,12 +72,14 @@ Note `tools/oabi-toolchain.config` + `tools/build-oabi-toolchain.sh` are a
 *separate* OABI toolchain for the NAND flash helpers. The two are not
 interchangeable.
 
-### 2. Device-side bootstrap is a chicken-and-egg
+### 2. Device-side bootstrap is a chicken-and-egg -- LIVE SSH redeploy only
 
+This no longer applies to a fresh flash (see below) -- only to pushing an
+X11/Matchbox update onto an **already-running** device over SSH.
 `tools/chunked-deploy.sh` ships the X11 stack as one tar and unpacks it
-with `/usr/local/bin/untar` **on the device**. On a freshly-flashed
-device that binary does not exist yet, and this rootfs's busybox has
-neither `tar` nor `kill`. Build and push both by hand first:
+with `/usr/local/bin/untar` **on the device**. On a device that has never
+had this pushed to it, that binary does not exist yet, and this rootfs's
+busybox has neither `tar` nor `kill`. Build and push both by hand first:
 
     $GCC -march=armv5te -O2 -static -o untar userspace/src/untar.c
     $GCC -march=armv5te -O2 -static -o kill  userspace/src/kill.c
@@ -82,14 +89,44 @@ neither `tar` nor `kill`. Build and push both by hand first:
 
 `chunked-deploy.sh` refuses with a clear message if `untar` is missing.
 
-### 3. The X component builds are not automated
+---
 
-`tools/build-thirdparty-deps.sh` handles the non-X.Org libraries and
-`tools/setup-x11-src.sh` applies our local patches, but nothing yet runs
-`configure && make` for the X.Org submodules or the Matchbox components.
-Those steps are still manual, per
-`docs/HOWTO-MATCHBOX-DESKTOP.md`. Automating that into a
-`tools/build-x11-stack.sh` is the obvious next piece of work.
+## The X11/Matchbox stack is now automated (closed 2026-07-31)
+
+`tools/build-x11-stack.sh` cross-builds the entire desktop from the
+tracked submodules -- xtrans through xserver/xkbcomp/xev, then
+libmatchbox and the four Matchbox apps -- in the one dependency order
+that works. Idempotent (skips anything already built) and wired in two
+places:
+
+- `tools/build-and-deploy.sh` -- runs it before repacking the live-SSH
+  X11 payload. `--skip-x11` opts out.
+- `flash/build-mtd3-jffs2.sh` -- runs it, then stages the resulting
+  payload straight into the image being built, so `piko.zip` now ships a
+  device that boots to the desktop on the **very first** boot, no
+  live-SSH push required afterward. `SKIP_X11=1` opts out.
+
+Both call `tools/setup-x11-src.sh` (local patches) and expect
+`tools/build-thirdparty-deps.sh` to have already staged zlib/expat/
+libpng/freetype/fontconfig/xkeyboard-config/dejavu. Every configure line
+it uses, and why, is still documented in
+`docs/HOWTO-MATCHBOX-DESKTOP.md` -- read that first if a single component
+needs debugging; the script is a direct, verified-against-the-real-
+`config.log` automation of exactly that document, not a reinvention of it.
+
+One thing worth knowing before touching it: X.Org's `autogen.sh` scripts
+are NOT uniform. About half honour `NOCONFIGURE=1` and skip their own
+configure call; the rest (`libX11`, `xserver`, `libXext`, `libXrender`,
+every `matchbox-*`) ignore it and run `configure` themselves regardless.
+Both families forward `"$@"` to that internal call, though, so the
+script passes the real cross-compile flags straight through `autogen.sh`
+on every from-scratch run instead of trying to suppress the first
+configure and run a second one -- the earlier two-phase design silently
+lost the `--host` flag on the family that ignores `NOCONFIGURE`, causing
+a from-scratch build to configure *native* instead of cross and fail with
+"cannot run C compiled programs". Confirmed fixed by forcing a real
+from-scratch rebuild of one component (`xev`) and checking its
+`config.log` for the actual invocation used.
 
 ---
 
@@ -130,26 +167,26 @@ and verified by SHA-256 before use:
 
     tools/build-thirdparty-deps.sh
 
-**4. Apply our X patches**, then build the X.Org submodules and Matchbox
-components by hand:
+**4. The X.Org submodules and Matchbox components.** Automated:
 
-    tools/setup-x11-src.sh
+    tools/build-x11-stack.sh
 
-Build order and the exact configure lines are in
-`docs/HOWTO-MATCHBOX-DESKTOP.md`. Several are **not** guessable:
+This applies our X patches (`tools/setup-x11-src.sh`) and then
+cross-builds everything from xtrans through xserver/xkbcomp/xev, then
+libmatchbox and the four Matchbox apps, into `userspace/stage-target`
+and their own `DESTDIR`s (`/tmp/mbwm-stage`, `/tmp/mb-stage-desktop`,
+`/tmp/mb-stage-panel`, `/tmp/mb-stage-common` -- built independently and
+given separate DESTDIRs so they cannot race installing into one tree).
+Idempotent, so safe to re-run.
 
-- `libXrender` must be **0.9.7** (0.9.11+ needs `x11 >= 1.6`; libX11 is
-  pinned at 1.4.4)
-- `matchbox-window-manager` must **not** get `--enable-standalone`
-- `matchbox-desktop` needs `--sysconfdir=/etc` **and** a forced
-  `-DUSE_XSETTINGS` plus `-I<stage>/usr/include/libmb`
-- `xserver` needs `--enable-kdrive-evdev --enable-kdrive-kbd
-  --enable-kdrive-mouse` and `CWARNFLAGS='-Wall -Wno-error'`
-
-Install each component to its **own** `DESTDIR`
-(`/tmp/mbwm-stage`, `/tmp/mb-stage-desktop`, `/tmp/mb-stage-panel`,
-`/tmp/mb-stage-common`) -- they are built independently and would
-otherwise race installing into one tree.
+If one component needs debugging, `docs/HOWTO-MATCHBOX-DESKTOP.md` has
+every configure line individually with the reasoning behind each
+non-obvious flag -- e.g. why `libXrender` must be **0.9.7**, why
+`matchbox-window-manager` must **not** get `--enable-standalone`, why
+`matchbox-desktop` needs a forced `-DUSE_XSETTINGS`. `build-x11-stack.sh`
+is a direct automation of that document, cross-checked against the real
+build's own `config.log`, not a reinvention of it -- the two should never
+disagree on what a given component needs.
 
 **5. Pack and deploy.**
 
@@ -202,9 +239,6 @@ enumerate fine and do nothing.
    kernel has `CONFIG_APM_EMULATION=y` so `/proc/apm` exists. A patch was
    drafted this session but deliberately not applied.
 6. `Root.directory` references `gnome-folder.png`, which nothing ships.
-7. `tools/deploy-x11.sh` predates `build-matchbox-payload.sh` +
-   `chunked-deploy.sh` section 9 and now overlaps them. Decide which
-   survives rather than letting both drift.
 
 ---
 

@@ -30,10 +30,13 @@ board" constraint (scope every flash to only what changed).
 tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
-Toolchain selection is automatic: the script uses the first compiler it
-finds in `PATH` among `arm-buildroot-linux-uclibcgnueabi-gcc`,
-`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-linux-gnueabi-gcc`, and
-`arm-unknown-linux-gnueabi-gcc`. You can override this explicitly with:
+Toolchain selection is automatic: the script first prepends
+`toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin` (this repo's own
+toolchain, built by `tools/build-uclibc-toolchain.sh`) to `PATH` if it
+exists, then uses the first compiler it finds among
+`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-buildroot-linux-uclibcgnueabi-gcc`,
+`arm-linux-gnueabi-gcc`, and `arm-unknown-linux-gnueabi-gcc`. You can
+override this explicitly with:
 
 ```sh
 CROSS_COMPILE=arm-linux-gnueabi- tools/build-and-deploy.sh [user@host]
