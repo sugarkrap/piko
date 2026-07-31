@@ -287,47 +287,6 @@ jobs:
           make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
               -j"$(nproc)" zImage modules
 
-      - name: Diagnose snd-ac97-codec.ko (ELF header + forced verbose rebuild)
-        # This module has failed the QEMU smoke test with "Exec format
-        # error" at an identical file size on every run so far, even after
-        # the "make clean" above -- ruling out both initramfs corruption
-        # (host-side sizes matched at every packaging stage) and stale
-        # cross-run cache state (this is a guaranteed-clean build). Nothing
-        # in this repo's tracked patches touches sound/pci/ac97/ at all, so
-        # whatever's wrong is either in how this one module actually gets
-        # built, or in the module itself once built.
-        #
-        # readelf -h on the failing .ko vs a known-good one directly answers
-        # "what kind of corruption" (wrong arch, bad magic, truncated) --
-        # more precisely than inferring it from insmod's errno. The forced
-        # rebuild (delete + touch source + V=1) answers "does it even
-        # recompile the way every other module does" -- there was no CC line
-        # for its source anywhere in the last two build logs, only the final
-        # modpost/link steps, which is consistent with make treating some
-        # existing object as already up to date.
-        if: steps.kernel_src.outputs.rc == '0'
-        run: |
-          KDIR="kernel-src/linux-7.1.4"
-          ACDIR="$KDIR/sound/pci/ac97"
-          echo "==> $ACDIR contents before any forcing:"
-          ls -la --time-style=full-iso "$ACDIR"
-          echo
-          echo "==> ELF header: failing module vs a known-good one (snd-soc-core.ko)"
-          file "$ACDIR/snd-ac97-codec.ko" "$KDIR/sound/soc/snd-soc-core.ko" || true
-          readelf -h "$ACDIR/snd-ac97-codec.ko" || true
-          echo "--- known-good for comparison ---"
-          readelf -h "$KDIR/sound/soc/snd-soc-core.ko" || true
-          echo
-          echo "==> forcing a from-scratch recompile of just this module (V=1)"
-          rm -f "$ACDIR"/*.o "$ACDIR"/*.ko "$ACDIR"/*.mod.c "$ACDIR"/.*.cmd
-          touch "$ACDIR"/*.c
-          make -C "$KDIR" ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- V=1 M=sound/pci/ac97 modules
-          echo
-          echo "==> $ACDIR contents after forced rebuild:"
-          ls -la --time-style=full-iso "$ACDIR"
-          file "$ACDIR/snd-ac97-codec.ko" || true
-          readelf -h "$ACDIR/snd-ac97-codec.ko" || true
-
       - name: Build update package
         env:
           CROSS_COMPILE: arm-linux-gnueabi-

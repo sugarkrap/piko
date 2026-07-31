@@ -105,6 +105,8 @@ cp "$UPDATE_TAR" "$STAGE/root/update.tar"
 echo "==> staged initramfs tree (host side, before cpio archival):"
 ls -la "$STAGE/root/usr/sbin/piko-update" 2>&1
 find "$STAGE/root/lib/modules" -name '*.ko' -exec ls -la {} + 2>&1
+echo "==> total staged size (this is what has to fit in the guest's fixed 64M):"
+du -sb "$STAGE/root" 2>&1
 
 ( cd "$STAGE/root" && find . -mindepth 1 | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$STAGE/initramfs.cpio.gz"
 
@@ -113,18 +115,19 @@ zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|\.ko$'
 
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"
-# -m 256: -M spitz's default (64M, matching real Corgi/Husky hardware) isn't
-# enough RAM for the kernel to unpack this test's initramfs. That initramfs
-# is larger than any real-device rootfs because it embeds *both* the
-# extracted modules/piko-update AND a full second copy of update.tar (see
-# the cp a few lines up) -- decompressed it's ~29MB against only ~21MB free
-# at boot on a real 64M machine, so unpacking hit ENOSPC partway through and
-# silently truncated whichever files landed at that offset (that's what was
-# actually behind the piko-update ENOENT / snd-ac97-codec.ko "Exec format
-# error" this test used to produce -- not tar/cpio packaging corruption).
-# This is a QEMU test-harness allowance, not a real-device RAM budget, so
-# bumping it here doesn't mask an actual on-device constraint.
-timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz -m 256 \
+# -M spitz hard-codes 64M of guest RAM (matching real Corgi/Husky hardware)
+# and ignores -m entirely -- confirmed in CI: "Memory: 21160K/65536K
+# available" was identical whether or not -m was passed. Real hardware's
+# /tmp (where piko-update stages a verify copy of every file before
+# installing anything, see piko-update.c's own safety-model comment) lives
+# on the flash-backed "home" partition, not RAM -- but this test's
+# initramfs puts everything, including where /tmp ends up, into that same
+# fixed 64M. So the actual fix is keeping what has to fit there small, not
+# fighting the RAM ceiling: build-update-package.sh now strips debug info
+# from shipped .ko files (CONFIG_DEBUG_INFO=y bloats them well past what a
+# loadable module needs), which was the real excess, not tar/cpio
+# packaging corruption -- host-side sizes always matched at every stage.
+timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
     -append "console=ttyS0 earlyprintk panic=1" \
