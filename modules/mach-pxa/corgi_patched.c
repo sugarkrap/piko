@@ -482,12 +482,17 @@ static struct platform_device corgi_gpio_keys_device = {
 /*
  * Corgi LEDs
  *
- * Amber/charge LED (GPIO13, direct PXA GPIO): its "sharpsl-charge" trigger
- * only toggles the LED classdev's software state. The LED's actual physical
- * ability to light up is additionally gated in hardware by
- * CORGI_GPIO_CHRG_ON (see corgi_charger_init()/corgi_charge() in
- * corgi_pm.c): that gate is now held open permanently at boot so the LED
- * always reflects real charger presence.
+ * Amber/charge LED (GPIO13, direct PXA GPIO): the board -- not the kernel --
+ * owns this LED. GPIO13 is an *enable*, not a plain output: with it high the
+ * charger circuit lights and extinguishes the LED itself according to real
+ * adapter presence, and with it low the LED stays dark no matter what.
+ * Sharp's own kernels exploited exactly that and simply drove it high once
+ * at boot, so that is what we do -- DEFSTATE_ON with both retain_state flags,
+ * no trigger, nobody touching it again for the life of the boot. The old
+ * "sharpsl-charge" trigger only re-derived in software (via ACIN polling in
+ * sharpsl_pm.c) a decision the hardware had already made, and could only ever
+ * disagree with the panel. The second half of the enable, CORGI_GPIO_CHRG_ON,
+ * is likewise held open permanently -- see corgi_charger_init() in corgi_pm.c.
  *
  * Green LED (SCOOP PA11, via CORGI_GPIO_LED_GREEN): originally a stock
  * "mail" notification LED, repurposed here as a drive/flash-access
@@ -498,8 +503,10 @@ static struct platform_device corgi_gpio_keys_device = {
 static struct gpio_led corgi_gpio_leds[] = {
 	{
 		.name			= "corgi:amber:charge",
-		.default_trigger	= "sharpsl-charge",
 		.gpio			= CORGI_GPIO_LED_ORANGE,
+		.default_state		= LEDS_GPIO_DEFSTATE_ON,
+		.retain_state_suspended	= 1,
+		.retain_state_shutdown	= 1,
 	},
 	{
 		.name			= "corgi:green:drive",
