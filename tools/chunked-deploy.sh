@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--replace-dropbear] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [--replace-dropbear] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -34,6 +34,13 @@ set -eu
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
 # that haven't changed just adds time and extra risk on the flaky link.
+# --create-backup-files makes send_file() keep a "$remote_path.bak" copy of
+# whatever it overwrites. OFF by default: every file this script touches
+# ends up duplicated on the ~68 MiB root jffs2 if it's on, and routine
+# resyncs (this script is meant to be re-run often) were quietly eating the
+# device's free flash one .bak at a time. Turn it on for a single risky
+# change (e.g. a kernel-only redeploy you might need to roll back by hand)
+# where having *a* known-good previous copy on-device is worth the space.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -51,6 +58,7 @@ ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
 NO_USERSPACE=0
+CREATE_BACKUP_FILES=0
 REPLACE_DROPBEAR=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -78,12 +86,16 @@ while [ $# -gt 0 ]; do
             NO_USERSPACE=1
             shift
             ;;
+        --create-backup-files)
+            CREATE_BACKUP_FILES=1
+            shift
+            ;;
         --replace-dropbear)
             REPLACE_DROPBEAR=1
             shift
             ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--replace-dropbear] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [--replace-dropbear] [user@host]"
             exit 0
             ;;
         --*)
@@ -206,7 +218,9 @@ remote_md5() {
 # Splits LOCAL_PATH into CHUNK_SIZE pieces, transfers each into a scratch
 # dir under REMOTE_STAGE, retrying only the pieces that fail/mismatch, then
 # concatenates remotely and verifies total size before replacing the
-# destination (with a .bak of whatever was there before).
+# destination (with a .bak of whatever was there before, if
+# --create-backup-files was passed -- off by default, see the flag's doc
+# above).
 send_file() {
     local_path="$1"
     remote_path="$2"
@@ -299,15 +313,24 @@ send_file() {
         break
     done
 
-    ssh_do "
-        set -e
-        if [ -f '$remote_path' ]; then
-            cp '$remote_path' '$remote_path.bak'
-        fi
-        mv '$remote_new' '$remote_path'
-        rm -rf '$remote_chunk_dir'
-    "
-    echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+        ssh_do "
+            set -e
+            if [ -f '$remote_path' ]; then
+                cp '$remote_path' '$remote_path.bak'
+            fi
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    else
+        ssh_do "
+            set -e
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path"
+    fi
 }
 
 echo "Target: $TARGET"
@@ -498,16 +521,18 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     # Replacing the live SSH server is the one deploy on this board that
     # can strand it: there is no serial console and no USB (AGENTS.md), so
     # a dropbear that fails to start is unrecoverable without an SD-card
-    # recovery flash. Hence opt-in, and hence rename-aside rather than
-    # overwrite:
-    #   - the running dropbear holds its own inode open, so writing over
-    #     it fails with ETXTBSY (this device's busybox has no kill/killall
-    #     either -- it cannot be stopped first);
-    #   - `mv` of the old binary keeps the running process alive on the
-    #     old inode AND leaves /usr/sbin/dropbear.prev as the thing to
-    #     rename back from a console if the new one misbehaves.
-    # The new server does not take effect until the next softreboot; the
-    # currently-open SSH session is unaffected by the swap.
+    # recovery flash. Hence opt-in, and hence the explicit rename-aside
+    # first:
+    #   - it leaves /usr/sbin/dropbear.prev as the thing to rename back
+    #     from the device console if the new server misbehaves. send_file's
+    #     own .bak is NOT that safety net -- it is off unless
+    #     --create-backup-files is passed, and this rollback copy has to
+    #     exist whether or not the caller asked for backups generally;
+    #   - the running dropbear keeps executing from the old inode, so the
+    #     swap cannot disturb the session doing the deploying. (This
+    #     device's busybox has no kill/killall, so stopping it first is not
+    #     an option in any case.)
+    # The new server does not take effect until the next softreboot.
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
         srv_src="$SSH_STAGE/${SSH_PAYLOAD_SERVER%%:*}"
         srv_rest="${SSH_PAYLOAD_SERVER#*:}"
@@ -749,7 +774,11 @@ fi
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
-echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+    echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+else
+    echo "  /boot/zImage-full        (no .bak kept -- pass --create-backup-files for one)"
+fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then

@@ -212,6 +212,12 @@ cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
 cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
 cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
 
+# xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
+# the binary does ship from this payload (see XEV_BIN above) -- it is part
+# of the X11 stack proper.
+cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
+cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.
