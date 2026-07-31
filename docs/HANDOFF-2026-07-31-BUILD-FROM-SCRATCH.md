@@ -24,7 +24,9 @@ touchscreen.
 Working: framebuffer X, keyboard (with a custom XKB layout for the
 Zaurus Fn symbol row), touchscreen as an absolute pointer, WiFi, SSH,
 audio, SD card, MPlayer, SDL 1.2 (fbcon backend, confirmed drawing to
-the panel via `sdltest` -- see `tools/build-sdl.sh`).
+the panel via `sdltest` -- see `tools/build-sdl.sh`), and FLTK 1.3 as a
+shared X11 toolkit (confirmed on screen via `fltktest` -- see
+`tools/build-fltk.sh`).
 
 ---
 
@@ -151,7 +153,19 @@ Install each component to its **own** `DESTDIR`
 `/tmp/mb-stage-common`) -- they are built independently and would
 otherwise race installing into one tree.
 
-**5. Pack and deploy.**
+**5. FLTK.** Needs step 4 finished (it links libXft/libXrender out of the
+staging tree), and is the one X-adjacent component that *is* scripted:
+
+    tools/build-fltk.sh
+
+It cross-builds FLTK 1.3 as a shared library straight into
+`userspace/stage-target`, so the payload picks it up with everything else.
+`tools/build-userspace.sh` runs it too, and skips it (without failing) when
+the X stage isn't there yet. **`docs/HOWTO-FLTK.md`** has the whole story:
+the four non-obvious configure choices, what is deliberately off, how to
+test it with `fltktest`, and how to cross-build your own FLTK apps.
+
+**6. Pack and deploy.**
 
     tools/build-matchbox-payload.sh                 # inspect the tar first
     tools/build-and-deploy.sh --adapter <iface> root@<device-ip>
@@ -161,7 +175,7 @@ and hands off to `chunked-deploy.sh`, which ships everything and unpacks
 X with `untar`. Useful flags: `--kernel-only`, `--skip-x11`,
 `--no-userspace`, `--force-kernel-src`.
 
-**6. Reboot.** It should come up at the desktop. If X fails,
+**7. Reboot.** It should come up at the desktop. If X fails,
 `/etc/init.d/xsession` drops you to a console login on tty1 instead --
 by design, since inittab respawns it.
 
@@ -205,6 +219,13 @@ enumerate fine and do nothing.
 7. `tools/deploy-x11.sh` predates `build-matchbox-payload.sh` +
    `chunked-deploy.sh` section 9 and now overlaps them. Decide which
    survives rather than letting both drift.
+8. **FLTK costs `libstdc++.so.6`** -- 1.6MB stripped, the single largest
+   thing in the payload after Xfbdev and libX11, and it is there purely
+   because FLTK is the only C++ component in the stack. Nothing is wrong
+   with it; it is just the one line item worth knowing about if flash gets
+   tight. (FLTK itself is verified working on hardware -- `fltktest`
+   renders under the Matchbox session -- so this is a size note, not a
+   defect.)
 
 ---
 

@@ -12,6 +12,10 @@ For the panel's applets specifically -- what exists, the four upstream bugs
 that had to be fixed, and why a two-applet panel is the default rather than
 a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
+For **writing our own GUI apps** against this X server, see
+`docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
+cross-compile line for your own programs.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -47,6 +51,8 @@ Nothing builds it. The classic one is `matchbox-desktop-classic`.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
+                                        # and libXrender staged first
 
 The last four are independent of each other once libmatchbox exists and
 can be built in parallel -- but give each its own `DESTDIR`, because they
@@ -130,6 +136,22 @@ new runtime libraries -- libX11, libXft, libfontconfig and libfreetype are
 already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
+
+**FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
+toolkit for writing our own apps against this X server, cross-built as a
+shared library by `tools/build-fltk.sh` and installed **into
+`userspace/stage-target` itself** rather than a stage of its own -- it is
+part of that X sysroot, and anything cross-linking against FLTK later
+needs it on the same include/lib path as libX11. Four of its configure
+choices are not guessable (`--x-includes`/`--x-libraries`, an explicit
+`--enable-xft`, system-vs-bundled image libraries, and building only
+`src/` + the image dirs) and it is the only C++ component in the stack,
+so the payload also ships `libstdc++.so.6`.
+
+**`docs/HOWTO-FLTK.md` covers all of it** -- the build, what is
+deliberately turned off, how to test it on the device with `fltktest`,
+the verified cross-compile line for your own apps, and a troubleshooting
+table. Verified on hardware 2026-07-31.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
