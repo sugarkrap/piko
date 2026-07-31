@@ -30,21 +30,32 @@ set -eu
 #                                   dynamically linked against this project's
 #                                   otherwise-static convention) plus the
 #                                   sdltest dummy smoke-test app.
+#   5. tools/build-st.sh            st (suckless terminal). Unlike the other
+#                                   four, it is NOT self-contained: it links
+#                                   dynamically against libX11/libXft/
+#                                   fontconfig/freetype from
+#                                   userspace/stage-target, i.e. it needs the
+#                                   X11/matchbox stack (see below) already
+#                                   staged. Skipped, not fatal, when that
+#                                   stage doesn't exist, so a clean checkout
+#                                   that hasn't done the X11 bring-up yet
+#                                   still gets a complete ALSA/MPlayer/SDL
+#                                   build out of this script.
 #
-# NOT BUILT HERE: the X11/matchbox stack (userspace/src/libX11, xserver,
-# matchbox-window-manager, pixman, ...). Those are git submodules that were
-# cross-built and staged into userspace/stage-target by hand; there is no
-# scripted build for them yet, and inventing one blindly here would be worse
-# than saying so. tools/deploy-x11.sh deploys whatever is already staged.
-# If you add a build-x11.sh, wire it in here.
+# NOT BUILT HERE: the X11/matchbox stack itself (userspace/src/libX11,
+# xserver, matchbox-window-manager, pixman, ...). Those are git submodules
+# that were cross-built and staged into userspace/stage-target by hand;
+# there is no scripted build for them yet, and inventing one blindly here
+# would be worse than saying so. tools/deploy-x11.sh deploys whatever is
+# already staged. If you add a build-x11.sh, wire it in here.
 #
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,
 # stage-sdl, stage-sdl-runtime), the vendored upstream source trees under
-# userspace/src/, and userspace/src/md5sum.
+# userspace/src/, userspace/src/md5sum, and userspace/src/st/st.
 #
 # Usage:
-#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl]
+#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]
 #
 # --force        rebuild every component from scratch (re-extract sources,
 #                reconfigure). Slow: MPlayer alone is a ~15 MiB static binary
@@ -54,6 +65,7 @@ set -eu
 # --skip-mplayer don't build MPlayer -- much the slowest step, so this is
 #                the useful one when you only touched the audio stack.
 # --skip-sdl     don't build SDL 1.2 / sdltest.
+# --skip-st      don't build st.
 #
 # Env overrides are passed straight through to the per-component scripts;
 # see those for the full list. The common ones:
@@ -72,19 +84,21 @@ FORCE=0
 SKIP_ALSA=0
 SKIP_MPLAYER=0
 SKIP_SDL=0
+SKIP_ST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --force)        FORCE=1;        shift ;;
         --skip-alsa)    SKIP_ALSA=1;    shift ;;
         --skip-mplayer) SKIP_MPLAYER=1; shift ;;
         --skip-sdl)     SKIP_SDL=1;     shift ;;
+        --skip-st)      SKIP_ST=1;      shift ;;
         -h|--help)
             sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "tools/build-userspace.sh: unknown argument: $1" >&2
-            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl]" >&2
+            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]" >&2
             exit 1
             ;;
     esac
@@ -152,6 +166,18 @@ else
     echo "==> --skip-sdl: not building SDL"
 fi
 
+# --- 5. st (needs the X11 stack already staged -- see header) --------------
+if [ "$SKIP_ST" -eq 0 ]; then
+    if [ -f "$REPO/userspace/stage-target/usr/include/X11/Xlib.h" ]; then
+        echo "==> building st"
+        sh "$REPO/tools/build-st.sh" $FORCE_ARG
+    else
+        echo "==> skipping st (userspace/stage-target has no X11 stack staged yet)"
+    fi
+else
+    echo "==> --skip-st: not building st"
+fi
+
 echo ""
 echo "==> userspace build complete"
 # Explicit ifs rather than `[ ... ] && echo`: a false test on the last such
@@ -168,6 +194,9 @@ if [ -f "$REPO/userspace/stage-mplayer/usr/bin/mplayer" ]; then
 fi
 if [ -d "$REPO/userspace/stage-sdl-runtime" ]; then
     echo "    sdl:     $REPO/userspace/stage-sdl-runtime ($(du -sh "$REPO/userspace/stage-sdl-runtime" 2>/dev/null | cut -f1))"
+fi
+if [ -f "$REPO/userspace/src/st/st" ]; then
+    echo "    st:      $REPO/userspace/src/st/st ($(du -h "$REPO/userspace/src/st/st" 2>/dev/null | cut -f1))"
 fi
 echo ""
 echo "    Deploy with tools/build-and-deploy.sh (or tools/chunked-deploy.sh)."
