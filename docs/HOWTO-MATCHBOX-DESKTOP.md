@@ -12,6 +12,10 @@ For the panel's applets specifically -- what exists, the four upstream bugs
 that had to be fixed, and why a two-applet panel is the default rather than
 a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
+For **writing our own GUI apps** against this X server, see
+`docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
+cross-compile line for your own programs.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -134,54 +138,20 @@ straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
 
 **FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
-toolkit for writing our own apps against this X server, built as a shared
-library by `tools/build-fltk.sh` and installed **into
+toolkit for writing our own apps against this X server, cross-built as a
+shared library by `tools/build-fltk.sh` and installed **into
 `userspace/stage-target` itself** rather than a stage of its own -- it is
 part of that X sysroot, and anything cross-linking against FLTK later
-needs it on the same include/lib path as libX11. Four things about that
-build are not guessable:
+needs it on the same include/lib path as libX11. Four of its configure
+choices are not guessable (`--x-includes`/`--x-libraries`, an explicit
+`--enable-xft`, system-vs-bundled image libraries, and building only
+`src/` + the image dirs) and it is the only C++ component in the stack,
+so the payload also ships `libstdc++.so.6`.
 
-- **1.3, not 1.4/1.5.** 1.3.11 is the last autotools + C++98 + X11-only
-  release. 1.4 makes CMake primary, wants C++11, and defaults to a
-  Wayland backend with Pango/Cairo font handling -- all dead weight
-  against a kdrive server on a PXA255.
-- **`--x-includes` / `--x-libraries` are mandatory.** FLTK finds X via
-  `AC_PATH_XTRA`, which searches hardcoded *host* paths and knows nothing
-  about a cross sysroot. Same trap as matchbox-window-manager.
-- **`--enable-xft` explicitly**, not just left at its default. This board
-  has no core X bitmap fonts at all (see "Fonts are mandatory" below), so
-  without Xft every FLTK label renders blank. Passing the flag makes
-  configure *abort* when Xft is missing instead of quietly building that
-  unusable library.
-- **JPEG stays bundled; zlib and libpng do not.** FLTK vendors all three.
-  zlib and libpng are already cross-built and staged for the rest of the
-  desktop, so `--disable-localzlib --disable-localpng` avoids shipping a
-  second copy of each inside `libfltk_images`. Nothing here stages a
-  libjpeg, so that one stays bundled (linked in statically -- configure
-  compiles it `-fPIC` because `--enable-shared` is on).
-
-It is the **only C++ component in the stack**, so the payload now also
-ships `libstdc++.so.6` out of the toolchain sysroot alongside
-`libgcc_s.so.1`. That is 1.6MB stripped, by far the largest single thing
-FLTK adds; the three FLTK libraries together are about 1MB.
-
-`fltktest` (`userspace/src/fltktest.cxx`, shipped to
-`/usr/local/bin/fltktest`) is the FLTK counterpart of `sdltest`: it prints
-its version line *before* opening the display, so a loader failure and an
-X failure look different, then shows a window with text and a drawn shape.
-Run it from `st`, or over SSH with `DISPLAY=:0`.
-
-**Verified on hardware 2026-07-31**: under the running Matchbox session it
-prints `fltktest: FLTK 1.3.11`, opens its window, and renders text and
-graphics on the panel -- confirmed by eye, not inferred from an exit code.
-
-One benign line to expect on stderr:
-
-    XOpenIM() failed
-
-There is no X input method server on this device and nothing here needs
-one -- FLTK warns once and carries on. It is not a symptom of a broken
-build.
+**`docs/HOWTO-FLTK.md` covers all of it** -- the build, what is
+deliberately turned off, how to test it on the device with `fltktest`,
+the verified cross-compile line for your own apps, and a troubleshooting
+table. Verified on hardware 2026-07-31.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a

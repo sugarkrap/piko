@@ -161,8 +161,9 @@ staging tree), and is the one X-adjacent component that *is* scripted:
 It cross-builds FLTK 1.3 as a shared library straight into
 `userspace/stage-target`, so the payload picks it up with everything else.
 `tools/build-userspace.sh` runs it too, and skips it (without failing) when
-the X stage isn't there yet. See `docs/HOWTO-MATCHBOX-DESKTOP.md` for the
-four non-obvious configure choices.
+the X stage isn't there yet. **`docs/HOWTO-FLTK.md`** has the whole story:
+the four non-obvious configure choices, what is deliberately off, how to
+test it with `fltktest`, and how to cross-build your own FLTK apps.
 
 **6. Pack and deploy.**
 
