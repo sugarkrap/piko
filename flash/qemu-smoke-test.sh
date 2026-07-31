@@ -113,7 +113,18 @@ zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|\.ko$'
 
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"
-timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
+# -m 256: -M spitz's default (64M, matching real Corgi/Husky hardware) isn't
+# enough RAM for the kernel to unpack this test's initramfs. That initramfs
+# is larger than any real-device rootfs because it embeds *both* the
+# extracted modules/piko-update AND a full second copy of update.tar (see
+# the cp a few lines up) -- decompressed it's ~29MB against only ~21MB free
+# at boot on a real 64M machine, so unpacking hit ENOSPC partway through and
+# silently truncated whichever files landed at that offset (that's what was
+# actually behind the piko-update ENOENT / snd-ac97-codec.ko "Exec format
+# error" this test used to produce -- not tar/cpio packaging corruption).
+# This is a QEMU test-harness allowance, not a real-device RAM budget, so
+# bumping it here doesn't mask an actual on-device constraint.
+timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz -m 256 \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
     -append "console=ttyS0 earlyprintk panic=1" \
