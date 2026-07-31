@@ -124,13 +124,50 @@ the strength of a timer it cannot trust. Verified: with X up and `-d 5
 -b 10`, the panel stays put for 22s and the log reads
 `keyboard grabbed (X) -- idle policy suspended`.
 
-### The fix
+### The fix: X becomes a pure event source
 
 X is the only process that can see input while it holds the grab, so X
 has to be the event source. `userspace/src/xserver` is our own fork, so
-the intended change is a small patch to kdrive's evdev reader making it
-report activity (and the Fn+3/Fn+4 chord) to `brightd`, with `brightd`
-keeping ownership of the actual policy. Not done yet.
+the change is a small patch to kdrive's evdev reader. **`brightd` keeps
+ownership of all policy** — X makes no backlight decisions of its own and
+just reports what it saw.
+
+The channel is a FIFO, `/tmp/brightd.fifo`, created by `brightd`. One
+byte per message:
+
+| byte | meaning |
+|---|---|
+| `h` | heartbeat / hello — "I am alive and feeding you events". **Not** activity. Send on open, then every few seconds regardless of input. |
+| `a` | input activity (any key or touch). Rate-limit it; this is a wake-up, not an event log. |
+| `u` | brightness up (Fn+4) |
+| `d` | brightness down (Fn+3) |
+
+Unknown bytes are ignored rather than guessed at, so the protocol can
+grow without breaking an older daemon.
+
+**The heartbeat is the load-bearing part.** Without it, `brightd` cannot
+distinguish "X is grabbing input and forwarding it, and the user really
+is idle" (dim!) from "X is grabbing input and telling us nothing" (do not
+dim — we are blind). Absence of `a` means both. A recent `h` separates
+them: while a heartbeat is live, a grab is no longer a reason to suspend
+idle policy.
+
+`brightd` also holds a write descriptor on the FIFO itself. A FIFO whose
+last writer closes goes to permanent EOF — `read()` returns 0 and
+`select()` reports it readable forever — which would spin the loop at
+100% CPU the moment X exited.
+
+**The receiving half is implemented and verified**, by simulating the X
+side from the shell (`echo h > /tmp/brightd.fifo` etc.) with X really
+holding the grab:
+
+* heartbeats only → idle timer trusted despite the grab; dimmed 31→5,
+  then blanked
+* `a` → restored to 31, unblanked
+* `u`, `u`, `d` → 31 → 33 → 47 → 33, matching the ladder
+
+So the remaining xserver work has a target that is already known-good:
+emit `h` periodically, `a` on activity, `u`/`d` on the Fn chord.
 
 Removing the grab instead is the other obvious option and is deliberately
 **not** taken: the grab is what stops keystrokes reaching the kernel VT
@@ -172,8 +209,10 @@ grabs those keysyms, so there is no double-stepping.
 * `pkillx brightd` stops it.
 * With X up, `event1`/`event2` refuse a grab with `EBUSY` and `event0`
   does not — reproduced across a reboot.
-* With X up and aggressive timers, the panel does **not** dim or blank,
-  and the daemon logs that it suspended idle policy.
+* With X up and aggressive timers and no heartbeat, the panel does
+  **not** dim or blank.
+* With X up and heartbeats arriving on the FIFO, it does dim and blank,
+  and `a`/`u`/`d` restore and step correctly.
 
 Not yet verified, because it needs someone at the keyboard: that activity
 actually restores from dim/blank, and the Fn+3/Fn+4 chord on the console.

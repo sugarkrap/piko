@@ -85,6 +85,36 @@
  */
 #define INHIBIT    "/tmp/brightd.inhibit"
 
+/*
+ * Event channel from the X server.
+ *
+ * Xfbdev EVIOCGRABs the keyboard and touchscreen (see input_is_grabbed()),
+ * so while X runs it is the ONLY process that can see them. Our xserver
+ * fork therefore feeds this FIFO and brightd keeps owning policy -- X is
+ * a pure event source and makes no backlight decisions of its own.
+ *
+ * One byte per message:
+ *
+ *   'h'  heartbeat / hello. "I am alive and I am feeding you events."
+ *        NOT activity. Sent on open and then every few seconds
+ *        regardless of input.
+ *   'a'  input activity (any key or touch). Rate-limited by the sender;
+ *        this is a wake-up, not an event log.
+ *   'u'  brightness up   (Fn+4)
+ *   'd'  brightness down (Fn+3)
+ *
+ * The heartbeat is what makes the grab survivable. Without it we cannot
+ * tell "X is grabbing input and forwarding it, and the user really is
+ * idle" (dim!) from "X is grabbing input and telling us nothing" (do not
+ * dim, we are blind). Absence of 'a' means both. Presence of a recent
+ * 'h' distinguishes them.
+ */
+#define FIFO_PATH  "/tmp/brightd.fifo"
+
+/* How long a heartbeat vouches for the X event source. Must be
+ * comfortably longer than the sender's heartbeat interval. */
+#define HEARTBEAT_TTL 30
+
 /* Defaults, all overridable from the command line -- see usage(). */
 #define DEF_DIM_SECS    60
 #define DEF_BLANK_SECS  300
@@ -120,6 +150,9 @@ static int saved_level = -1;
  * we last checked. See input_is_grabbed(). */
 static int starved = 0;
 static time_t last_probe = 0;
+
+/* When we last heard a heartbeat on FIFO_PATH. 0 means never. */
+static time_t last_heartbeat = 0;
 
 static void
 usage(void)
@@ -335,6 +368,38 @@ run_bright(const char *arg)
 		;
 }
 
+/*
+ * Open the X event channel.
+ *
+ * We hold a second, write-side descriptor on purpose. A FIFO whose last
+ * writer closes goes to permanent EOF: read() returns 0 and select()
+ * reports it readable forever, which would spin this loop at 100% CPU the
+ * moment X exited. Keeping one writer of our own open means there is
+ * always at least one, so the read side simply blocks (well, returns
+ * EAGAIN) instead of ever seeing EOF.
+ */
+static int
+open_fifo(int *write_fd)
+{
+	int fd;
+
+	if (mkfifo(FIFO_PATH, 0666) < 0 && errno != EEXIST) {
+		fprintf(stderr, "brightd: mkfifo %s: %s\n",
+			FIFO_PATH, strerror(errno));
+		return -1;
+	}
+
+	fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
+	if (fd < 0) {
+		fprintf(stderr, "brightd: open %s: %s\n",
+			FIFO_PATH, strerror(errno));
+		return -1;
+	}
+
+	*write_fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+	return fd;
+}
+
 static int
 open_input(const char *path)
 {
@@ -350,6 +415,7 @@ int
 main(int argc, char **argv)
 {
 	int fd_sw, fd_key, fd_touch, maxfd;
+	int fd_fifo, fd_fifo_w = -1;
 	int fn_held = 0;
 	int lid_closed = 0;
 	time_t last_activity;
@@ -389,6 +455,10 @@ main(int argc, char **argv)
 		return 1;
 	}
 
+	/* Non-fatal: without it we simply have no X event source and fall
+	 * back to the console-only behaviour. */
+	fd_fifo = open_fifo(&fd_fifo_w);
+
 	last_activity = now_mono();
 
 	for (;;) {
@@ -402,6 +472,7 @@ main(int argc, char **argv)
 		if (fd_key >= 0)   { FD_SET(fd_key, &rfds);   if (fd_key > maxfd)   maxfd = fd_key; }
 		if (fd_touch >= 0) { FD_SET(fd_touch, &rfds); if (fd_touch > maxfd) maxfd = fd_touch; }
 		if (fd_sw >= 0)    { FD_SET(fd_sw, &rfds);    if (fd_sw > maxfd)    maxfd = fd_sw; }
+		if (fd_fifo >= 0)  { FD_SET(fd_fifo, &rfds);  if (fd_fifo > maxfd)  maxfd = fd_fifo; }
 
 		tv.tv_sec = TICK_SECS;
 		tv.tv_usec = 0;
@@ -475,6 +546,41 @@ main(int argc, char **argv)
 					activity = 1;
 				}
 			}
+
+			/* Messages from the X server (see FIFO_PATH). */
+			if (fd_fifo >= 0 && FD_ISSET(fd_fifo, &rfds)) {
+				char buf[64];
+				ssize_t got;
+
+				while ((got = read(fd_fifo, buf, sizeof(buf))) > 0) {
+					ssize_t k;
+
+					for (k = 0; k < got; k++) {
+						switch (buf[k]) {
+						case 'h':
+							if (!last_heartbeat)
+								say("brightd: X event source connected");
+							last_heartbeat = now_mono();
+							break;
+						case 'a':
+							activity = 1;
+							break;
+						case 'u':
+						case 'd':
+							go_active();
+							run_bright(buf[k] == 'u' ? "up" : "down");
+							activity = 1;
+							break;
+						default:
+							/* Unknown opcode: ignore rather
+							 * than guess, so the protocol
+							 * can grow without breaking
+							 * an older daemon. */
+							break;
+						}
+					}
+				}
+			}
 		}
 
 		if (activity) {
@@ -503,19 +609,30 @@ main(int argc, char **argv)
 			    (dim_secs > 0 && idle >= dim_secs)) {
 				time_t t = now_mono();
 
+				int x_alive = last_heartbeat &&
+					      (t - last_heartbeat) < HEARTBEAT_TTL;
+
 				if (t - last_probe >= GRAB_PROBE_SECS) {
 					int now_starved = input_is_grabbed(fd_key);
 
 					if (now_starved != starved) {
 						starved = now_starved;
 						say(starved
-						    ? "brightd: keyboard grabbed (X) -- idle policy suspended"
-						    : "brightd: keyboard readable -- idle policy active");
+						    ? "brightd: keyboard grabbed (X)"
+						    : "brightd: keyboard readable");
 					}
 					last_probe = t;
 				}
 
-				if (starved) {
+				/*
+				 * Blind means grabbed AND with nobody feeding
+				 * us instead. A grab on its own is fine once
+				 * the X event source is heartbeating: then the
+				 * absence of activity is real idleness rather
+				 * than our own deafness, and dimming is
+				 * exactly right.
+				 */
+				if (starved && !x_alive) {
 					/* Never hold the panel dark on the
 					 * strength of an idle timer we cannot
 					 * trust. */
