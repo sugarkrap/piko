@@ -102,7 +102,14 @@ if tar tf "$UPDATE_TAR" | grep -q '^lib/modules/'; then
 fi
 cp "$UPDATE_TAR" "$STAGE/root/update.tar"
 
+echo "==> staged initramfs tree (host side, before cpio archival):"
+ls -la "$STAGE/root/usr/sbin/piko-update" 2>&1
+find "$STAGE/root/lib/modules" -name '*.ko' -exec ls -la {} + 2>&1
+
 ( cd "$STAGE/root" && find . -mindepth 1 | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$STAGE/initramfs.cpio.gz"
+
+echo "==> initramfs contents after cpio archival (re-read back, host side):"
+zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|\.ko$'
 
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"

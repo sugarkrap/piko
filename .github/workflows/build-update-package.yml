@@ -316,7 +316,16 @@ jobs:
           exit "$rc"
 
       - name: Summarize package contents
+        if: always()
         run: |
+          # Also to plain stdout, not just $GITHUB_STEP_SUMMARY -- the
+          # latter is only rendered client-side in the Actions UI and
+          # isn't reachable through the job-logs API at all, so a listing
+          # that only went there was invisible while diagnosing a real
+          # failure (had to guess at file sizes/contents from CI log
+          # excerpts instead of just reading them).
+          echo "==> update.tar contents (sizes, perms):"
+          tar tvf update.tar
           {
             echo "### piko-update package"
             echo
@@ -337,3 +346,17 @@ jobs:
           name: piko-update-package
           path: update.tar
           if-no-files-found: error
+
+      - name: Upload update.tar (debug, smoke test failed -- NOT validated)
+        # A package that fails the smoke test is never uploaded as the
+        # real "piko-update-package" artifact above -- that invariant
+        # stays. This is a separate, clearly-labeled debug copy purely so
+        # a failure can actually be diagnosed (file sizes/checksums
+        # inspected directly) without re-deriving them from CI log
+        # excerpts -- never treat this one as a validated package.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: piko-update-package-DEBUG-UNVALIDATED
+          path: update.tar
+          if-no-files-found: ignore
