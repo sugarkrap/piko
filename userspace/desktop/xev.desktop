@@ -15,6 +15,6 @@ Comment=Show X keyboard and pointer events
 # write. In a terminal the events are visible live and nothing is written
 # at all, which is the entire point of running this.
 Exec=/usr/local/bin/st -e /usr/local/bin/xev
-Icon=mbterm.png
+Icon=xev.png
 Terminal=false
 Categories=System;

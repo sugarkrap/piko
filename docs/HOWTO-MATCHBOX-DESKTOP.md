@@ -149,9 +149,10 @@ matchbox-session, which `/etc/init.d/xsession` redirects to
 `/tmp/matchbox-session.log` -- and `/tmp` here is jffs2 on NAND, not
 tmpfs, so every event line would be a flash write. Both halves of `Exec=`
 are absolute paths because `/usr/local/bin` is not on this device's `PATH`
-(`rootfs/etc/profile`). It reuses matchbox-panel's `mbterm.png` rather
-than shipping an icon of its own; `tools/build-matchbox-payload.sh`
-asserts that pixmap actually landed in the payload.
+(`rootfs/etc/profile`). The launcher and its icon
+(`userspace/desktop/xev.png`, a 32x32 keyboard matching `st.png`'s
+dimensions) ship from the payload script and from
+`flash/build-update-package.sh`, the same two paths st's do.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
