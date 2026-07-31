@@ -86,7 +86,7 @@ free downloads on each model's dedicated page:
 | SL-C750 | `en_c750howto.htm` | (same pattern, unverified) |
 
 Sanity-check any downloaded `.dbk` against the known NAND geometry
-(`docs/HANDOFF.md`: 128MiB Samsung part, 512B page + 16B OOB) before
+(`docs/archive/HANDOFF.md`: 128MiB Samsung part, 512B page + 16B OOB) before
 trusting it: 128MiB × 528/512 ≈ 138,412,032 bytes, which should be within a
 small header/footer's difference of the actual file size. The SL-C760 file
 matched this exactly (138,543,120 bytes, ~131KB over the raw-geometry

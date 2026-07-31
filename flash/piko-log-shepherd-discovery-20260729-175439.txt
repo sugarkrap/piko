@@ -1,0 +1,310 @@
+Piko Install: --- /proc/mtd begin ---
+dev:    size   erasesize  name
+mtd0: 006d0000 00020000 "Filesystem"
+mtd1: 00700000 00004000 "smf"
+mtd2: 03500000 00004000 "root"
+mtd3: 04400000 00004000 "home"
+Piko Install: --- /proc/mtd end ---
+Piko Install: --- /proc/cpuinfo begin ---
+Processor	: Intel XScale-PXA255 rev 6 (v5l)
+BogoMIPS	: 397.31
+Features	: swp half thumb fastmult edsp 
+CPU implementor	: 0x69
+CPU architecture: 5TE
+CPU variant	: 0x0
+CPU part	: 0x2d0
+CPU revision	: 6
+Cache type	: undefined 5
+Cache clean	: undefined 5
+Cache lockdown	: undefined 5
+Cache unified	: harvard
+I size		: 16384
+I assoc		: 16
+I line length	: 32
+I sets		: 32
+D size		: 16384
+D assoc		: 16
+D line length	: 32
+D sets		: 32
+
+Hardware	: SHARP Shepherd
+Revision	: 0000
+Serial		: 0000000000000000
+Piko Install: --- /proc/cpuinfo end ---
+Piko Install: --- /proc/atags begin ---
+Piko Install: cannot open /proc/atags (absent on this kernel)
+Piko Install: --- /proc/atags end ---
+Piko Install: reading targets from piko.cfg
+Piko Install: using 1 target(s) from piko.cfg
+Piko Install: === flashing (nandlogical) zImage to /dev/mtd1 ===
+Piko Install: writing 1259440 bytes at offset 917504
+Piko Install: waitpid returned 149 (child pid was 149)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Writing data starting at 0x000e0000 and ending at 0x00160000...
+Writing e0000 - e4000
+Writing e4000 - e8000
+Writing e8000 - ec000
+Writing ec000 - f0000
+Writing f0000 - f4000
+Writing f4000 - f8000
+Writing f8000 - fc000
+Writing fc000 - 100000
+Writing 100000 - 104000
+Writing 104000 - 108000
+Writing 108000 - 10c000
+Writing 10c000 - 110000
+Writing 110000 - 114000
+Writing 114000 - 118000
+Writing 118000 - 11c000
+Writing 11c000 - 120000
+Writing 120000 - 124000
+Writing 124000 - 128000
+Writing 128000 - 12c000
+Writing 12c000 - 130000
+Writing 130000 - 134000
+Writing 134000 - 138000
+Writing 138000 - 13c000
+Writing 13c000 - 140000
+Writing 140000 - 144000
+Writing 144000 - 148000
+Writing 148000 - 14c000
+Writing 14c000 - 150000
+Writing 150000 - 154000
+Writing 154000 - 158000
+Writing 158000 - 15c000
+Writing 15c000 - 160000
+Piko Install: --- nandlogical output end ---
+Piko Install: wrote 524288 of 1259440
+Piko Install: waitpid returned 150 (child pid was 150)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Writing data starting at 0x00160000 and ending at 0x001e0000...
+Writing 160000 - 164000
+Writing 164000 - 168000
+Writing 168000 - 16c000
+Writing 16c000 - 170000
+Writing 170000 - 174000
+Writing 174000 - 178000
+Writing 178000 - 17c000
+Writing 17c000 - 180000
+Writing 180000 - 184000
+Writing 184000 - 188000
+Writing 188000 - 18c000
+Writing 18c000 - 190000
+Writing 190000 - 194000
+Writing 194000 - 198000
+Writing 198000 - 19c000
+Writing 19c000 - 1a0000
+Writing 1a0000 - 1a4000
+Writing 1a4000 - 1a8000
+Writing 1a8000 - 1ac000
+Writing 1ac000 - 1b0000
+Writing 1b0000 - 1b4000
+Writing 1b4000 - 1b8000
+Writing 1b8000 - 1bc000
+Writing 1bc000 - 1c0000
+Writing 1c0000 - 1c4000
+Writing 1c4000 - 1c8000
+Writing 1c8000 - 1cc000
+Writing 1cc000 - 1d0000
+Writing 1d0000 - 1d4000
+Writing 1d4000 - 1d8000
+Writing 1d8000 - 1dc000
+Writing 1dc000 - 1e0000
+Piko Install: --- nandlogical output end ---
+Piko Install: wrote 1048576 of 1259440
+Piko Install: waitpid returned 151 (child pid was 151)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Writing data starting at 0x001e0000 and ending at 0x002137b0...
+Writing 1e0000 - 1e4000
+Writing 1e4000 - 1e8000
+Writing 1e8000 - 1ec000
+Writing 1ec000 - 1f0000
+Writing 1f0000 - 1f4000
+Writing 1f4000 - 1f8000
+Writing 1f8000 - 1fc000
+Writing 1fc000 - 200000
+Writing 200000 - 204000
+Writing 204000 - 208000
+Writing 208000 - 20c000
+Writing 20c000 - 210000
+Writing 210000 - 2137b0
+Piko Install: --- nandlogical output end ---
+Piko Install: wrote 1259440 of 1259440
+Piko Install: write pass complete for zImage. Verifying...
+Piko Install: waitpid returned 152 (child pid was 152)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Dumping data starting at 0x000e0000 and ending at 0x00160000...
+Dumping e0000 - e4000
+Dumping e4000 - e8000
+Dumping e8000 - ec000
+Dumping ec000 - f0000
+Dumping f0000 - f4000
+Dumping f4000 - f8000
+Dumping f8000 - fc000
+Dumping fc000 - 100000
+Dumping 100000 - 104000
+Dumping 104000 - 108000
+Dumping 108000 - 10c000
+Dumping 10c000 - 110000
+Dumping 110000 - 114000
+Dumping 114000 - 118000
+Dumping 118000 - 11c000
+Dumping 11c000 - 120000
+Dumping 120000 - 124000
+Dumping 124000 - 128000
+Dumping 128000 - 12c000
+Dumping 12c000 - 130000
+Dumping 130000 - 134000
+Dumping 134000 - 138000
+Dumping 138000 - 13c000
+Dumping 13c000 - 140000
+Dumping 140000 - 144000
+Dumping 144000 - 148000
+Dumping 148000 - 14c000
+Dumping 14c000 - 150000
+Dumping 150000 - 154000
+Dumping 154000 - 158000
+Dumping 158000 - 15c000
+Dumping 15c000 - 160000
+Piko Install: --- nandlogical output end ---
+Piko Install: waitpid returned 153 (child pid was 153)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Dumping data starting at 0x00160000 and ending at 0x001e0000...
+Dumping 160000 - 164000
+Dumping 164000 - 168000
+Dumping 168000 - 16c000
+Dumping 16c000 - 170000
+Dumping 170000 - 174000
+Dumping 174000 - 178000
+Dumping 178000 - 17c000
+Dumping 17c000 - 180000
+Dumping 180000 - 184000
+Dumping 184000 - 188000
+Dumping 188000 - 18c000
+Dumping 18c000 - 190000
+Dumping 190000 - 194000
+Dumping 194000 - 198000
+Dumping 198000 - 19c000
+Dumping 19c000 - 1a0000
+Dumping 1a0000 - 1a4000
+Dumping 1a4000 - 1a8000
+Dumping 1a8000 - 1ac000
+Dumping 1ac000 - 1b0000
+Dumping 1b0000 - 1b4000
+Dumping 1b4000 - 1b8000
+Dumping 1b8000 - 1bc000
+Dumping 1bc000 - 1c0000
+Dumping 1c0000 - 1c4000
+Dumping 1c4000 - 1c8000
+Dumping 1c8000 - 1cc000
+Dumping 1cc000 - 1d0000
+Dumping 1d0000 - 1d4000
+Dumping 1d4000 - 1d8000
+Dumping 1d8000 - 1dc000
+Dumping 1dc000 - 1e0000
+Piko Install: --- nandlogical output end ---
+Piko Install: waitpid returned 154 (child pid was 154)
+Piko Install: nandlogical raw status 0
+Piko Install: --- nandlogical output begin ---
+Dumping data starting at 0x001e0000 and ending at 0x002137b0...
+Dumping 1e0000 - 1e4000
+Dumping 1e4000 - 1e8000
+Dumping 1e8000 - 1ec000
+Dumping 1ec000 - 1f0000
+Dumping 1f0000 - 1f4000
+Dumping 1f4000 - 1f8000
+Dumping 1f8000 - 1fc000
+Dumping 1fc000 - 200000
+Dumping 200000 - 204000
+Dumping 204000 - 208000
+Dumping 208000 - 20c000
+Dumping 20c000 - 210000
+Dumping 210000 - 2137b0
+Piko Install: --- nandlogical output end ---
+Piko Install: VERIFY OK for zImage
+Piko Install: --- FTL mapping diagnostic begin (logical 56..132) ---
+Piko Install: FTL: physical 329 -> logical 120
+Piko Install: FTL: physical 330 -> logical 121
+Piko Install: FTL: physical 331 -> logical 122
+Piko Install: FTL: physical 334 -> logical 123
+Piko Install: FTL: physical 335 -> logical 124
+Piko Install: FTL: physical 336 -> logical 125
+Piko Install: FTL: physical 337 -> logical 126
+Piko Install: FTL: physical 338 -> logical 127
+Piko Install: FTL: physical 339 -> logical 128
+Piko Install: FTL: physical 340 -> logical 129
+Piko Install: FTL: physical 341 -> logical 130
+Piko Install: FTL: physical 342 -> logical 131
+Piko Install: FTL: physical 343 -> logical 132
+Piko Install: FTL: physical 381 -> logical 56
+Piko Install: FTL: physical 382 -> logical 57
+Piko Install: FTL: physical 383 -> logical 58
+Piko Install: FTL: physical 384 -> logical 59
+Piko Install: FTL: physical 385 -> logical 60
+Piko Install: FTL: physical 386 -> logical 61
+Piko Install: FTL: physical 387 -> logical 62
+Piko Install: FTL: physical 388 -> logical 63
+Piko Install: FTL: physical 389 -> logical 64
+Piko Install: FTL: physical 390 -> logical 65
+Piko Install: FTL: physical 391 -> logical 66
+Piko Install: FTL: physical 392 -> logical 67
+Piko Install: FTL: physical 393 -> logical 68
+Piko Install: FTL: physical 394 -> logical 69
+Piko Install: FTL: physical 395 -> logical 70
+Piko Install: FTL: physical 396 -> logical 71
+Piko Install: FTL: physical 397 -> logical 72
+Piko Install: FTL: physical 398 -> logical 73
+Piko Install: FTL: physical 399 -> logical 74
+Piko Install: FTL: physical 400 -> logical 75
+Piko Install: FTL: physical 401 -> logical 76
+Piko Install: FTL: physical 402 -> logical 77
+Piko Install: FTL: physical 403 -> logical 78
+Piko Install: FTL: physical 404 -> logical 79
+Piko Install: FTL: physical 405 -> logical 80
+Piko Install: FTL: physical 406 -> logical 81
+Piko Install: FTL: physical 407 -> logical 82
+Piko Install: FTL: physical 408 -> logical 83
+Piko Install: FTL: physical 409 -> logical 84
+Piko Install: FTL: physical 410 -> logical 85
+Piko Install: FTL: physical 411 -> logical 86
+Piko Install: FTL: physical 412 -> logical 87
+Piko Install: FTL: physical 415 -> logical 88
+Piko Install: FTL: physical 416 -> logical 89
+Piko Install: FTL: physical 417 -> logical 90
+Piko Install: FTL: physical 418 -> logical 91
+Piko Install: FTL: physical 419 -> logical 92
+Piko Install: FTL: physical 420 -> logical 93
+Piko Install: FTL: physical 421 -> logical 94
+Piko Install: FTL: physical 422 -> logical 95
+Piko Install: FTL: physical 423 -> logical 96
+Piko Install: FTL: physical 424 -> logical 97
+Piko Install: FTL: physical 425 -> logical 98
+Piko Install: FTL: physical 426 -> logical 99
+Piko Install: FTL: physical 427 -> logical 100
+Piko Install: FTL: physical 428 -> logical 101
+Piko Install: FTL: physical 429 -> logical 102
+Piko Install: FTL: physical 430 -> logical 103
+Piko Install: FTL: physical 431 -> logical 104
+Piko Install: FTL: physical 432 -> logical 105
+Piko Install: FTL: physical 433 -> logical 106
+Piko Install: FTL: physical 434 -> logical 107
+Piko Install: FTL: physical 435 -> logical 108
+Piko Install: FTL: physical 436 -> logical 109
+Piko Install: FTL: physical 437 -> logical 110
+Piko Install: FTL: physical 438 -> logical 111
+Piko Install: FTL: physical 439 -> logical 112
+Piko Install: FTL: physical 440 -> logical 113
+Piko Install: FTL: physical 441 -> logical 114
+Piko Install: FTL: physical 442 -> logical 115
+Piko Install: FTL: physical 443 -> logical 116
+Piko Install: FTL: physical 444 -> logical 117
+Piko Install: FTL: physical 445 -> logical 118
+Piko Install: FTL: physical 446 -> logical 119
+Piko Install: FTL mapping diagnostic: 77 of 77 expected logical block(s) found mapped to a physical block.
+Piko Install: --- FTL mapping diagnostic end ---
+Piko Install: ALL TARGETS FLASHED AND VERIFIED. Power off and reboot.

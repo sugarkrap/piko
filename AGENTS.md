@@ -1,11 +1,30 @@
 # AGENTS.md — read this before working on zaurus-refresh
 
 Mainline Linux (7.1.4) revival for a Sharp Zaurus SL-C760/SL-C860 (PXA255,
-XScale ARMv5TE, "Husky" machine ID). Two-stage kexec boot: a tiny JFFS2+KEXEC
-bootstrap kernel in the `smf` NAND partition kexecs a full stage-2 kernel +
-rootfs stored on `home`. Full history and bug post-mortems are in `docs/`
-(the `DEADLETTER-*.md` files — read the relevant one before touching kexec,
-flashing, the cipher, etc.).
+XScale ARMv5TE). **Machine ID is NOT "Husky."** Two numbers matter and they
+are not the same thing:
+
+- **19** — what the bootloader actually passes in register r1 at boot,
+  confirmed by repeated LED-blink digit readouts on real hardware. Nothing
+  in mainline's `arch/arm/tools/mach-types` claims 19 for this board (it's
+  `L7200` upstream, unrelated hardware) — a new `MACHINE_START` descriptor
+  had to be added that matches it anyway, purely because the alternative is
+  `dump_machine_table()`'s silent infinite loop. **This is the number any
+  mainline kernel booting this board must match against.**
+- **196** — what Sharp's own factory kernel (extracted/decompiled from this
+  board's NAND) calls itself internally ("SHARP Shepherd"). Useful
+  historical/forensic context, and also now registered as a fallback
+  `MACHINE_START`, but it is NOT what the bootloader passes and NOT
+  primarily what boots this board.
+
+See `docs/DEADLETTER-MACHINE-ID-196.md` for the full 19-vs-196 story. Two-
+stage kexec boot: a tiny bootstrap kernel (embedded initramfs, runs
+entirely in RAM — see `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md`) in
+the `smf` NAND partition fetches and kexecs a full stage-2 kernel + rootfs
+stored on `home`. Full history and bug post-mortems are in `docs/` (the
+`DEADLETTER-*.md` files — read the relevant one before touching kexec,
+flashing, the cipher, etc.; resolved/historical material has been moved to
+`docs/archive/` to keep the top level lean).
 
 ## HARD CONSTRAINTS — do not violate
 
@@ -50,18 +69,55 @@ There is no replacement.
   nandlogical at offset **917504**) vs `mtd3` (home, `raw=1` eraseall+nandcp).
   Never copy the `raw`/offset fields between partitions
   (`docs/DEADLETTER-RAW-FLAG.md`, `docs/DEADLETTER-MTD1-OFFSET.md`).
+- **`mtdN` numbering is context-dependent — always say which kernel.** The
+  Cacko/recovery-menu kernel that `piko-install` runs under (and every
+  flashing doc's `mtd1`/`mtd3` above) sees `mtd1=smf / mtd2=root /
+  mtd3=home`. The mainline kernel this project builds sees `mtd0=smf /
+  mtd1=root / mtd2=home` instead — one off, because a NOR "Filesystem"
+  physmap device is defined in `modules/mach-pxa/corgi_patched.c` but never registered in
+  `corgi_devices[]`, so mainline's NAND partitions start counting at
+  `mtd0`. A bare "mtdN" with no kernel context is a trap; say which one.
 - md5-verify every file staged to the SD card.
-- The SD card is shared with other sessions — always re-verify/restore
-  `updater.sh` (the `piko-install`-invoking `flash/updater-encoded.sh`)
-  before each flash.
+- The SD card is shared with other sessions — always re-verify/regenerate
+  `updater.sh` (the `piko-install`-invoking `flash/updater-encoded.sh`,
+  built by `tools/encode-updater.py` — not tracked in git, see
+  `docs/DEADLETTER-CIPHER.md`) before each flash.
 - Recovery of last resort is the D+M service menu + a model-correct factory
   `.dbk` (`docs/DEADLETTER-NAND-RECOVERY.md`) — but never rely on it; avoid
   the mistake instead.
 
-## Current state (2026-07)
-Two-stage boot works end to end; stage 2 boots to a zsh login (users
-`root`/`zaurus`, `piko`/`piko`). Service stack is BusyBox init + inittab +
-rcS + mdev (NOT systemd — far too heavy for 64MB/400MHz/uClibc). WiFi:
-wireless-tools + wpa_supplicant + hostap/Prism2 modules are in place; the
-card associates but the data path is still being brought up. SSH via dropbear
-is the goal once WiFi passes traffic. See `docs/DEADLETTER-WIFI-SSH.md`.
+## Current state (2026-07-30, late)
+The full two-stage chain works on real hardware and is **verified live**,
+not inferred:
+
+- **Bootstrap boots + kexecs into stage 2.** See
+  `docs/DEADLETTER-BOOTSTRAP-BOOTS-2026-07-30.md` for the chain of fixes.
+- **Stage 2 boots to a login/shell** with the w100 framebuffer up.
+- **WiFi + SSH work.** The board holds a real DHCP lease (verified at
+  `10.208.47.72` — *not* the `10.208.47.22` static fallback in
+  `wifi-up.sh`, which is what a broken data path looks like) and dropbear
+  accepts both password (`root`/`zaurus`) and key auth. Required the
+  hostap `skb->cb` fix (`docs/archive/DEADLETTER-HOSTAP-SKB-CB.md`) and
+  restoring the MEMC clock (skipping it silently killed PCMCIA).
+- **Audio plays.** Needed two independent mainline fixes plus a mandatory
+  mixer setting — see `docs/DEADLETTER-AUDIO-I2S-SILENT.md`. Do not treat
+  a registered sound card as working audio; verify the `pxa-dma` interrupt
+  count actually moves.
+
+Not yet verified: MPlayer video playback (built via `tools/build-mplayer.sh`,
+staged at `userspace/stage-mplayer/`, not yet run on hardware), and the
+w100 vsync timeout (worked around in `w100fb_pan_display()`, root cause
+still open).
+
+**Routine updates no longer need a NAND flash.** With the device reachable
+over WiFi, use `tools/build-and-deploy.sh` (rebuild + chunked SSH deploy)
+followed by `softreboot` (self-kexec). Reserve the SD-card recovery flash
+for bootstrap/`mtd1` changes or an unreachable board.
+
+> Anything under `kernel-src/` is **regenerated** by
+> `tools/setup-kernel-src.sh` from tracked sources in `modules/`. Editing
+> `kernel-src/` directly survives until the next `--force-kernel-src`, then
+> disappears with no warning. Every kernel fix must land in `modules/` with
+> a matching `copy_in` line, and the honest way to prove it did is to run
+> `build-and-deploy.sh --force-kernel-src` and confirm the affected object
+> changes md5 while the others do not.

@@ -1,0 +1,157 @@
+name: Build piko-update package
+
+# Builds the offline update.tar package for userspace/src/piko-update.c
+# (flash/build-update-package.sh) and uploads it as a workflow artifact.
+#
+# tools/setup-kernel-src.sh reconstructs kernel-src/ from a fresh
+# kernel.org download plus this repo's tracked patches (see
+# docs/HANDOFF.md) -- every file it needs (including the mach-pxa/
+# wireless/crypto Kconfig+Makefile wiring under modules/) is committed, so
+# this should always produce a full package: kernel + modules + rootfs
+# overlay. flash/qemu-smoke-test.sh then boots the result under QEMU,
+# insmod's every shipped module, and runs piko-update --dry-run against
+# the actual package -- the same kernel/module ABI mismatch that broke
+# this device for real once already (DEADLETTER-WIFI-SSH.md). A package
+# that fails this is never uploaded.
+#
+# If kernel-src reconstruction itself fails for some other reason (a
+# kernel.org hiccup, an oldconfig failure, etc.), the job falls back to a
+# rootfs-only package (piko-update + rootfs/ overlay, no kernel bump)
+# rather than failing outright -- still a real, useful, offline update on
+# its own, just without a kernel bump, and the QEMU smoke test is skipped
+# in that case (nothing kernel-side to test).
+#
+# The kernel-src/ reconstruction (download + patch + oldconfig, the
+# expensive and network-heavy part) is cached across runs keyed on the
+# inputs that actually affect it, so a run where nothing kernel-related
+# changed restores instantly instead of re-downloading from kernel.org.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "userspace/src/**"
+      - "rootfs/**"
+      - "flash/build-update-package.sh"
+      - "tools/setup-kernel-src.sh"
+      - "flash/qemu-smoke-test.sh"
+      - "modules/**"
+      - "kernel.config-corgi-7.1.4"
+      - ".github/workflows/build-update-package.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install ARM cross-compiler + kernel build/QEMU dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-linux-gnueabi \
+              bison flex bc libssl-dev libelf-dev \
+              qemu-system-arm cpio
+
+      - name: Cache kernel-src reconstruction
+        id: kernel-src-cache
+        uses: actions/cache@v4
+        with:
+          path: kernel-src
+          key: kernel-src-7.1.4-${{ hashFiles('kernel.config-corgi-7.1.4', 'modules/**', 'tools/setup-kernel-src.sh') }}
+          # actions/cache skips its post-job save step entirely whenever
+          # the job's overall conclusion is "failure" -- every run so far
+          # has failed somewhere after this point, so no run has ever
+          # actually saved a cache entry reflecting real build progress.
+          # save-always makes the (cheap, seconds-long) save unconditional
+          # so a run that gets further than the last one before failing
+          # still leaves a better starting point for the next one.
+          save-always: true
+
+      - name: Reconstruct kernel-src (download + apply tracked patches)
+        id: kernel_src
+        run: |
+          set +e
+          tools/setup-kernel-src.sh
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            echo "kernel-src fully reconstructed and ready to build" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "kernel-src reconstruction failed (exit $rc) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build kernel (zImage + modules)
+        if: steps.kernel_src.outputs.rc == '0'
+        run: |
+          make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              -j"$(nproc)" zImage modules
+
+      - name: Build update package
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
+        run: |
+          # flash/build-update-package.sh's own KERNEL_DIR default resolves
+          # to this exact path -- tools/setup-kernel-src.sh can leave a real (if
+          # incomplete/unbuilt) directory there even on failure, so omitting
+          # the env var here would NOT actually fall back to rootfs-only,
+          # it would still find that directory and hard-fail on "no built
+          # zImage". Point KERNEL_DIR at something that can't exist instead,
+          # so the rootfs-only path is genuinely forced whenever
+          # reconstruction didn't fully succeed.
+          if [ "${{ steps.kernel_src.outputs.rc }}" = "0" ]; then
+            KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+          else
+            KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src-not-ready" flash/build-update-package.sh "$GITHUB_WORKSPACE/update.tar"
+          fi
+
+      - name: QEMU smoke test (boot + insmod modules + piko-update dry-run)
+        if: steps.kernel_src.outputs.rc == '0'
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
+        run: |
+          set +e
+          # tee, not a plain redirect: this step's own console output is
+          # what get_job_logs (and the Actions UI's live step log) actually
+          # captures. A bare `> /tmp/smoke.log 2>&1` sends the boot log
+          # (and thus the actual failure reason -- panic, missing PASS
+          # marker, whatever) ONLY into GITHUB_STEP_SUMMARY, which isn't
+          # visible through the job-logs API at all -- hit exactly this
+          # diagnosing a real smoke-test failure with nothing but a bare
+          # "Process completed with exit code 1" to go on.
+          flash/qemu-smoke-test.sh "$GITHUB_WORKSPACE/kernel-src/linux-7.1.4" "$GITHUB_WORKSPACE/update.tar" 2>&1 | tee /tmp/smoke.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "### QEMU smoke test"
+            echo
+            echo '```'
+            cat /tmp/smoke.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Summarize package contents
+        run: |
+          {
+            echo "### piko-update package"
+            echo
+            echo '```'
+            tar tvf update.tar
+            echo '```'
+            echo
+            echo "MANIFEST:"
+            echo
+            echo '```'
+            tar xf update.tar -O MANIFEST
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload update.tar
+        uses: actions/upload-artifact@v4
+        with:
+          name: piko-update-package
+          path: update.tar
+          if-no-files-found: error

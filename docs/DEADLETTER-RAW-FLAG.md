@@ -85,7 +85,7 @@ else in this project):
    <https://www.trisoft.de> (e.g. the SL-C760 one is
    `http://www.trisoft.de/download/760NAND291003.zip`, 138,543,120 bytes
    unzipped — matches the expected 128MiB-Samsung-NAND-with-16B-OOB
-   geometry documented in `docs/HANDOFF.md`: 128MiB × 528/512 ≈
+   geometry documented in `docs/archive/HANDOFF.md`: 128MiB × 528/512 ≈
    138,412,032 bytes, within a small header/footer's difference of the
    real file size). Confirm the model before writing anything — get it
    from the device's own recovery menu (which filename it asks for), not

@@ -1,0 +1,38 @@
+# BusyBox init configuration for zaurus-refresh stage 2.
+# Format: <id>:<runlevels>:<action>:<process>
+
+# One-time system setup (mounts, mdev, network, dropbear).
+::sysinit:/etc/init.d/rcS
+
+# Graphical session on the framebuffer console (VT1): Xfbdev, the Zaurus
+# keymap, then Matchbox (window manager + desktop + panel). This replaces
+# the getty that used to live here, so the device boots to a desktop
+# rather than an ash prompt.
+#
+# xsession falls back to `getty` itself on every failure path (X missing,
+# X not up within 60s, session exited), so a broken graphical stack still
+# leaves a usable login on this tty instead of an init respawn loop.
+# SSH is unaffected either way -- dropbear starts in rcS, before this.
+#
+# To go back to a plain console, comment this out and uncomment the getty
+# line below.
+tty1::respawn:/etc/init.d/xsession
+#tty1::respawn:/sbin/getty -L 38400 tty1 linux
+
+# Reboot / shutdown handling.
+# ctrlaltdel uses the kexec-based softreboot (not /sbin/reboot's PXA
+# watchdog hard reset, which behaves identically to poweroff on this
+# hardware -- see usr/sbin/softreboot).
+::ctrlaltdel:/usr/sbin/softreboot
+# Lazy-detach the SD card FIRST, before the blocking `umount -a -r`.
+# If the card was pulled while mounted (or card-detect never fired a
+# remove uevent), /mnt/card points at absent mmc hardware; a plain
+# umount there flushes synchronously and wedges forever in
+# uninterruptible D-state (immune to SIGKILL), so init never reaches the
+# final reboot() and poweroff hangs with the kernel still alive (found
+# 2026-07-27). `umount -l` (MNT_DETACH) returns immediately -- it defers
+# teardown instead of flushing -- so `umount -a -r` afterwards never sees
+# /mnt/card and can't block on it.
+::shutdown:/bin/umount -l /mnt/card
+::shutdown:/bin/umount -a -r
+::restart:/sbin/init
