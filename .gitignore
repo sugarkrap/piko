@@ -174,3 +174,8 @@ toolchain/
 # tools/build-thirdparty-deps.sh download cache (upstream tarballs,
 # re-fetched and sha256-verified on demand)
 userspace/.thirdparty-cache/
+# qemu-user core dumps from smoke-testing cross-built binaries on the host
+# (mb-applet-system-monitor and mb-applet-battery segfault with no display
+# -- they use mb_tray_app_new()'s result without a NULL check, unlike
+# clock/launcher; see docs/HOWTO-MATCHBOX-DESKTOP.md)
+*.core

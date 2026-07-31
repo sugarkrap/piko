@@ -577,8 +577,20 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
         exit 1
     fi
     send_file "$X11_PAYLOAD" "/tmp/x11-payload.tar"
+    # A running X server holds its own binary open, so unpacking over it
+    # fails with "Text file busy" and the payload only half-lands. Stop
+    # the session first -- we are replacing exactly those binaries.
+    # Clients before the server, so the WM is not killed out from under
+    # its display. No pkill/awk here (busybox is minimal), so PIDs are
+    # read out of ps with the shell; `kill` is our own static one from
+    # userspace/src/kill.c, since this busybox has no kill applet either.
+    echo "==> stopping any running graphical session"
+    ssh_do "for p in \$(ps | grep -E 'matchbox|xev' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
+    ssh_do "for p in \$(ps | grep Xfbdev | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "/usr/local/bin/untar /tmp/x11-payload.tar / && rm -f /tmp/x11-payload.tar"
     echo "==> X11/Matchbox stack unpacked"
+    echo "    (session stopped for the update; it restarts on reboot,"
+    echo "     or run: DISPLAY=:0 matchbox-session &)"
 elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no X11 payload at $X11_PAYLOAD -- skipping"
     echo "    (build it with tools/build-matchbox-payload.sh)"
