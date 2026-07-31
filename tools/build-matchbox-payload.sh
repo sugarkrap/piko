@@ -169,7 +169,14 @@ chmod 755 "$PAYLOAD/etc/matchbox/session"
 # Evaluate just the APPLETS= lines rather than pattern-matching them, so
 # reformatting the list in that file cannot silently defeat this check.
 applets="$(sh -c "$(grep '^APPLETS=' "$REPO/modules/x11/matchbox-session")
-                  echo \"\$APPLETS\"" | tr ',' ' ')"
+                  echo \"\$APPLETS\"")"
+# One entry per line, then keep only the command word: an entry may carry
+# arguments (e.g. "mb-applet-clock -s 16"), and splitting the whole list on
+# whitespace would have us checking the payload for a binary called "-s".
+applets="$(printf '%s\n' "$applets" | tr ',' '\n' | while read -r entry; do
+    set -- $entry
+    [ -n "${1:-}" ] && echo "$1"
+done)"
 [ -n "$applets" ] || { echo "FAILED: parsed no applets from modules/x11/matchbox-session" >&2; exit 1; }
 for a in $applets; do
     if [ ! -f "$PAYLOAD/usr/bin/$a" ]; then
