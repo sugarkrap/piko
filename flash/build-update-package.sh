@@ -37,8 +37,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$REPO/update.tar}"
 
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
-TOOLCHAIN="${TOOLCHAIN:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
-CROSS_COMPILE="${CROSS_COMPILE:-arm-buildroot-linux-uclibcgnueabi-}"
+TOOLCHAIN="${TOOLCHAIN:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
+CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 
 STAGE="$(mktemp -d /tmp/piko-update-package.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT

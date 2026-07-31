@@ -35,7 +35,7 @@ stage-2 `zImage` and every module `chunked-deploy.sh` deploys. Every file
 gets an MD5 in a `MANIFEST` entry written into the package.
 
 **kernel-src/ is gitignored and only reconstructed on demand.**
-`tools/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
+`tools/setup-kernel-src.sh` automates `docs/archive/HANDOFF.md`'s manual
 reconstruction procedure: download a pristine kernel.org tarball, then
 apply every hand-patched file this repo tracks under `modules/` — Corgi
 board files, the W100 driver, the sharpsl NAND driver, hostap_cs +
@@ -57,7 +57,7 @@ uploaded.** `flash/qemu-smoke-test.sh` boots the built kernel under QEMU
 (`-M spitz`), insmod's every shipped kernel module, and runs
 `piko-update --dry-run` against the actual package — catching the same
 kernel/module ABI mismatch that broke this device for real once already
-(see `docs/DEADLETTER-WIFI-SSH.md`). A package that fails this is never
+(see `docs/archive/DEADLETTER-WIFI-SSH.md`). A package that fails this is never
 uploaded. This only runs for full packages (nothing kernel-side to test
 in a rootfs-only one), and it validates the *shared* PXA2xx boot path —
 QEMU's spitz machine is PXA270 with no W100 chip, so `corgi.c`/

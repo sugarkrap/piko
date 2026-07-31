@@ -6,10 +6,11 @@ set -eu
 #   flash/stage-quake-data.sh [root@ip] [path/to/pak0.pak]
 # Example:
 #   flash/stage-quake-data.sh root@10.43.112.72 \
-#       /home/makaron/Code/zaurus-refresh/.cache/quake-data/id1/pak0.pak
+#       .cache/quake-data/id1/pak0.pak
 
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${1:-root@10.43.112.72}"
-PAK="${2:-/home/makaron/Code/zaurus-refresh/.cache/quake-data/id1/pak0.pak}"
+PAK="${2:-$REPO/.cache/quake-data/id1/pak0.pak}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
 SSH_OPTS="-i $KEY -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=12 -o StrictHostKeyChecking=accept-new"
 CHUNK_SIZE=4194304
