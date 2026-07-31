@@ -290,17 +290,32 @@ done
 # System matches "System Tools" (see matchbox-common's
 # data/vfolders-desktop/*.directory).
 #
+# Menu launchers + icons. Shipping an entry here is what puts an app on the
+# desktop at all -- matchbox-desktop only reads the /usr/share/applications
+# this payload deploys. That is independent of where the BINARY comes from:
+# pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
+# libSDL, not this X11 stack), while st, xev, toasters and pikostore ship
+# from this payload. Only the launcher and icon belong here either way.
+#
+# The Categories= line in each file picks which app-folder it lands in:
+# Development matches the vfolder displayed as "Programming", System
+# matches "System Tools" (see matchbox-common's data/vfolders-desktop).
+#
 # pikostore needs a launcher more than most: it is the GUI for updating the
 # ROM, and expecting the user to open a terminal and type its name to reach
 # it would defeat the point (this keyboard cannot even produce a slash).
 #
-# st is the one entry that is conditional. Under --skip-st its binary is
-# not in the payload, and a .desktop whose Exec is missing is a menu entry
-# that does nothing when tapped -- worse than no entry.
+# st and xev are the conditional pair. Under --skip-st there is no st
+# binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
+# stdout and is useless without a terminal), so both entries would be menu
+# items that do nothing when tapped -- worse than no entry. The xev BINARY
+# still ships either way: it is perfectly usable from a shell over SSH.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikostore"
+LAUNCHERS="pikalibrate pikostore toasters"
 if [ "$SKIP_ST" -eq 0 ]; then
-    LAUNCHERS="st $LAUNCHERS"
+    LAUNCHERS="st xev $LAUNCHERS"
+else
+    echo "    --skip-st: leaving out the st and xev launchers (both exec st)"
 fi
 for app in $LAUNCHERS; do
     cp "$REPO/userspace/desktop/$app.desktop" \
@@ -309,39 +324,6 @@ for app in $LAUNCHERS; do
        "$PAYLOAD/usr/share/pixmaps/$app.png"
     echo "    launcher: $app"
 done
-
-# pikalibrate's menu launcher + icon (Categories=System, alongside the
-# vfolder named "System Tools"). The binary itself ships separately, via
-# tools/chunked-deploy.sh's SDL section (tools/build-sdl.sh builds it
-# against libSDL, not against anything in this X11 payload) -- only the
-# desktop entry and icon belong here, since matchbox-desktop only reads
-# /usr/share/applications from what this payload deploys.
-cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
-cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
-
-# xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
-# the binary does ship from this payload (see XEV_BIN above) -- it is part
-# of the X11 stack proper.
-#
-# Its Exec is "st -e xev" (xev writes to stdout and is useless without a
-# terminal -- see the .desktop's own comments), so under --skip-st this
-# entry is just as dead as st's own and goes with it. The xev BINARY still
-# ships: it is perfectly usable from a shell over SSH, which is the other
-# way anyone runs it.
-if [ "$SKIP_ST" -eq 0 ]; then
-    cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
-    cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
-else
-    echo "    --skip-st: leaving out xev.desktop too (its Exec runs st)"
-fi
-
-# toasters' menu launcher + icon, also Categories=System. Like xev the
-# binary ships from this payload (see TOASTERS_BIN above); the launcher is
-# a manual preview -- brightd is what normally runs it, on the idle timer
-# described in its "SCREENSAVER CONTENT" header comment.
-cp "$REPO/userspace/desktop/toasters.desktop" "$PAYLOAD/usr/share/applications/toasters.desktop"
-cp "$REPO/userspace/desktop/toasters.png" "$PAYLOAD/usr/share/pixmaps/toasters.png"
-
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.
