@@ -234,6 +234,32 @@ else
     echo "==> skipping sdltest (no $SDLTEST_SRC)"
 fi
 
+# --- 2b. pikalibrate (touchscreen calibration app, see userspace/src/pikalibrate.c) --
+PIKALIBRATE_SRC="$REPO/userspace/src/pikalibrate.c"
+if [ -f "$PIKALIBRATE_SRC" ]; then
+    echo "==> building pikalibrate against the freshly staged libSDL"
+    "$CC" -O2 -Wall -Wextra \
+        -I"$STAGE_DIR/usr/include/SDL" \
+        -o "$STAGE_DIR/usr/bin/.pikalibrate.tmp" \
+        "$PIKALIBRATE_SRC" \
+        -L"$STAGE_DIR/usr/lib" -lSDL -lpthread -lm -ldl
+    mkdir -p "$STAGE_DIR/usr/bin"
+    mv "$STAGE_DIR/usr/bin/.pikalibrate.tmp" "$STAGE_DIR/usr/bin/pikalibrate"
+
+    echo "==> verifying pikalibrate links only against expected shared libs"
+    needed="$("$READELF" -d "$STAGE_DIR/usr/bin/pikalibrate" 2>/dev/null | awk '/NEEDED/{print $NF}' | tr -d '[]')"
+    echo "    NEEDED: $(echo "$needed" | tr '\n' ' ')"
+    case "$needed" in
+        *libSDL-1.2.so.0*) : ;;
+        *)
+            echo "tools/build-sdl.sh: pikalibrate does not NEED libSDL-1.2.so.0 -- something linked wrong" >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping pikalibrate (no $PIKALIBRATE_SRC)"
+fi
+
 # --- 3. assemble the device-payload runtime tree ------------------------
 # Mirrors tools/build-alsa.sh's stage/stage-runtime split: STAGE_DIR keeps
 # the full dev install (headers, .la, sdl-config) for anything that wants
@@ -250,12 +276,18 @@ if [ -f "$STAGE_DIR/usr/bin/sdltest" ]; then
     chmod u+w "$RUNTIME_DIR/usr/bin/sdltest"
     "$STRIP" --strip-unneeded "$RUNTIME_DIR/usr/bin/sdltest"
 fi
+if [ -f "$STAGE_DIR/usr/bin/pikalibrate" ]; then
+    cp "$STAGE_DIR/usr/bin/pikalibrate" "$RUNTIME_DIR/usr/bin/pikalibrate"
+    chmod u+w "$RUNTIME_DIR/usr/bin/pikalibrate"
+    "$STRIP" --strip-unneeded "$RUNTIME_DIR/usr/bin/pikalibrate"
+fi
 
 echo ""
 echo "==> done: $RUNTIME_DIR assembled"
 echo "    $RUNTIME_DIR/usr/lib/$SDL_SO_REAL"
 echo "    $RUNTIME_DIR/usr/lib/libSDL-1.2.so.0 -> $SDL_SO_REAL"
 [ -f "$RUNTIME_DIR/usr/bin/sdltest" ] && echo "    $RUNTIME_DIR/usr/bin/sdltest"
+[ -f "$RUNTIME_DIR/usr/bin/pikalibrate" ] && echo "    $RUNTIME_DIR/usr/bin/pikalibrate"
 echo ""
 echo "    Deploy with tools/chunked-deploy.sh (or tools/build-and-deploy.sh,"
 echo "    which calls it) -- it ships this payload automatically once staged"

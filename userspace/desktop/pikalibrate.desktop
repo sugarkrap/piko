@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Calibrate touchscreen
+Comment=Recalibrate the touchscreen (4-point tap)
+Exec=/usr/bin/pikalibrate
+Icon=pikalibrate
+Terminal=false
+Categories=System;
