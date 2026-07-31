@@ -203,6 +203,15 @@ mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
 cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
 cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
 
+# pikalibrate's menu launcher + icon (Categories=System, alongside the
+# vfolder named "System Tools"). The binary itself ships separately, via
+# tools/chunked-deploy.sh's SDL section (tools/build-sdl.sh builds it
+# against libSDL, not against anything in this X11 payload) -- only the
+# desktop entry and icon belong here, since matchbox-desktop only reads
+# /usr/share/applications from what this payload deploys.
+cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
+cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.

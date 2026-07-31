@@ -1,0 +1,96 @@
+name: Build userspace (ALSA, SDL, pikalibrate)
+
+# Cross-compiles this project's userspace/src/*.c components against the
+# real uclibc toolchain via tools/build-userspace.sh, so a broken build
+# (pikalibrate.c included) fails CI instead of only being discovered on
+# the one physical device this project has (AGENTS.md: "the LAST spare
+# board"). Neither of the other two workflows compile anything under
+# userspace/src/ at all -- this is the first CI coverage for that whole
+# component family.
+#
+# tools/build-uclibc-toolchain.sh provisions the toolchain from source via
+# crosstool-NG (same approach, and same crosstool-NG version, as
+# tools/build-oabi-toolchain.sh in build-piko-zip.yml -- the two
+# toolchains are NOT interchangeable, this one is the regular EABI
+# uclibc target every userspace/ build and the kernel itself use).
+# Slow from cold (tens of minutes), so it's cached the same way.
+#
+# --skip-mplayer: MPlayer's bundled-ffmpeg build is by far the slowest
+# step in tools/build-userspace.sh (a ~15 MiB static binary) and is
+# unrelated to the touchscreen calibration work this job exists to
+# compile-check. Drop the flag if MPlayer coverage is ever wanted here.
+#
+# st and FLTK are skipped automatically (not an error) by
+# tools/build-userspace.sh itself: both need userspace/stage-target (the
+# X11/Matchbox sysroot), which this job does not build.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "userspace/src/**"
+      - "tools/build-userspace.sh"
+      - "tools/build-alsa.sh"
+      - "tools/build-sdl.sh"
+      - "tools/build-uclibc-toolchain.sh"
+      - "tools/uclibc-toolchain.config"
+      - ".github/workflows/build-userspace.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install crosstool-NG build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              build-essential git autoconf automake bison flex texinfo \
+              gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
+              patch gawk python3-dev rsync
+
+      - name: Cache uclibc toolchain (crosstool-NG build)
+        id: uclibc-toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: uclibc-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          save-always: true
+
+      - name: Provision uclibc toolchain
+        run: |
+          ./tools/build-uclibc-toolchain.sh
+
+      - name: Build userspace (md5sum, ALSA, SDL/pikalibrate)
+        env:
+          TOOLCHAIN_BIN_DIR: ${{ github.workspace }}/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin
+          CROSS_COMPILE: arm-unknown-linux-uclibcgnueabi-
+        run: |
+          ./tools/build-userspace.sh --skip-mplayer
+
+      - name: Summarize build output
+        run: |
+          {
+            echo "### Userspace build"
+            echo
+            echo '```'
+            file userspace/src/md5sum \
+                 userspace/stage-sdl-runtime/usr/lib/libSDL-1.2.so.0* \
+                 userspace/stage-sdl-runtime/usr/bin/sdltest \
+                 userspace/stage-sdl-runtime/usr/bin/pikalibrate \
+                 userspace/stage-alsa-runtime/usr/bin/aplay
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload staged runtime payloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: userspace-runtime
+          path: |
+            userspace/stage-sdl-runtime
+            userspace/stage-alsa-runtime
+            userspace/src/md5sum
+          if-no-files-found: error
