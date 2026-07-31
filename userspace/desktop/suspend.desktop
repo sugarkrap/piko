@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Suspend
+Comment=Suspend to RAM
+Exec=/usr/sbin/suspend
+Icon=suspend.png
+Terminal=false
+Categories=System;

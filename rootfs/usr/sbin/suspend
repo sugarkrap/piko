@@ -1,0 +1,27 @@
+#!/bin/sh
+# suspend: put the device into suspend-to-RAM.
+#
+# Wakes on: the on/off button (matrix-keypad row 7 col 0 -- CORGI_KEY_OFF
+# in corgi_patched.c -- is wired as GPIO_bit(CORGI_GPIO_KEY_INT), a
+# WAKEUP_ON_EDGE_BOTH source configured at boot regardless of what has
+# EVIOCGRABbed the keypad's evdev node) and an AC plug/unplug edge
+# (CORGI_GPIO_AC_IN, also a wakeup source). This is a kernel-level path,
+# independent of X or matchbox -- it works even if the graphical session
+# has crashed.
+#
+# NOT independently verified end-to-end on this kernel+hardware as of
+# 2026-08-01: CONFIG_SUSPEND=y and sharpsl_pm registers suspend_ops
+# (.valid = suspend_valid_only_mem), so basic suspend-to-mem is wired up,
+# but whether every driver here -- the WiFi/PCMCIA socket power, the
+# backlight, the W100/LCD state -- actually comes back correctly on
+# resume has only been reasoned from source, not watched happen. If the
+# screen stays blank after waking, ssh back in (the WiFi socket may or
+# may not have survived the round trip) and check `dmesg | tail` before
+# assuming it hung.
+#
+# sync first: "mem" sleep keeps DRAM refreshed (nothing like a real
+# power-off), so this is unnecessary for correctness, but it costs
+# nothing and matches softreboot's own habit before a state transition
+# that can't be un-done from here if it goes wrong.
+sync
+echo mem > /sys/power/state

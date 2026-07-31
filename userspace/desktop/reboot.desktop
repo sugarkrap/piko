@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Reboot
+Comment=Warm-reboot the device (kexec)
+Exec=/usr/sbin/softreboot
+Icon=reboot.png
+Terminal=false
+Categories=System;

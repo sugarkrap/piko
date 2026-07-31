@@ -83,4 +83,15 @@ xkb_symbols "basic" {
 
     key <AB08> { [    comma,      less, less,        less        ] };
     key <AB09> { [   period,   greater, greater,     greater     ] };
+
+    // On/off button (matrix-keypad row 7, col 0 -- CORGI_KEY_OFF in
+    // corgi_patched.c, plain KEY_SUSPEND / evdev 205) is deliberately NOT
+    // bound to a keysym here. See docs/DEADLETTER-XKB-LIVE-SETMAP.md:
+    // adding ANY previously-undefined key to this file -- any keycode, any
+    // keysym, tried both -- makes xkbcomp's live upload to the running
+    // Xfbdev fail with a reproducible XKEYBOARD BadValue at the same
+    // protocol serial every time. Existing remaps above all succeed
+    // because they REPLACE a keycode the server already allocated width
+    // for at its own startup (every ordinary keyboard position); this
+    // would have been the first ADDITION of a keycode with none.
 };

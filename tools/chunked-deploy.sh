@@ -474,6 +474,15 @@ send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
 
+# 7a. suspend / gototty -- same single-word convention. suspend writes
+# /sys/power/state directly; gototty pkillx's Xfbdev, which cascades a
+# clean shutdown of the whole X session (see the scripts' own comments).
+# softreboot already covers the third menu action and ships with the base
+# image, not here.
+send_file "$REPO/rootfs/usr/sbin/suspend" "/usr/sbin/suspend"
+send_file "$REPO/rootfs/usr/sbin/gototty" "/usr/sbin/gototty"
+ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty"
+
 # 7b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
@@ -815,6 +824,7 @@ else
 fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+echo "  /usr/sbin/suspend, /usr/sbin/gototty"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then

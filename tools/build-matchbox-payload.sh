@@ -228,6 +228,16 @@ cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalib
 cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
 cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
 
+# Suspend / Reboot / Go to TTY -- three system-action launchers, all
+# Categories=System like pikalibrate and xev above. Like pikalibrate, the
+# scripts these Exec= (rootfs/usr/sbin/suspend, /usr/sbin/softreboot,
+# rootfs/usr/sbin/gototty) ship separately via tools/chunked-deploy.sh --
+# only the desktop entries and icons belong in this payload.
+for entry in suspend reboot gototty; do
+    cp "$REPO/userspace/desktop/$entry.desktop" "$PAYLOAD/usr/share/applications/$entry.desktop"
+    cp "$REPO/userspace/desktop/$entry.png" "$PAYLOAD/usr/share/pixmaps/$entry.png"
+done
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Go to TTY
+Comment=Exit the graphical session to a text console
+Exec=/usr/sbin/gototty
+Icon=gototty.png
+Terminal=false
+Categories=System;
