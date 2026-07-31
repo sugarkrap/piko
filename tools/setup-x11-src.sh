@@ -18,11 +18,12 @@ set -eu
 #                                       system-monitor meminfo parse, and
 #                                       the wireless applet fixes
 #   matchbox-window-manager  2 commits  GConf m4 fallback, missing includes
-#   xserver                  4 commits  font-util compat m4, kdrive evdev
+#   xserver                  5 commits  font-util compat m4, kdrive evdev
 #                                       absolute-pointer (touchscreen),
 #                                       config-file calibration + release-
-#                                       noise filter, and a control FIFO
-#                                       for live recalibration (Pikalibrate)
+#                                       noise filter, a control FIFO for
+#                                       live recalibration (Pikalibrate),
+#                                       and a median-of-3 sample filter
 #   libX11                   2 commits  cherry-picked upstream XKBgeom.h
 #                                       (1f1ca086), nls srcdir fix
 #   libfontenc               1 commit   font-util compat m4
@@ -85,6 +86,8 @@ check_marker "$SRC/xserver" "config-file touchscreen calibration + release-noise
     "hw/kdrive/linux/evdev.c" "EvdevLoadCalibration"
 check_marker "$SRC/xserver" "Pikalibrate control FIFO" \
     "hw/kdrive/linux/linux.c" "PikalibrateFd"
+check_marker "$SRC/xserver" "median-of-3 touchscreen sample filter" \
+    "hw/kdrive/linux/evdev.c" "EvdevMedian3"
 check_marker "$SRC/libfontenc" "font-util compat macros" \
     "m4/fontutil-compat.m4" "XORG_FONT_MACROS_VERSION"
 check_marker "$SRC/libX11" "XKBgeom.h (upstream 1f1ca086)" \
