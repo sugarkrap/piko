@@ -151,7 +151,13 @@ running OpenEmbedded system, do not use a raw `MEMERASE` + `write()` helper on
 `/dev/mtd0`. That destroys the Sharp FTL mapping stored in OOB and breaks cold
 boot even when the payload bytes themselves verify.
 
-The only verified in-system path in this repo is `picoupdate` backed by the
-current `pico-smf-write`, which uses `ioctl(MEMWRITE)` with `MTD_OPS_AUTO_OOB`
-and rewrites the logical block numbers in first-page OOB so `sharpslpart` can
-find the SMF kernel again after reboot.
+The only verified in-system path in this repo is `piko-smf-write`, which uses
+`ioctl(MEMWRITE)` with `MTD_OPS_AUTO_OOB` and rewrites the logical block
+numbers in first-page OOB so `sharpslpart` can find the SMF kernel again
+after reboot.
+
+On a running device you reach it through `piko-update` / `smfcommit` rather
+than by hand — see `docs/HOWTO-OFFLINE-UPDATE.md`. That path deliberately
+writes mtd1 **after** mtd3 and after a proven reboot, which is the reverse
+of the SD-card order below; the difference is that this document is
+recovering a board that is already down, where mtd1 has to come first.

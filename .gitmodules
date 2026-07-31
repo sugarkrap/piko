@@ -55,7 +55,7 @@
 	url = https://git.yoctoproject.org/matchbox-desktop-2
 [submodule "libmatchbox"]
 	path = userspace/src/libmatchbox
-	url = https://git.yoctoproject.org/libmatchbox
+	url = https://github.com/sugarkrap/libmatchbox
 [submodule "libXrender"]
 	path = userspace/src/libXrender
 	url = https://gitlab.freedesktop.org/xorg/lib/libxrender.git
@@ -64,7 +64,7 @@
 	url = https://gitlab.freedesktop.org/xorg/lib/libxft.git
 [submodule "matchbox-desktop-classic"]
 	path = userspace/src/matchbox-desktop-classic
-	url = https://git.yoctoproject.org/matchbox-desktop
+	url = https://github.com/sugarkrap/matchbox-desktop-classic
 [submodule "matchbox-panel"]
 	path = userspace/src/matchbox-panel
 	url = https://github.com/sugarkrap/matchbox-panel
@@ -72,6 +72,12 @@
 [submodule "matchbox-common"]
 	path = userspace/src/matchbox-common
 	url = https://git.yoctoproject.org/matchbox-common
+[submodule "st"]
+	path = userspace/src/st
+	url = https://git.suckless.org/st
+[submodule "userspace/src/fltk"]
+	path = userspace/src/fltk
+	url = https://github.com/fltk/fltk.git
 [submodule "mb-applet-card"]
 	path = userspace/src/mb-applet-card
 	url = https://github.com/sugarkrap/mb-applet-card

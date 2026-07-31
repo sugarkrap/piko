@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -29,6 +29,13 @@ set -eu
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
 # that haven't changed just adds time and extra risk on the flaky link.
+# --create-backup-files makes send_file() keep a "$remote_path.bak" copy of
+# whatever it overwrites. OFF by default: every file this script touches
+# ends up duplicated on the ~68 MiB root jffs2 if it's on, and routine
+# resyncs (this script is meant to be re-run often) were quietly eating the
+# device's free flash one .bak at a time. Turn it on for a single risky
+# change (e.g. a kernel-only redeploy you might need to roll back by hand)
+# where having *a* known-good previous copy on-device is worth the space.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -46,6 +53,7 @@ ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
 NO_USERSPACE=0
+CREATE_BACKUP_FILES=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -72,8 +80,12 @@ while [ $# -gt 0 ]; do
             NO_USERSPACE=1
             shift
             ;;
+        --create-backup-files)
+            CREATE_BACKUP_FILES=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [user@host]"
             exit 0
             ;;
         --*)
@@ -196,7 +208,9 @@ remote_md5() {
 # Splits LOCAL_PATH into CHUNK_SIZE pieces, transfers each into a scratch
 # dir under REMOTE_STAGE, retrying only the pieces that fail/mismatch, then
 # concatenates remotely and verifies total size before replacing the
-# destination (with a .bak of whatever was there before).
+# destination (with a .bak of whatever was there before, if
+# --create-backup-files was passed -- off by default, see the flag's doc
+# above).
 send_file() {
     local_path="$1"
     remote_path="$2"
@@ -289,15 +303,24 @@ send_file() {
         break
     done
 
-    ssh_do "
-        set -e
-        if [ -f '$remote_path' ]; then
-            cp '$remote_path' '$remote_path.bak'
-        fi
-        mv '$remote_new' '$remote_path'
-        rm -rf '$remote_chunk_dir'
-    "
-    echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+        ssh_do "
+            set -e
+            if [ -f '$remote_path' ]; then
+                cp '$remote_path' '$remote_path.bak'
+            fi
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    else
+        ssh_do "
+            set -e
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path"
+    fi
 }
 
 echo "Target: $TARGET"
@@ -469,14 +492,18 @@ ssh_do "chmod 0755 /usr/sbin/sdapps"
 #                         "Unknown PCM cards.pcm.default".
 #   * aplay/amixer/alsactl -- also static; small, and the only way to test
 #                         or adjust the audio path on the device.
-#   * libSDL-1.2.so.0 + sdltest -- SDL is dynamically linked (the one
-#                         exception to this section's static convention --
-#                         see tools/build-sdl.sh's header for why), so
-#                         shipping it also bootstraps /lib/ld-uClibc*.so +
-#                         /lib/libc.so onto the device if not already
-#                         there (see the SDL block below for the
-#                         executable-bit gotcha that bootstrap has to get
-#                         right, found on real hardware).
+#   * libSDL-1.2.so.0 + sdltest + pikalibrate -- SDL is dynamically linked
+#                         (the one exception to this section's static
+#                         convention -- see tools/build-sdl.sh's header for
+#                         why), so shipping it also bootstraps
+#                         /lib/ld-uClibc*.so + /lib/libc.so onto the device
+#                         if not already there (see the SDL block below for
+#                         the executable-bit gotcha that bootstrap has to
+#                         get right, found on real hardware). pikalibrate
+#                         also gets /etc/piko/touchscreen.cfg pushed, but
+#                         ONLY if the device doesn't already have one --
+#                         it holds real calibration state once run, not a
+#                         file this script should ever clobber.
 # Only the config files this board can actually use are sent (the upstream
 # tree also carries ~70 cards/*.conf for hardware that does not exist here);
 # each send_file is several SSH round trips over a slow, flaky link.
@@ -497,7 +524,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
     fi
     SDL_SIZED=""
     [ -n "$SDL_SO_REAL" ] && SDL_SIZED="$SDL_STAGE/usr/lib/$SDL_SO_REAL"
-    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" \
+    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" "$SDL_STAGE/usr/bin/pikalibrate" \
              "$ALSA_STAGE/usr/bin/aplay" "$ALSA_STAGE/usr/bin/amixer" \
              "$ALSA_STAGE/usr/sbin/alsactl"; do
         # Explicit if, not `[ -f ] && ...`: under `set -e` a false test at
@@ -576,6 +603,23 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
                 send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
                 ssh_do "chmod 0755 /usr/bin/sdltest"
+            fi
+            if [ -f "$SDL_STAGE/usr/bin/pikalibrate" ]; then
+                send_file "$SDL_STAGE/usr/bin/pikalibrate" "/usr/bin/pikalibrate"
+                ssh_do "chmod 0755 /usr/bin/pikalibrate"
+            fi
+            # touchscreen.cfg holds USER-CALIBRATED STATE once pikalibrate has
+            # been run -- unlike every other rootfs/etc/* file in this script,
+            # it must NOT be unconditionally overwritten on a routine
+            # redeploy, or a real calibration would get silently reset back
+            # to the tracked defaults.
+            if [ -f "$REPO/rootfs/etc/piko/touchscreen.cfg" ]; then
+                if [ "$(ssh_do "test -f /etc/piko/touchscreen.cfg && echo yes || echo no")" = "no" ]; then
+                    ssh_do "mkdir -p /etc/piko"
+                    send_file "$REPO/rootfs/etc/piko/touchscreen.cfg" "/etc/piko/touchscreen.cfg"
+                else
+                    echo "==> /etc/piko/touchscreen.cfg already exists on device, leaving it alone"
+                fi
             fi
         fi
         # Heavy apps: card-only. If there is no card, skip them rather than
@@ -657,14 +701,18 @@ fi
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
-echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+    echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+else
+    echo "  /boot/zImage-full        (no .bak kept -- pass --create-backup-files for one)"
+fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
 fi
 if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$SDL_STAGE/usr/lib" ]; then
-    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest (if staged)"
+    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest + /usr/bin/pikalibrate (if staged)"
 fi
 echo ""
 echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"
