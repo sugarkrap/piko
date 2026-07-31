@@ -117,6 +117,60 @@ cheaply.
   the panel itself caps pan-driven output around 25 fps regardless of how
   fast the decoder is.
 
+## Follow-up 2026-07-31: the wait was fine, the flip was unreachable
+
+Everything measured above still holds. What it missed is that none of it
+was reachable, so fixing the wait could not have stopped the tearing.
+
+`w100fb_probe()` advertises `fix.ypanstep = 1`, but `w100fb_set_par()` reset
+it to `0` on the first mode set and never restored it. The fbdev core gates
+panning on that field directly — `fb_pan_display()` in `fbmem.c:180` returns
+`-EINVAL` for any `yoffset > 0` when `!fix->ypanstep`. So every
+`FBIOPAN_DISPLAY` failed *before* `w100fb_pan_display()` was entered, and
+the carefully-measured vsync wait inside it had never once executed.
+Measured with `tools/src/fbflip.c`, same binary either side:
+
+```
+#38  fix.ypanstep = 0   FBIOPAN_DISPLAY(yoffset=480): FAILED (EINVAL)
+#39  fix.ypanstep = 1   FBIOPAN_DISPLAY(yoffset=480): OK
+```
+
+Two things above need qualifying rather than correcting:
+
+- **"A coarse poll cannot miss it — it only costs a little latency in
+  *noticing* it."** True for `FBIO_WAITFORVSYNC`, where the caller then
+  renders for tens of ms and cannot tell. False for the flip, where landing
+  accuracy *is* the job. The vline is armed at `active_v_end`, and this
+  panel has `upper_margin=3, lower_margin=0`, so `active_v_end ==
+  crtc_v_total == 643`: **there is no front porch**, and the only safe
+  window is ~182 µs. The 500–1000 µs poll is 3–5x wider than that window,
+  i.e. the write landed 8–20 scanlines into the next frame. The wait now
+  takes a `tight` flag so only a pending flip polls finely.
+
+- **The chip can do the flip itself, and does.** `mmDISP_DB_BUF_CNTL` was
+  used only to bracket mode sets. With `en_db_buf` set, writing
+  `mmGRAPHIC_OFFSET` lands in a shadow bank and pulsing `update_db_buf`
+  promotes it at the next vblank. Verified through `/dev/mem`:
+  `GRAPHIC_OFFSET` moves `0x00895b00` ↔ `0x0092bb00` (exactly the two
+  addresses `w100fb_scanout_offset()` computes for the 90° mode) and
+  `DISP_DB_BUF_CNTL` goes `0x79 → 0x7b`, i.e. `update_db_buf_done` asserts.
+  Cost, 20 flips each: **latch 95 µs mean, software wait 18126 µs** — the
+  software path blocks half a frame, every frame.
+
+Still open, and *not* fixed by any of this: X11 never double-buffers.
+`fbdevMapFramebuffer()` (`xserver/hw/kdrive/fbdev/fbdev.c:336`) enables its
+shadow only when `randr != RR_Rotate_0`. The w100 rotates in hardware, so X
+sees a plain landscape fb, takes `RR_Rotate_0`, and renders **directly into
+the live scanned-out framebuffer**. That is the device-wide tearing, and it
+is a userspace change, not a driver one.
+
+Worth remembering when judging the panel: the rotated mode asks for
+`pixclk_divider_rotated = 6` against `pixclk_divider = 2` unrotated — the
+hardware rotation costs 3x the pixel clock, which is where the ~25.6 Hz
+comes from. Doing the rotation in software (kdrive already ships ARM-tuned
+`shadowUpdateRotate16_90YX` blitters) would trade PXA255 cycles for roughly
+3x the refresh rate.
+
 ## Reproducing the measurements
 
 The two throwaway diagnostics used here are worth rebuilding if this is ever
