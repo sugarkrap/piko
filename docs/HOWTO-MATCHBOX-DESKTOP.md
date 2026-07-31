@@ -207,6 +207,71 @@ What matters for *building*:
 
 ---
 
+## Wallpaper: modes, formats, and why it's cached raw
+
+`matchbox-desktop` already had a background system (`--bg`, XSettings,
+theme `DesktopBgSpec=`); this extends it rather than replacing it.
+
+**Modes**, passed as `mode:filename` (or via the picker, see below):
+
+    img-mosaic:<filename>       tiles the image (alias: img-tiled:)
+    img-centered:<filename>     centers it, no scaling
+    img-stretched:<filename>    scales to fill, distorts aspect ratio
+    img-filled:<filename>       scales to cover, crops overflow,
+                                 keeps aspect ratio (alias: img-fill:)
+
+**Formats**: PNG, JPEG (if libmb was built `USE_JPG` -- the payload
+here is not, see below), XPM, and now **BMP** -- uncompressed 24/32bpp
+and 8bpp-paletted, decoded by a small loader added directly to
+`libmatchbox/libmb/mbpixbuf.c` with no new library dependency. This
+matters more than it looks: this build's `libmb.so.1` is linked
+against `libpng16` only, not libjpeg, so BMP is the easiest format to
+hand this device a wallpaper in without cross-building libjpeg too.
+
+**Why the result is cached, not just the source image.** Decoding a
+JPEG/PNG and scaling it to 480x640 is real CPU on an unaccelerated
+PXA255, and the original code paid that cost on *every launch* --
+including every boot, for a wallpaper that never changes between
+boots. `mbdesktop_view_init_bg()` now bakes the fully composited,
+already-scaled/cropped/tiled, already-pixel-format-converted result
+(RGB565 on this display) to `~/.matchbox/wallpaper.cache` as a raw
+byte dump the first time a wallpaper is resolved, and every later
+launch is just an `fread()` straight into the image buffer -- no
+decode, no scale, no color conversion. The cache is invalidated
+automatically if the desktop size, the mode+filename, or the source
+file's mtime changes; the write is temp-file-then-`rename()` so a
+power loss mid-boot (this device is fragile) can't leave a half
+written cache behind. Solid colors and gradients are pure in-memory
+math already and are never cached.
+
+**Setting it.** `mb-wallpaper-picker` is a small standalone touch app
+(built alongside `matchbox-desktop`, same `libmb` dependency, nothing
+extra) that scans `/usr/share/backgrounds` and
+`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files,
+shows a thumbnail grid with a 4-way mode selector, and on tap:
+writes `$HOME/.matchbox/wallpaper` (the file `matchbox-desktop` reads
+at startup, so the choice survives a reboot) and sets the
+`_MB_WALLPAPER_SPEC` property on the root window so an *already
+running* desktop updates immediately. The property exists because
+this device's busybox has no `kill`/`killall`/`pkill` at all -- there
+is no way to signal the running process, so an X property it already
+watches via `PropertyNotify` (the same mechanism `_MB_THEME_NAME`
+already used for live theme switches) is the only avenue. It ships a
+`.desktop` launcher with `Categories=Settings`, so it shows up in the
+desktop's Settings folder automatically via matchbox-common's
+vfolders -- no wiring needed beyond installing the file.
+
+Precedence at startup: `--bg` on the command line wins outright;
+otherwise a live `_MB_WALLPAPER_SPEC` root property (set by the
+picker in the current session) beats the persisted
+`$HOME/.matchbox/wallpaper` file, which beats the theme's
+`DesktopBgSpec=` default. `xsession` exports `HOME=/root` explicitly
+for this to work at all on a real boot -- `init` launches it with
+essentially no environment, so without that, every `$HOME`-based
+lookup here (and in themes) silently fell back to `/tmp`.
+
+---
+
 ## Fonts are mandatory
 
 The device ships with **no fonts and no `/etc/fonts`**. Matchbox themes

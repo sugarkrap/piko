@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -29,6 +29,13 @@ set -eu
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
 # that haven't changed just adds time and extra risk on the flaky link.
+# --create-backup-files makes send_file() keep a "$remote_path.bak" copy of
+# whatever it overwrites. OFF by default: every file this script touches
+# ends up duplicated on the ~68 MiB root jffs2 if it's on, and routine
+# resyncs (this script is meant to be re-run often) were quietly eating the
+# device's free flash one .bak at a time. Turn it on for a single risky
+# change (e.g. a kernel-only redeploy you might need to roll back by hand)
+# where having *a* known-good previous copy on-device is worth the space.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -46,6 +53,7 @@ ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
 NO_USERSPACE=0
+CREATE_BACKUP_FILES=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -72,8 +80,12 @@ while [ $# -gt 0 ]; do
             NO_USERSPACE=1
             shift
             ;;
+        --create-backup-files)
+            CREATE_BACKUP_FILES=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [user@host]"
             exit 0
             ;;
         --*)
@@ -196,7 +208,9 @@ remote_md5() {
 # Splits LOCAL_PATH into CHUNK_SIZE pieces, transfers each into a scratch
 # dir under REMOTE_STAGE, retrying only the pieces that fail/mismatch, then
 # concatenates remotely and verifies total size before replacing the
-# destination (with a .bak of whatever was there before).
+# destination (with a .bak of whatever was there before, if
+# --create-backup-files was passed -- off by default, see the flag's doc
+# above).
 send_file() {
     local_path="$1"
     remote_path="$2"
@@ -289,15 +303,24 @@ send_file() {
         break
     done
 
-    ssh_do "
-        set -e
-        if [ -f '$remote_path' ]; then
-            cp '$remote_path' '$remote_path.bak'
-        fi
-        mv '$remote_new' '$remote_path'
-        rm -rf '$remote_chunk_dir'
-    "
-    echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+        ssh_do "
+            set -e
+            if [ -f '$remote_path' ]; then
+                cp '$remote_path' '$remote_path.bak'
+            fi
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    else
+        ssh_do "
+            set -e
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path"
+    fi
 }
 
 echo "Target: $TARGET"
@@ -678,7 +701,11 @@ fi
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
-echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+    echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+else
+    echo "  /boot/zImage-full        (no .bak kept -- pass --create-backup-files for one)"
+fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
