@@ -12,7 +12,7 @@ set -eu
 # Prerequisites -- this script only *collects*, it does not build:
 #   tools/build-thirdparty-deps.sh      zlib expat libpng freetype
 #                                       fontconfig + the DejaVu faces
-#   tools/setup-x11-src.sh              local patches into the X submodules
+#   tools/setup-x11-src.sh              verify the X submodules are the forks
 #   then configure+make, per component, into the DESTDIRs listed below.
 # See docs/HOWTO-MATCHBOX-DESKTOP.md for the per-component configure
 # lines, which are NOT all obvious (matchbox-desktop in particular needs

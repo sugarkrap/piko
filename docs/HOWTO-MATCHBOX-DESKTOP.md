@@ -8,6 +8,10 @@ This covers the desktop **on top of** X. If X itself or the touchscreen
 misbehaves, that is a different layer -- see
 `docs/HOWTO-X11-TOUCHSCREEN.md`.
 
+For the panel's applets specifically -- what exists, the four upstream bugs
+that had to be fixed, and why a two-applet panel is the default rather than
+a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -38,7 +42,7 @@ Nothing builds it. The classic one is `matchbox-desktop-classic`.
 
     tools/build-thirdparty-deps.sh      # zlib expat libpng freetype
                                         # fontconfig + DejaVu faces
-    tools/setup-x11-src.sh              # local patches into X submodules
+    tools/setup-x11-src.sh              # verify submodules carry our commits
     tools/build-libiw.sh                # libiw, for mb-applet-wireless
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
@@ -109,8 +113,8 @@ applet (and `tools/build-libiw.sh` run first, or no wireless one):
         --enable-proc-apm
 
 Confirm the summary says `Building mb-applet-battery: yes, with
-/proc/apm`. That flag is ours (`modules/x11/matchbox-panel-battery-proc-apm.patch`,
-applied by `tools/setup-x11-src.sh`) -- see "Panel applets" below for why
+/proc/apm`. That flag is ours (a commit on the `matchbox-panel` fork,
+`github.com/sugarkrap/matchbox-panel`) -- see "Panel applets" below for why
 neither upstream backend works here.
 
 **matchbox-common** needs no special flags. It is
@@ -148,110 +152,26 @@ Start it with:
 built-in trio of `matchbox-desktop`, `matchbox-panel --orientation south`
 and `matchbox-window-manager`. The payload ships
 `modules/x11/matchbox-session` as `/etc/matchbox/session`, so the applet
-list is tracked source -- see below.
+list is tracked source -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
 ---
 
 ## Panel applets
 
-`matchbox-panel` does not contain its applets; each is a separate binary
-that docks itself into the panel over XEMBED. The panel starts them, and
-**which** it starts is the part that bites.
+Full detail -- what exists, the four upstream bugs, and why a two-applet
+panel is the default -- lives in `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
+What matters for *building*:
 
-The tree has six applets. Four build with no extra work:
-
-| Applet | Notes |
-|---|---|
-| `mb-applet-menu-launcher` | the app menu |
-| `mb-applet-clock` | clock |
-| `mb-applet-system-monitor` | CPU + memory bars |
-| `mb-applet-launcher` | generic launcher button; instantiate once per app as `-l <icon.png> <command>` |
-
-`mb-applet-battery` needs `--enable-proc-apm` (see above). Upstream offers
-two backends and this board can use neither: `HAVE_APM_H` wants `apm.h`
-plus `-lapm` from Debian's apmd, which we do not cross-build, and
-`USE_ACPI_LINUX` reads `/proc/acpi`, which does not exist here. Without
-the flag, configure just drops the applet from `bin_PROGRAMS` and says
-`Building mb-applet-battery: no ( enable ACPI? )` -- easy to miss. The
-same patch fixes the `.desktop` install, which upstream gates on
-`WANT_APM` alone, so the ACPI backend never installed a menu entry
-either.
-
-Expect a percentage and no time estimate: the provider is `sharpsl_pm`,
-whose `apm_get_power_status` fills in AC status, battery status/flag and
-percentage but leaves `time`/`units` at the kernel's `-1` and `"?"`.
-
-`mb-applet-wireless` needs libiw in the staging tree first:
-
-    tools/build-libiw.sh
-
-That cross-builds the one source file out of the already-vendored
-`userspace/wireless_tools.29` and installs `libiw.a` + `iwlib.h` +
-`wireless.h` into `userspace/stage-target`. Three things about it are not
-obvious:
-
-- It does **not** reuse the `libiw.a` sitting in that vendored tree. Those
-  ARM binaries were built in July 2026 with a different toolchain and
-  statically linked; mixing objects from another libc into a uclibc link
-  invites subtle breakage.
-- It builds against wireless-tools' **own** `wireless.h` (WE21), not the
-  sysroot's `linux/wireless.h` (WE22). `iwlib.c` uses the `IW_MODUL_*`
-  modulation constants, which are a wireless-tools addition the kernel uapi
-  header has never carried — against the sysroot copy the build dies on
-  ~15 undeclared identifiers. The version gap is harmless: the 32-bit ioctl
-  structs are unchanged, iwlib re-checks `we_version_compiled` at runtime,
-  and the `iwconfig` already on the device was built from this same header
-  against this same kernel.
-- It compiles `-DWE_NOLIBM`, which swaps libiw's two frequency helpers off
-  `floor`/`log10`/`pow`. Otherwise libiw drags in libm.
-
-Then configure must say `Building mb-applet-wireless: yes`. The applet
-links `libiw` statically and gains **no** new `DT_NEEDED` — `-lm` resolves
-inside libc on this uclibc toolchain, which ships only a static `libm.a`.
-
-The applet needed fixes of its own
-(`modules/x11/matchbox-panel-wireless-applet.patch`). The headline one:
-`find_iwface()` passed `Mwd.iface`, assigned only at the end of that same
-function, so on the first wireless interface it was still NULL and iwlib's
-`strncpy(ifr_name, NULL, IFNAMSIZ)` segfaulted. Upstream crashes during
-startup enumeration on any machine that actually has a wireless interface
-— verified under `qemu-arm`. It also printed level and noise with `%u`
-from a raw `__u8`, so a normal `-39dBm` showed as `217dBm`, and it now
-shows the interface's IPv4 address in the popup.
-
-On this board the popup reports `wlan0`, not `wifi0`. `iw_get_stats()`
-**fails** outright on hostap's `wifi0` rather than returning zeros, and
-`find_iwface()` keeps looking until a stats call succeeds — which is what
-its "works round odd issues on Z with host AP" comment is about. Measured
-values are real and live (quality 44→50, level −35 to −42 dBm), unlike
-hostap's TX counters, which always read zero.
-
-`mb-launcher-term.desktop` is installed but not started -- its wrapper
-execs `rxvt` or `xterm` and the payload ships neither.
-
-### Two applets is the default, not a bug
-
-If the panel only shows a menu and a clock, nothing is broken. With no
-`--default-apps`, `matchbox-panel` uses its compiled-in `DEFAULT_SESSIONS`
-= `"mb-applet-menu-launcher,mb-applet-clock"` (`src/session.c:3`). The
-other applets are installed and working, just never launched.
-
-`/etc/matchbox/session` passes the list we want. It also passes
-**`--no-session`, which is not optional**: if `$HOME/.matchbox/mbdock.session`
-exists, the panel reads it and ignores `--default-apps` entirely
-(`src/session.c:73-99`) -- and the panel *writes* that file on every clean
-exit. So any device that has ever run the panel has a stale two-applet
-list on disk that would silently win. `--no-session` also stops it being
-rewritten, which is what we want on an appliance.
-
-All `--default-apps` entries dock at the same gravity (the right of a
-south-oriented panel) in list order. Per-applet left/right placement needs
-the `mbdock.session` file format instead, which is not worth
-reintroducing the stale-state problem for.
-
-`tools/build-matchbox-payload.sh` fails if the session file names an
-applet that is not in the payload -- otherwise the panel just logs a
-session timeout per missing one and comes up looking half-broken.
+- `matchbox-panel` needs `--enable-proc-apm` or there is no battery applet.
+  Confirm `Building mb-applet-battery: yes, with /proc/apm`.
+- `tools/build-libiw.sh` must run before configuring, or there is no
+  wireless applet. Confirm `Building mb-applet-wireless: yes`.
+- The applet list is `modules/x11/matchbox-session`, shipped to
+  `/etc/matchbox/session`. `build-matchbox-payload.sh` fails if it names an
+  applet that is not in the payload.
+- Do not drop `--no-session` from that file. A stale
+  `$HOME/.matchbox/mbdock.session` silently overrides `--default-apps`, and
+  the panel rewrites it on every clean exit.
 
 ---
 

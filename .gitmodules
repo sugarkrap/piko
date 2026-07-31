@@ -1,12 +1,15 @@
 [submodule "matchbox-window-manager"]
 	path = userspace/src/matchbox-window-manager
 	url = ../matchbox-window-manager
+	branch = main
 [submodule "libX11"]
 	path = userspace/src/libX11
-	url = https://gitlab.freedesktop.org/xorg/lib/libX11.git
+	url = https://github.com/sugarkrap/libx11
+	branch = main
 [submodule "xserver"]
 	path = userspace/src/xserver
-	url = https://gitlab.freedesktop.org/xorg/xserver.git
+	url = https://github.com/sugarkrap/xserver
+	branch = main
 [submodule "xorg-macros"]
 	path = userspace/src/xorg-macros
 	url = https://gitlab.freedesktop.org/xorg/util/macros.git
@@ -18,7 +21,8 @@
 	url = https://gitlab.freedesktop.org/xorg/lib/libXfont.git
 [submodule "libfontenc"]
 	path = userspace/src/libfontenc
-	url = https://gitlab.freedesktop.org/xorg/lib/libfontenc.git
+	url = https://github.com/sugarkrap/libfontenc
+	branch = main
 [submodule "xcb-proto"]
 	path = userspace/src/xcb-proto
 	url = https://gitlab.freedesktop.org/xorg/proto/xcbproto.git
@@ -63,7 +67,8 @@
 	url = https://git.yoctoproject.org/matchbox-desktop
 [submodule "matchbox-panel"]
 	path = userspace/src/matchbox-panel
-	url = https://git.yoctoproject.org/matchbox-panel
+	url = https://github.com/sugarkrap/matchbox-panel
+	branch = main
 [submodule "matchbox-common"]
 	path = userspace/src/matchbox-common
 	url = https://git.yoctoproject.org/matchbox-common

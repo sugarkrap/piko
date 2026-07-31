@@ -5,7 +5,8 @@ set -eu
 # needs, into the ARM staging tree at userspace/stage-target.
 #
 # Everything X.Org is a tracked submodule under userspace/src/ (see
-# .gitmodules) with local edits applied by tools/setup-x11-src.sh. These
+# .gitmodules); those carrying local edits point at forks under
+# github.com/sugarkrap. These
 # are the ones that aren't X.Org -- generic libraries pinned by version
 # and SHA-256 here rather than vendored, same spirit as
 # tools/setup-kernel-src.sh downloading a pristine kernel tarball.

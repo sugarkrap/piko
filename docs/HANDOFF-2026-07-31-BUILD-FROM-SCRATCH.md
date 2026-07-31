@@ -85,7 +85,7 @@ neither `tar` nor `kill`. Build and push both by hand first:
 ### 3. The X component builds are not automated
 
 `tools/build-thirdparty-deps.sh` handles the non-X.Org libraries and
-`tools/setup-x11-src.sh` applies our local patches, but nothing yet runs
+`tools/setup-x11-src.sh` verifies the submodules carry our commits, but nothing yet runs
 `configure && make` for the X.Org submodules or the Matchbox components.
 Those steps are still manual, per
 `docs/HOWTO-MATCHBOX-DESKTOP.md`. Automating that into a
@@ -212,7 +212,7 @@ enumerate fine and do nothing.
 
     modules/                kernel patches, applied by setup-kernel-src.sh
       spi/                  the SPI double-request + PIO fix
-      x11/                  patches into the X submodules (setup-x11-src.sh)
+      x11/                  /etc/matchbox/session (the panel applet list)
     userspace/src/          X.Org + Matchbox submodules, and our own .c
                             (untar.c, kill.c, md5sum.c)
     userspace/xkb/          the hand-written Zaurus XKB layout

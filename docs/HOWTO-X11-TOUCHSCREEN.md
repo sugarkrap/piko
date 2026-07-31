@@ -60,7 +60,7 @@ then `SYN_REPORT`.
 ## Layer 2 -- kdrive's evdev driver (X server)
 
 Stock xorg-server 1.10.6 kdrive evdev **only drives relative pointers**.
-Patched in `modules/x11/xserver-kdrive-evdev-absolute.patch`:
+Patched on the `xserver` fork (`github.com/sugarkrap/xserver`):
 
 - `EvdevPtrMotion()` handled `EV_ABS` by `ErrorF()`-ing the values as
   debug and enqueueing *nothing*.
@@ -137,9 +137,9 @@ To re-measure, temporarily restore the debug print in `EvdevPtrMotion()`
 4. Take the new lines and compute min/max **ignoring any sample with
    pressure 0** -- pen-up samples carry stale coordinates and will skew
    the result.
-5. Put the new numbers in the `#define`s, regenerate the patch
-   (`git -C userspace/src/xserver diff hw/kdrive/linux/evdev.c >
-   modules/x11/xserver-kdrive-evdev-absolute.patch`), rebuild, redeploy.
+5. Put the new numbers in the `#define`s, then commit them on the
+   `xserver` fork (`git -C userspace/src/xserver commit -am ...` and push),
+   bump the submodule pointer, rebuild, redeploy.
 
 ---
 
