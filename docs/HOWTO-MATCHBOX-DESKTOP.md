@@ -137,6 +137,23 @@ already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
 
+**xev** (`userspace/src/xev`) needs no special flags -- it is a stock
+X.Org autotools package, links against libX11 only, and
+`tools/build-x11-stack.sh` already builds it as part of the default
+package list. Its binary is read straight out of `userspace/src/xev/xev`,
+same as xkbcomp/Xfbdev.
+
+Its menu entry (`userspace/desktop/xev.desktop`) launches it **inside st**
+rather than bare, because xev only ever writes to stdout: started from the
+desktop that stdout is inherited from matchbox-session, which
+`/etc/init.d/xsession` redirects to `/tmp/matchbox-session.log` -- and
+`/tmp` here is jffs2 on NAND, not tmpfs, so every event line would be a
+flash write. In a terminal the events are visible live and nothing is
+written. Both halves of `Exec=` are absolute paths, and `Icon=` carries
+its `.png` extension, for the two reasons st.desktop had to be fixed for:
+`/usr/local/bin` is not on this device's `PATH`, and
+`mb_dot_desktop_icon_get_full_path()` never auto-appends an extension.
+
 **FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
 toolkit for writing our own apps against this X server, cross-built as a
 shared library by `tools/build-fltk.sh` and installed **into
