@@ -107,11 +107,45 @@ static void print_cpu(void)
     printf(MID "CPU:       " RESET "%s%s%s\n", model, hw[0] ? " / " : "", hw);
 }
 
+/*
+ * Is `path` an actual mount point right now? statvfs() happily answers for a
+ * bare directory, so an unmounted /mnt/card reports the root jffs2 (NAND)
+ * numbers instead -- which reads as a plausible-but-wrong "SD card" line.
+ * /mnt/card is unmounted more often than not: pxamci/mmc_block probe before
+ * mdev is listening, so the mmcblk0p1 add-uevent that would have run
+ * /usr/sbin/sdcard is lost (see rootfs/etc/init.d/rcS).
+ */
+static int is_mounted(const char *path)
+{
+    FILE *f = fopen("/proc/mounts", "r");
+    char line[512];
+    int found = 0;
+
+    if (!f)
+        return 0;
+    while (fgets(line, sizeof(line), f)) {
+        char dev[256], mnt[256];
+        if (sscanf(line, "%255s %255s", dev, mnt) != 2)
+            continue;
+        if (!strcmp(mnt, path)) {
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
 static void print_disk(const char *label, const char *path)
 {
     struct statvfs sv;
     char ubuf[32], tbuf[32];
     unsigned long total_kib, used_kib;
+
+    if (!is_mounted(path)) {
+        printf(MID "%s" RESET "not mounted\n", label);
+        return;
+    }
 
     if (statvfs(path, &sv) != 0)
         return;
