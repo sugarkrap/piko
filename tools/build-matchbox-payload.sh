@@ -45,6 +45,9 @@ D_WM="${D_WM:-/tmp/mbwm-stage}"
 D_DESKTOP="${D_DESKTOP:-/tmp/mb-stage-desktop}"
 D_PANEL="${D_PANEL:-/tmp/mb-stage-panel}"
 D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
+# mb-applet-card is its own repo/submodule rather than part of
+# matchbox-panel, so it gets its own DESTDIR too.
+D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 
 DEPLOY=0
 TARGET=""
@@ -121,7 +124,7 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
@@ -183,7 +186,14 @@ chmod 755 "$PAYLOAD/etc/matchbox/session"
 # Evaluate just the APPLETS= lines rather than pattern-matching them, so
 # reformatting the list in that file cannot silently defeat this check.
 applets="$(sh -c "$(grep '^APPLETS=' "$REPO/modules/x11/matchbox-session")
-                  echo \"\$APPLETS\"" | tr ',' ' ')"
+                  echo \"\$APPLETS\"")"
+# One entry per line, then keep only the command word: an entry may carry
+# arguments (e.g. "mb-applet-clock -s 16"), and splitting the whole list on
+# whitespace would have us checking the payload for a binary called "-s".
+applets="$(printf '%s\n' "$applets" | tr ',' '\n' | while read -r entry; do
+    set -- $entry
+    [ -n "${1:-}" ] && echo "$1"
+done)"
 [ -n "$applets" ] || { echo "FAILED: parsed no applets from modules/x11/matchbox-session" >&2; exit 1; }
 for a in $applets; do
     if [ ! -f "$PAYLOAD/usr/bin/$a" ]; then

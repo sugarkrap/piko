@@ -45,6 +45,31 @@ fallback_to_console() {
 [ -x "$XSERVER" ] || fallback_to_console "$XSERVER missing"
 [ -x "$SESSION" ] || fallback_to_console "$SESSION missing (matchbox-common not installed?)"
 
+# X refuses to start if /tmp/.X<n>-lock exists: "Server is already active for
+# display 0". On a desktop that file is in a tmpfs and vanishes on reboot,
+# but /tmp here is on the root jffs2, so a server that died without cleaning
+# up -- a crash, or a power cut, or a reboot mid-write -- leaves the lock
+# behind FOREVER. Every subsequent boot then comes up to a console with no
+# X at all, and the cause is four lines down a log nobody reads.
+#
+# So sweep stale locks, but never one that something is genuinely holding:
+# the file contains the server's pid, so /proc/<pid> answers that. There is
+# no kill, pgrep or fuser on this device to ask any other way.
+for lock in /tmp/.X*-lock; do
+	[ -e "$lock" ] || continue		# no glob match
+	lockpid=$(cat "$lock" 2>/dev/null | tr -dc '0-9')
+	if [ -n "$lockpid" ] && [ -d "/proc/$lockpid" ]; then
+		echo "xsession: $lock held by live pid $lockpid, leaving it alone"
+		continue
+	fi
+	echo "xsession: removing stale $lock (pid ${lockpid:-unknown} is gone)"
+	rm -f "$lock"
+	# A dead socket alongside it confuses clients that get as far as
+	# connecting, so clear that too -- but only now that the lock is gone.
+	display=$(basename "$lock" | sed -e 's/^\.X//' -e 's/-lock$//')
+	rm -f "/tmp/.X11-unix/X$display"
+done
+
 "$XSERVER" -retro \
 	-keybd "evdev,,device=$KBD_DEV" \
 	-mouse "evdev,,device=$PTR_DEV" \
