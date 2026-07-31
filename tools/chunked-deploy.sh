@@ -441,6 +441,24 @@ send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
 
+# 7a. Backlight: the "bright" helper (single-word, per the AGENTS.md typing
+# constraint -- no '/' or ':' to type) plus the brightd policy daemon that
+# owns Fn+3/Fn+4, idle dimming and lid blanking.
+#
+# brightd is deployed with the rename-aside dance send_file already does,
+# which matters here specifically: it is normally running (rcS starts it),
+# and overwriting a running binary in place fails with ETXTBSY on this
+# kernel. It keeps running from the unlinked inode until the next reboot,
+# so a deploy does not disturb the current session's backlight.
+send_file "$REPO/rootfs/usr/sbin/bright" "/usr/sbin/bright"
+ssh_do "chmod 0755 /usr/sbin/bright"
+if [ -f "$REPO/userspace/src/brightd" ]; then
+    send_file "$REPO/userspace/src/brightd" "/usr/sbin/brightd"
+    ssh_do "chmod 0755 /usr/sbin/brightd"
+else
+    echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
+fi
+
 # 7b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
@@ -660,6 +678,7 @@ echo "Kernel panic fix + sound modules are staged at:"
 echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
 fi

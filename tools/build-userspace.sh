@@ -142,6 +142,25 @@ else
     echo "==> skipping md5sum (no $MD5SUM_SRC)"
 fi
 
+# --- 1b. brightd (backlight policy daemon) ----------------------------------
+# -static for the same reason as md5sum above: no dynamic linker on the
+# rootfs. Links nothing but libc -- it reads evdev and sysfs directly and
+# deliberately avoids X (see the header comment in brightd.c).
+BRIGHTD_SRC="$REPO/userspace/src/brightd.c"
+BRIGHTD_BIN="$REPO/userspace/src/brightd"
+if [ -f "$BRIGHTD_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$BRIGHTD_BIN" ] || [ "$BRIGHTD_SRC" -nt "$BRIGHTD_BIN" ]; then
+        echo "==> building userspace/src/brightd"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$BRIGHTD_BIN" "$BRIGHTD_SRC"
+        "${CROSS_COMPILE}strip" "$BRIGHTD_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/brightd already up to date"
+    fi
+else
+    echo "==> skipping brightd (no $BRIGHTD_SRC)"
+fi
+
 # --- 2. ALSA (must precede MPlayer -- MPlayer links libasound.a from it) ----
 if [ "$SKIP_ALSA" -eq 0 ]; then
     echo "==> building ALSA userspace (alsa-lib + alsa-utils)"
@@ -185,6 +204,9 @@ echo "==> userspace build complete"
 # perfectly successful build into a reported failure.
 if [ -f "$MD5SUM_BIN" ]; then
     echo "    md5sum:  $MD5SUM_BIN"
+fi
+if [ -f "$BRIGHTD_BIN" ]; then
+    echo "    brightd: $BRIGHTD_BIN"
 fi
 if [ -d "$REPO/userspace/stage-alsa-runtime" ]; then
     echo "    alsa:    $REPO/userspace/stage-alsa-runtime ($(du -sh "$REPO/userspace/stage-alsa-runtime" 2>/dev/null | cut -f1))"
