@@ -15,9 +15,11 @@ set -eu
 #   tools/build-uclibc-toolchain.sh       (or set TOOLCHAIN_BIN_DIR/CROSS_HOST)
 #   tools/build-thirdparty-deps.sh        zlib expat libpng freetype
 #                                         fontconfig xkeyboard-config dejavu
-# tools/setup-x11-src.sh (local patches) IS run automatically below, same as
-# tools/build-and-deploy.sh does for tools/setup-kernel-src.sh -- it's cheap
-# and idempotent, so there's no reason to make callers remember it.
+# tools/setup-x11-src.sh (local patches) and tools/build-libiw.sh (libiw,
+# needed for matchbox-panel's --enable-proc-apm build below to also pick up
+# mb-applet-wireless) ARE run automatically, same as tools/build-and-deploy.sh
+# does for tools/setup-kernel-src.sh -- both are cheap and idempotent, so
+# there's no reason to make callers remember them.
 #
 # Host prerequisite this script cannot install for you: xorgproto (Arch) /
 # x11proto-dev (Debian/Ubuntu) -- the arch-independent X protocol headers
@@ -122,6 +124,17 @@ else
 fi
 echo ""
 
+# libiw, so matchbox-panel's configure below also enables mb-applet-wireless
+# (--enable-proc-apm alone only gets the battery applet). Must run before
+# matchbox-panel builds; harmless/cheap before anything else too.
+echo "==> building libiw (tools/build-libiw.sh, needed for mb-applet-wireless)"
+if [ "$FORCE" -eq 1 ]; then
+    "$REPO/tools/build-libiw.sh" --force
+else
+    "$REPO/tools/build-libiw.sh"
+fi
+echo ""
+
 # extra_configure_args NAME -- flags beyond --host/--build/--prefix, kept
 # minimal on purpose (64MB RAM, no accelerator: optional features stay off).
 # Taken verbatim from docs/HOWTO-MATCHBOX-DESKTOP.md, cross-checked against
@@ -158,6 +171,14 @@ extra_configure_args() {
         # USE_XSETTINGS is NOT a configure flag -- it has to be forced at
         # make time, see build_matchbox_desktop_classic() below for why.
         echo "--sysconfdir=/etc --disable-static" ;;
+    matchbox-panel)
+        # Without this, configure silently drops mb-applet-battery from
+        # bin_PROGRAMS (neither upstream backend -- apm.h/-lapm, or
+        # /proc/acpi -- exists here) and mb-applet-wireless never gets
+        # picked up. modules/x11/matchbox-session lists both; without them
+        # tools/build-matchbox-payload.sh's applet-presence check fails.
+        # See docs/HOWTO-MATCHBOX-DESKTOP.md "Panel applets".
+        echo "--disable-static --enable-proc-apm" ;;
     *) echo "--disable-static" ;;
     esac
 }
