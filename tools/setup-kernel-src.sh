@@ -156,6 +156,12 @@ copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
 copy_in "$REPO/modules/w100/w100fb_private.h" drivers/video/fbdev/w100fb.h
 copy_in "$REPO/modules/w100/w100fb.h"          include/video/w100fb.h
 
+# Sharp panel VCOM/phase: writable comadj + phadadj params, so the
+# per-unit calibration lost across our kexec can be swept live instead of
+# rebuilding per guess. See the block comment in the file.
+echo "==> applying the Corgi LCD (VCOM/phase override) driver"
+copy_in "$REPO/modules/lcd/corgi_lcd_patched.c" drivers/video/backlight/corgi_lcd.c
+
 # Wire the W100 driver into the fbdev Kconfig/Makefile.
 #
 # Without this CONFIG_FB_W100 does not exist as a symbol at all, so
