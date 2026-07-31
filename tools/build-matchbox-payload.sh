@@ -110,6 +110,10 @@ FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 # because it is an FLTK client: it needs the libfltk and libstdc++ that this
 # payload carries, and would be a dangling binary without them.
 FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
+# pikostore ("Software Center") is the first real GUI app in the ROM, as
+# opposed to a smoke test. Same staging location as fltktest -- put there
+# by tools/build-pikostore.sh, which must run after tools/build-fltk.sh.
+PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -169,6 +173,7 @@ $XKBCOMP_BIN:usr/bin/xkbcomp \
 $XEV_BIN:usr/local/bin/xev \
 $TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
+$PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -280,17 +285,30 @@ for a in $applets; do
     echo "    applet: $a"
 done
 
-# st's menu launcher + icon. Categories=Development matches the vfolder
-# whose displayed Name is "Programming" (data/vfolders-desktop/Development.directory
-# in matchbox-common), which is how it lands in that app-folder on the desktop.
-# Both are skipped along with the binary under --skip-st: a .desktop whose
-# Exec is not in the image is a menu entry that does nothing when tapped,
-# which is worse than no entry.
+# Menu launchers + icons. The Categories= line picks which app-folder each
+# lands in: Development matches the vfolder displayed as "Programming",
+# System matches "System Tools" (see matchbox-common's
+# data/vfolders-desktop/*.directory).
+#
+# pikostore needs a launcher more than most: it is the GUI for updating the
+# ROM, and expecting the user to open a terminal and type its name to reach
+# it would defeat the point (this keyboard cannot even produce a slash).
+#
+# st is the one entry that is conditional. Under --skip-st its binary is
+# not in the payload, and a .desktop whose Exec is missing is a menu entry
+# that does nothing when tapped -- worse than no entry.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
+LAUNCHERS="pikostore"
 if [ "$SKIP_ST" -eq 0 ]; then
-    cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
-    cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
+    LAUNCHERS="st $LAUNCHERS"
 fi
+for app in $LAUNCHERS; do
+    cp "$REPO/userspace/desktop/$app.desktop" \
+       "$PAYLOAD/usr/share/applications/$app.desktop"
+    cp "$REPO/userspace/desktop/$app.png" \
+       "$PAYLOAD/usr/share/pixmaps/$app.png"
+    echo "    launcher: $app"
+done
 
 # pikalibrate's menu launcher + icon (Categories=System, alongside the
 # vfolder named "System Tools"). The binary itself ships separately, via

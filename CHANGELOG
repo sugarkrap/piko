@@ -1,0 +1,12 @@
+Software Center arrives. It is an FLTK app with a System Update tab that
+shows the running kernel and this ROM's version, lists every update
+installed with it, and can install a piko.tar package picked from the SD
+card without touching a shell.
+
+--
+Earlier ROMs predate this file, so their manifests carry no changelog.
+Everything above the "--" line is what ships as the current entry; add a
+new paragraph at the top for each release and push the old one below it.
+Blank lines separate entries. Keep each one to a single short paragraph:
+it is read on a 640x480 screen, in a scrolling box, by someone deciding
+whether to install.

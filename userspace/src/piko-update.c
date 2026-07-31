@@ -127,6 +127,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "md5.h"
@@ -166,6 +167,14 @@
 #define SMF_CMP_SAME    0
 #define SMF_CMP_DIFFERS 3
 
+/* ROM identity + install history, read by the Software Center's System
+ * Update tab (userspace/src/pikostore.cxx). The manifest is generated per
+ * build by tools/gen-rom-manifest.sh and ships inside the package; the
+ * history is append-only and written here after a successful install. */
+#define MANIFEST_PATH   "/etc/zaurus/manifest"
+#define HISTORY_PATH    "/etc/zaurus/update-history"
+#define HISTORY_DIR     "/etc/zaurus"
+
 struct tar_header {
     char name[100];
     char mode[8];
@@ -199,7 +208,56 @@ static int manifest_count = 0;
 static int dry_run = 0;
 static int no_reboot = 0;
 
+/* Machine-readable progress stream, enabled with --progress-fd N.
+ *
+ * It is a SEPARATE fd rather than markers mixed into stdout on purpose:
+ * pikostore shows raw stdout verbatim in a console box, and interleaving
+ * progress records there would mean either showing them to the user or
+ * stripping them back out with a parser that has to stay in step with
+ * every message this program prints. A second fd keeps the human stream
+ * human and the machine stream machine.
+ *
+ * Line-oriented, one record per line, fields separated by single spaces:
+ *
+ *   TOTAL <n>                    file count, once, before any PROGRESS
+ *   PROGRESS <phase> <done> <n>  phase is verify | install | smf
+ *   STATUS <free text...>        human-readable one-liner, may repeat
+ *   DONE <exit-code>             always last, even on failure
+ *
+ * Anything a reader does not recognise must be ignored, so records can be
+ * added later without breaking an older pikostore. */
+static int progress_fd = -1;
+
 static void rmtree(const char *path);
+
+/* Writes one progress record. Silent no-op unless --progress-fd was given.
+ *
+ * Deliberately unbuffered write(2) rather than a FILE*: the reader is a
+ * GUI redrawing a progress bar, and records sitting in a stdio buffer
+ * until the next flush would make the bar lurch instead of move. A failed
+ * write is ignored -- if the front end has gone away, that is its problem
+ * and must not abort an update that is already touching the filesystem. */
+static void progress(const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    int n;
+
+    if (progress_fd < 0)
+        return;
+
+    va_start(ap, fmt);
+    n = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    if (n > (int)sizeof(buf) - 2)
+        n = (int)sizeof(buf) - 2;
+    buf[n++] = '\n';
+
+    if (write(progress_fd, buf, (size_t)n) < 0)
+        return;
+}
 
 static void die(const char *fmt, ...)
 {
@@ -209,6 +267,10 @@ static void die(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fprintf(stderr, "\n");
+    /* DONE is emitted on every exit path including this one: a front end
+     * showing a progress dialog has no other way to tell "failed" from
+     * "still working", and would otherwise sit on a half-full bar. */
+    progress("DONE 1");
     /* Never leave a half-populated staging tree behind on abort -- it's
      * not on a live path, but this is still flash on the last spare
      * board, not RAM (see STAGING_DIR's comment), so don't litter it. */
@@ -545,6 +607,9 @@ static void read_and_parse_manifest(int fd)
     free(buf);
 
     printf("piko-update: MANIFEST OK, %d file(s) to verify\n", manifest_count);
+    /* Emitted before any PROGRESS so a front end can size its bar once
+     * rather than rescaling as records arrive. */
+    progress("TOTAL %d", manifest_count);
 }
 
 /* Streams one regular-file entry's data (nblocks * BLOCK_SIZE bytes on
@@ -609,10 +674,12 @@ static void verify_archive(const char *archive_path)
 {
     int fd = open(archive_path, O_RDONLY);
     struct tar_header hdr;
+    int verified = 0;
 
     if (fd < 0)
         die("cannot open %s: %s", archive_path, strerror(errno));
 
+    progress("STATUS verifying package");
     read_and_parse_manifest(fd);
 
     for (;;) {
@@ -666,6 +733,8 @@ static void verify_archive(const char *archive_path)
             snprintf(stage_path, sizeof(stage_path), "%s/%s", STAGING_DIR, full_name);
             stage_file_entry(fd, stage_path, size, mode, want);
             want->seen = 1;
+            verified++;
+            progress("PROGRESS verify %d %d", verified, manifest_count);
             continue;
         }
 
@@ -706,6 +775,11 @@ static void verify_archive(const char *archive_path)
 
             printf("piko-update: verify OK  %-40s (symlink -> %s)\n", want->path, want->target);
             want->seen = 1;
+            /* Symlinks count toward progress too: TOTAL is manifest_count,
+             * which includes them, so skipping them here would leave the
+             * bar permanently short of the end of the verify phase. */
+            verified++;
+            progress("PROGRESS verify %d %d", verified, manifest_count);
             continue;
         }
 
@@ -798,11 +872,114 @@ static void apply_update(void)
 {
     int i;
 
-    for (i = 0; i < manifest_count; i++)
+    progress("STATUS installing");
+    for (i = 0; i < manifest_count; i++) {
         install_file(&manifest[i]);
+        progress("PROGRESS install %d %d", i + 1, manifest_count);
+    }
 
     sync();
     printf("piko-update: %d file(s) installed.\n", manifest_count);
+}
+
+/* ---------------------------------------------------------------------- *
+ * ROM identity + update history                                           *
+ * ---------------------------------------------------------------------- */
+
+/* Reads "version: <value>" out of the manifest header block (everything
+ * before the first blank line -- see tools/gen-rom-manifest.sh). Returns 0
+ * on success. */
+static int read_rom_version(const char *path, char *out, size_t outsz)
+{
+    FILE *f = fopen(path, "r");
+    char line[512];
+    int ok = -1;
+
+    if (!f)
+        return -1;
+    while (fgets(line, sizeof(line), f)) {
+        char *nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
+        if (line[0] == '\0')
+            break;              /* end of header block */
+        if (strncmp(line, "version:", 8) == 0) {
+            char *v = line + 8;
+            size_t n;
+            while (*v == ' ' || *v == '\t')
+                v++;
+            if (*v) {
+                /* Bounded copy rather than snprintf("%s"): the manifest is
+                 * ours, but a hand-edited one must truncate quietly, not
+                 * scribble past a 64-byte version buffer. */
+                n = strlen(v);
+                if (n >= outsz)
+                    n = outsz - 1;
+                memcpy(out, v, n);
+                out[n] = '\0';
+                ok = 0;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+/* Appends one line to the update history that pikostore's System Update
+ * tab lists: "<version>|<ISO-8601 UTC>|<package basename>".
+ *
+ * Pipe-delimited because a ROM version, a timestamp and a filename can all
+ * contain spaces far more plausibly than they can contain a pipe, and this
+ * has to be parsed by a C++ front end with no CSV library on a device with
+ * no python to fix things up afterwards.
+ *
+ * Failure here is reported but never fatal: the update itself has already
+ * succeeded and been synced by this point, and losing a history line is
+ * not worth failing an install that actually worked. */
+static void record_history(const char *archive_path)
+{
+    char version[64] = "unknown";
+    const char *base;
+    time_t now;
+    struct tm *utc;
+    char stamp[32];
+    FILE *f;
+
+    if (read_rom_version(MANIFEST_PATH, version, sizeof(version)) < 0)
+        snprintf(version, sizeof(version), "unknown");
+
+    base = strrchr(archive_path, '/');
+    base = base ? base + 1 : archive_path;
+
+    now = time(NULL);
+    utc = gmtime(&now);
+    if (utc)
+        strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", utc);
+    else
+        snprintf(stamp, sizeof(stamp), "unknown");
+
+    if (mkdir_p(HISTORY_DIR) < 0) {
+        printf("piko-update: could not create %s, not recording history\n",
+               HISTORY_DIR);
+        return;
+    }
+
+    f = fopen(HISTORY_PATH, "a");
+    if (!f) {
+        printf("piko-update: could not append to %s: %s\n",
+               HISTORY_PATH, strerror(errno));
+        return;
+    }
+    fprintf(f, "%s|%s|%s\n", version, stamp, base);
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+    sync();
+
+    printf("piko-update: now running ROM %s (recorded in %s)\n",
+           version, HISTORY_PATH);
+    progress("STATUS installed ROM %s", version);
 }
 
 /* ---------------------------------------------------------------------- *
@@ -1172,7 +1349,9 @@ static void usage(const char *prog)
         "  --no-reboot   install but leave the reboot to you\n"
         "  --commit-smf  write a pending bootstrap update to the smf\n"
         "                partition (also available as `smfcommit`)\n"
-        "  --force       with --commit-smf, proceed on battery power\n",
+        "  --force       with --commit-smf, proceed on battery power\n"
+        "  --progress-fd N  emit machine-readable progress records on fd N\n"
+        "                (used by the Software Center; see the source)\n",
         prog, prog);
     exit(1);
 }
@@ -1194,6 +1373,13 @@ int main(int argc, char **argv)
             commit_smf = 1;
         else if (strcmp(argv[i], "--force") == 0)
             force = 1;
+        else if (strcmp(argv[i], "--progress-fd") == 0) {
+            if (++i >= argc)
+                usage(argv[0]);
+            progress_fd = atoi(argv[i]);
+            if (progress_fd < 0)
+                usage(argv[0]);
+        }
         else if (!archive_path)
             archive_path = argv[i];
         else
@@ -1225,6 +1411,8 @@ int main(int argc, char **argv)
     if (dry_run) {
         rmtree(STAGING_DIR);
         printf("piko-update: dry run OK, nothing was changed.\n");
+        progress("STATUS dry run OK");
+        progress("DONE 0");
         return 0;
     }
 
@@ -1232,15 +1420,27 @@ int main(int argc, char **argv)
     rmtree(STAGING_DIR);
 
     /* Only after home is installed, and never a write -- see the header. */
+    progress("PROGRESS smf 0 1");
     smf_stage_pending();
+    progress("PROGRESS smf 1 1");
+
+    /* After the manifest from this package is in place, so the version it
+     * records is the one now running. */
+    record_history(archive_path);
 
     if (no_reboot) {
         printf("piko-update: done. Run softreboot manually when ready.\n");
+        progress("DONE 0");
         return 0;
     }
 
     printf("piko-update: rebooting via %s ...\n", SOFTREBOOT);
     fflush(stdout);
+    /* Last record before the process is replaced: a front end watching
+     * this fd sees DONE, then EOF as the exec tears the pipe down. Without
+     * it, a successful update would look identical to a crash. */
+    progress("STATUS rebooting");
+    progress("DONE 0");
     execl(SOFTREBOOT, "softreboot", (char *)NULL);
     die("update applied but could not exec %s: %s (reboot manually)",
         SOFTREBOOT, strerror(errno));

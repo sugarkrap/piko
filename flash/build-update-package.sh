@@ -208,6 +208,15 @@ else
     echo "==> no $SSH_STAGE -- package will have no scp/sftp-server"
     echo "    (run tools/build-ssh.sh first if that is not intended)"
 fi
+# The ROM manifest is GENERATED per build, so it cannot live in rootfs/ the
+# way every other config file does -- a tracked copy would be stale the
+# moment it was committed. It is what pikostore's System Update tab reads
+# to name the running ROM, and what piko-update records in the update
+# history after installing this package.
+echo "==> generating ROM manifest (etc/zaurus/manifest)"
+"$REPO/tools/gen-rom-manifest.sh" "$STAGE/manifest"
+manifest_add "$STAGE/manifest" "etc/zaurus/manifest" 644
+sed -n '2p' "$STAGE/manifest" | sed 's/^/    /'
 
 if [ -d "$KERNEL_DIR" ]; then
     echo "==> KERNEL_DIR present ($KERNEL_DIR) -- including kernel + modules"
