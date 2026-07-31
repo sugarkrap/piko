@@ -19,19 +19,24 @@ set -eu
 #                                   just inline in build-and-deploy.sh) so a
 #                                   plain `tools/build-userspace.sh` produces
 #                                   a complete, deployable set.
-#   2. tools/build-alsa.sh          alsa-lib + alsa-utils. MUST run before
+#   2. tools/build-ssh.sh           scp + OpenSSH's sftp-server + a
+#                                   reproducible dropbear. The device's only
+#                                   remote path is WiFi->SSH (AGENTS.md), and
+#                                   until this existed nothing in the repo
+#                                   could rebuild the SSH server at all.
+#   3. tools/build-alsa.sh          alsa-lib + alsa-utils. MUST run before
 #                                   MPlayer: MPlayer links libasound.a out of
 #                                   userspace/stage-alsa, so building it
 #                                   first is a hard ordering dependency, not
 #                                   a preference.
-#   3. tools/build-mplayer.sh       MPlayer (video/audio playback).
-#   4. tools/build-sdl.sh           SDL 1.2 (libSDL-1.2.so.0, shared -- see
+#   4. tools/build-mplayer.sh       MPlayer (video/audio playback).
+#   5. tools/build-sdl.sh           SDL 1.2 (libSDL-1.2.so.0, shared -- see
 #                                   its header for why this one component is
 #                                   dynamically linked against this project's
 #                                   otherwise-static convention) plus the
 #                                   sdltest dummy smoke-test app.
-#   5. tools/build-st.sh            st (suckless terminal). Unlike the other
-#                                   four, it is NOT self-contained: it links
+#   6. tools/build-st.sh            st (suckless terminal). Unlike the other
+#                                   five, it is NOT self-contained: it links
 #                                   dynamically against libX11/libXft/
 #                                   fontconfig/freetype from
 #                                   userspace/stage-target, i.e. it needs the
@@ -51,15 +56,18 @@ set -eu
 #
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,
-# stage-sdl, stage-sdl-runtime), the vendored upstream source trees under
-# userspace/src/, userspace/src/md5sum, and userspace/src/st/st.
+# stage-sdl, stage-sdl-runtime, stage-ssh), the vendored upstream source
+# trees under userspace/src/, userspace/src/md5sum, and userspace/src/st/st.
 #
 # Usage:
-#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]
+#   tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]
 #
 # --force        rebuild every component from scratch (re-extract sources,
 #                reconfigure). Slow: MPlayer alone is a ~15 MiB static binary
 #                with a bundled FFmpeg and takes a while on any machine.
+# --skip-ssh     don't build scp/sftp-server/dropbear. Only reasonable when
+#                userspace/stage-ssh is already current -- see above for why
+#                this is the last thing worth skipping.
 # --skip-alsa    don't build alsa-lib/alsa-utils (implies MPlayer must
 #                already have a usable userspace/stage-alsa to link against).
 # --skip-mplayer don't build MPlayer -- much the slowest step, so this is
@@ -81,6 +89,7 @@ set -eu
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 FORCE=0
+SKIP_SSH=0
 SKIP_ALSA=0
 SKIP_MPLAYER=0
 SKIP_SDL=0
@@ -88,17 +97,18 @@ SKIP_ST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --force)        FORCE=1;        shift ;;
+        --skip-ssh)     SKIP_SSH=1;     shift ;;
         --skip-alsa)    SKIP_ALSA=1;    shift ;;
         --skip-mplayer) SKIP_MPLAYER=1; shift ;;
         --skip-sdl)     SKIP_SDL=1;     shift ;;
         --skip-st)      SKIP_ST=1;      shift ;;
         -h|--help)
-            sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '3,79p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "tools/build-userspace.sh: unknown argument: $1" >&2
-            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]" >&2
+            echo "Usage: tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]" >&2
             exit 1
             ;;
     esac
@@ -142,7 +152,20 @@ else
     echo "==> skipping md5sum (no $MD5SUM_SRC)"
 fi
 
-# --- 2. ALSA (must precede MPlayer -- MPlayer links libasound.a from it) ----
+# --- 2. SSH file transfer (scp + sftp-server, and a reproducible dropbear) --
+# Deliberately early and unconditional: this is the transport everything
+# else in this list is delivered over (AGENTS.md -- no USB, no serial), so
+# a build that skips it to save time is saving time on the wrong thing.
+# It is also the only step here with no external dependency on another
+# staging tree, so it can never be blocked by an earlier failure.
+if [ "$SKIP_SSH" -eq 0 ]; then
+    echo "==> building SSH file transfer (scp + sftp-server + dropbear)"
+    sh "$REPO/tools/build-ssh.sh" $FORCE_ARG
+else
+    echo "==> --skip-ssh: not building scp/sftp-server/dropbear"
+fi
+
+# --- 3. ALSA (must precede MPlayer -- MPlayer links libasound.a from it) ----
 if [ "$SKIP_ALSA" -eq 0 ]; then
     echo "==> building ALSA userspace (alsa-lib + alsa-utils)"
     sh "$REPO/tools/build-alsa.sh" $FORCE_ARG
@@ -150,7 +173,7 @@ else
     echo "==> --skip-alsa: not building alsa-lib/alsa-utils"
 fi
 
-# --- 3. MPlayer -------------------------------------------------------------
+# --- 4. MPlayer -------------------------------------------------------------
 if [ "$SKIP_MPLAYER" -eq 0 ]; then
     echo "==> building MPlayer"
     sh "$REPO/tools/build-mplayer.sh" $FORCE_ARG
@@ -158,7 +181,7 @@ else
     echo "==> --skip-mplayer: not building MPlayer"
 fi
 
-# --- 4. SDL 1.2 (independent of ALSA/MPlayer -- video only, audio disabled) -
+# --- 5. SDL 1.2 (independent of ALSA/MPlayer -- video only, audio disabled) -
 if [ "$SKIP_SDL" -eq 0 ]; then
     echo "==> building SDL 1.2"
     sh "$REPO/tools/build-sdl.sh" $FORCE_ARG
@@ -166,7 +189,7 @@ else
     echo "==> --skip-sdl: not building SDL"
 fi
 
-# --- 5. st (needs the X11 stack already staged -- see header) --------------
+# --- 6. st (needs the X11 stack already staged -- see header) --------------
 if [ "$SKIP_ST" -eq 0 ]; then
     if [ -f "$REPO/userspace/stage-target/usr/include/X11/Xlib.h" ]; then
         echo "==> building st"
@@ -185,6 +208,9 @@ echo "==> userspace build complete"
 # perfectly successful build into a reported failure.
 if [ -f "$MD5SUM_BIN" ]; then
     echo "    md5sum:  $MD5SUM_BIN"
+fi
+if [ -d "$REPO/userspace/stage-ssh" ]; then
+    echo "    ssh:     $REPO/userspace/stage-ssh ($(du -sh "$REPO/userspace/stage-ssh" 2>/dev/null | cut -f1))"
 fi
 if [ -d "$REPO/userspace/stage-alsa-runtime" ]; then
     echo "    alsa:    $REPO/userspace/stage-alsa-runtime ($(du -sh "$REPO/userspace/stage-alsa-runtime" 2>/dev/null | cut -f1))"

@@ -106,6 +106,38 @@ echo "==> packaging rootfs/ overlay (etc/, usr/sbin/, init -- whatever's there)"
     manifest_add "$REPO/rootfs/$rel" "$rel"
 done
 
+# SSH file transfer (scp + sftp-server + dbclient/dropbearkey) from
+# tools/build-ssh.sh. Separate from the rootfs/ loop above because these
+# are cross-compiled binaries: this repo tracks source and rebuilds
+# binaries, so they live in a staging tree rather than under rootfs/.
+#
+# Included in the offline update on purpose -- an update package is the
+# path for a device that is NOT reachable over the network, which is
+# exactly the device that most needs working file transfer next time.
+#
+# dropbear itself is opt-in (PIKO_SSH_REPLACE_DROPBEAR=1), same as
+# tools/chunked-deploy.sh --replace-dropbear and the mtd3 image builder:
+# piko-update rewrites files in place, so a bad server binary here would
+# take SSH down on a board with no serial console (AGENTS.md).
+SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+if [ -d "$SSH_STAGE" ]; then
+    echo "==> packaging SSH file transfer payload from $SSH_STAGE"
+    . "$REPO/tools/ssh-payload.sh"
+    SSH_LIST="$SSH_PAYLOAD_FILES"
+    if [ "${PIKO_SSH_REPLACE_DROPBEAR:-0}" = "1" ]; then
+        echo "==> PIKO_SSH_REPLACE_DROPBEAR=1: also packaging the rebuilt dropbear"
+        SSH_LIST="$SSH_LIST
+$SSH_PAYLOAD_SERVER"
+    fi
+    for entry in $SSH_LIST; do
+        rest="${entry#*:}"
+        manifest_add "$SSH_STAGE/${entry%%:*}" "${rest%%:*}" "${rest#*:}"
+    done
+else
+    echo "==> no $SSH_STAGE -- package will have no scp/sftp-server"
+    echo "    (run tools/build-ssh.sh first if that is not intended)"
+fi
+
 if [ -d "$KERNEL_DIR" ]; then
     echo "==> KERNEL_DIR present ($KERNEL_DIR) -- including kernel + modules"
 

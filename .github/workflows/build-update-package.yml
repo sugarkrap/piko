@@ -34,6 +34,10 @@ on:
       - "userspace/src/**"
       - "rootfs/**"
       - "flash/build-update-package.sh"
+      - "tools/build-ssh.sh"
+      - "tools/ssh-payload.sh"
+      - "tools/build-uclibc-toolchain.sh"
+      - "tools/uclibc-toolchain.config"
       - "tools/setup-kernel-src.sh"
       - "flash/qemu-smoke-test.sh"
       - "modules/**"
@@ -53,6 +57,72 @@ jobs:
           sudo apt-get install -y -qq gcc-arm-linux-gnueabi \
               bison flex bc libssl-dev libelf-dev \
               qemu-system-arm cpio
+          # crosstool-NG build deps, for the uClibc toolchain the SSH
+          # payload needs (see that step below). Same list
+          # build-piko-zip.yml installs for the OABI toolchain.
+          sudo apt-get install -y -qq \
+              build-essential git autoconf automake texinfo \
+              gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
+              patch gawk python3-dev rsync
+
+      # scp + sftp-server (+ dbclient/dropbearkey) for the rootfs overlay.
+      # An offline update package is what a device that is NOT reachable
+      # over the network gets -- i.e. exactly the device that most needs
+      # working file transfer the next time round.
+      #
+      # These specifically cannot use the apt gcc-arm-linux-gnueabi
+      # installed above, even though everything else in this job does and
+      # even though they are statically linked: glibc's getpwnam/getpwuid
+      # go through NSS, which dlopen()s libnss_files.so.2 at runtime out of
+      # a static binary too, and that file does not exist on this rootfs.
+      # sftp-server would link, pass every ELF check, and then die with
+      # "No user found for uid 0" on the device. tools/build-ssh.sh's NSS
+      # check refuses to produce such a binary; see its header.
+      #
+      # Cache key shared with build-piko-zip.yml, which builds the same
+      # toolchain -- whichever workflow runs first, the other restores it.
+      - name: Cache uClibc toolchain (crosstool-NG build)
+        uses: actions/cache@v4
+        with:
+          path: toolchain-uclibc
+          key: uclibc-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          save-always: true
+
+      - name: Cache dropbear/OpenSSH release tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/src/dropbear-*.tar.bz2
+            userspace/src/openssh-*.tar.gz
+          key: ssh-tarballs-${{ hashFiles('tools/build-ssh.sh') }}
+
+      # Non-fatal, same philosophy as the kernel-src fallback below: a
+      # package with the rootfs overlay and no SSH payload is still a real,
+      # useful offline update, and is strictly better than no artifact at
+      # all. flash/build-update-package.sh skips the payload on its own
+      # when userspace/stage-ssh is absent, and says so in its output --
+      # this step only makes the reason visible in the run summary.
+      - name: Build scp + sftp-server (uClibc toolchain)
+        id: ssh_payload
+        run: |
+          set +e
+          PIKO_TOOLCHAIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc" \
+              ./tools/build-uclibc-toolchain.sh && \
+          TOOLCHAIN_BIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc/x-tools/arm-unknown-linux-uclibcgnueabi/bin" \
+              ./tools/build-ssh.sh
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            {
+              echo "### SSH file transfer payload"
+              echo '```'
+              find userspace/stage-ssh -type f -printf '%10s  %p\n' | sort -k2
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "SSH payload build failed (exit $rc) -- package will ship without scp/sftp-server." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Cache kernel-src reconstruction
         id: kernel-src-cache

@@ -29,7 +29,12 @@ flash/build-update-package.sh [output.tar]      # defaults to ./update.tar
 This cross-compiles `piko-update` itself, packages the entire
 `rootfs/` overlay (`etc/*`, `usr/sbin/*`, `init` — whatever's actually
 committed there, so this can't drift out of sync with a hand-picked file
-list), and — if a built `kernel-src/linux-7.1.4` checkout is present
+list), adds the SSH file-transfer binaries if `userspace/stage-ssh` has
+been built (`tools/build-ssh.sh` — `/usr/bin/scp`,
+`/usr/libexec/sftp-server`, `/usr/bin/dbclient`, `/usr/bin/dropbearkey`;
+the dropbear *server* only with `PIKO_SSH_REPLACE_DROPBEAR=1`, see
+`docs/DEADLETTER-DROPBEAR-PTY.md` for why that one is opt-in), and — if a
+built `kernel-src/linux-7.1.4` checkout is present
 locally (see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`) — also includes the
 stage-2 `zImage` and every module `chunked-deploy.sh` deploys. Every file
 gets an MD5 in a `MANIFEST` entry written into the package.

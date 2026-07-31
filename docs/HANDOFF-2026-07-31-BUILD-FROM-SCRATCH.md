@@ -151,7 +151,17 @@ Install each component to its **own** `DESTDIR`
 `/tmp/mb-stage-common`) -- they are built independently and would
 otherwise race installing into one tree.
 
-**5. Pack and deploy.**
+**5. SSH file transfer.** `scp` + OpenSSH's `sftp-server`, plus a
+reproducible rebuild of dropbear itself (fetched and SHA-256-verified, both
+cross-compile fixes from `docs/DEADLETTER-DROPBEAR-PTY.md` applied and
+verified in the built binary):
+
+    tools/build-ssh.sh
+
+Also run by `tools/build-userspace.sh`. The server binary is staged but not
+deployed unless you ask (`chunked-deploy.sh --replace-dropbear`).
+
+**6. Pack and deploy.**
 
     tools/build-matchbox-payload.sh                 # inspect the tar first
     tools/build-and-deploy.sh --adapter <iface> root@<device-ip>

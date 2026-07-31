@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--replace-dropbear] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -25,6 +25,11 @@ set -eu
 # That payload is also skipped automatically when the staged trees do not
 # exist or when the device lacks free space -- see section 8 for why the
 # space check refuses rather than half-deploying.
+# --replace-dropbear also ships the rebuilt SSH SERVER (section 7c), not
+# just scp/sftp-server/dbclient. Off by default because this board has no
+# serial console and no USB: a dropbear that does not come back after the
+# next softreboot is only recoverable via the SD-card recovery flash. The
+# old binary is kept as /usr/sbin/dropbear.prev either way.
 # --kernel-only skips every module/script/helper deployment step below and
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
@@ -46,6 +51,7 @@ ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
 NO_USERSPACE=0
+REPLACE_DROPBEAR=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -72,8 +78,12 @@ while [ $# -gt 0 ]; do
             NO_USERSPACE=1
             shift
             ;;
+        --replace-dropbear)
+            REPLACE_DROPBEAR=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--replace-dropbear] [user@host]"
             exit 0
             ;;
         --*)
@@ -454,6 +464,67 @@ send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
+# 7c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
+#
+# Built by tools/build-ssh.sh into userspace/stage-ssh; skipped silently
+# when that tree doesn't exist, like every other staged payload here.
+# Deployed BEFORE the multi-megabyte payloads below on purpose: they are
+# ~850 KiB total and they are what makes every *future* transfer to this
+# device a one-liner instead of a chunked shell pipeline.
+#
+# sftp-server MUST land at exactly /usr/libexec/sftp-server: that path is
+# compiled into dropbear (SFTPSERVER_PATH), not looked up on $PATH, so a
+# copy anywhere else is invisible to the server. /usr/libexec does not
+# exist on this rootfs yet, hence the mkdir.
+#
+# The dropbear server binary itself is NOT deployed unless
+# --replace-dropbear is given -- see that option's block below.
+SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
+    echo "==> SSH file transfer payload (scp + sftp-server)"
+    # File list shared with the mtd3 image and update-package builders --
+    # see tools/ssh-payload.sh for why it is not spelled out three times.
+    . "$REPO/tools/ssh-payload.sh"
+    for entry in $SSH_PAYLOAD_FILES; do
+        src="$SSH_STAGE/${entry%%:*}"
+        rest="${entry#*:}"
+        dest="/${rest%%:*}"
+        mode="${rest#*:}"
+        ssh_do "mkdir -p '$(dirname "$dest")'"
+        send_file "$src" "$dest"
+        ssh_do "chmod 0$mode '$dest'"
+    done
+
+    # Replacing the live SSH server is the one deploy on this board that
+    # can strand it: there is no serial console and no USB (AGENTS.md), so
+    # a dropbear that fails to start is unrecoverable without an SD-card
+    # recovery flash. Hence opt-in, and hence rename-aside rather than
+    # overwrite:
+    #   - the running dropbear holds its own inode open, so writing over
+    #     it fails with ETXTBSY (this device's busybox has no kill/killall
+    #     either -- it cannot be stopped first);
+    #   - `mv` of the old binary keeps the running process alive on the
+    #     old inode AND leaves /usr/sbin/dropbear.prev as the thing to
+    #     rename back from a console if the new one misbehaves.
+    # The new server does not take effect until the next softreboot; the
+    # currently-open SSH session is unaffected by the swap.
+    if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
+        srv_src="$SSH_STAGE/${SSH_PAYLOAD_SERVER%%:*}"
+        srv_rest="${SSH_PAYLOAD_SERVER#*:}"
+        srv_dest="/${srv_rest%%:*}"
+        echo "==> replacing $srv_dest (rename-aside, effective next boot)"
+        ssh_do "if [ -f '$srv_dest' ]; then mv -f '$srv_dest' '$srv_dest.prev'; fi"
+        send_file "$srv_src" "$srv_dest"
+        ssh_do "chmod 0${srv_rest#*:} '$srv_dest'"
+        echo "    previous server kept at /usr/sbin/dropbear.prev"
+        echo "    takes effect on the next softreboot -- if SSH does not come"
+        echo "    back, log in on the device console and run:"
+        echo "      mv /usr/sbin/dropbear.prev /usr/sbin/dropbear"
+    fi
+elif [ "$KERNEL_ONLY" -eq 0 ]; then
+    echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/build-ssh.sh)"
+fi
+
 # 8. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
@@ -660,6 +731,12 @@ echo "Kernel panic fix + sound modules are staged at:"
 echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
+    echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
+    if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
+        echo "  /usr/sbin/dropbear       (old copy at /usr/sbin/dropbear.prev; new one runs after the next boot)"
+    fi
+fi
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
 fi
