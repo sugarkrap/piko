@@ -25,13 +25,10 @@
 APPLETS="mb-applet-menu-launcher"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
+APPLETS="$APPLETS,mb-applet-wireless"
 APPLETS="$APPLETS,mb-applet-clock"
 
 # Not enabled:
-#
-#   mb-applet-wireless   Needs iwlib.h + -liw from wireless-tools, which
-#                        we do not cross-build. The applet source is in
-#                        the submodule and configure drops it silently.
 #
 #   mb-launcher-term     mb-applet-launcher -o -1 -l mbterm.png \
 #                            mb-applet-xterm-wrapper.sh

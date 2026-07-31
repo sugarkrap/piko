@@ -137,4 +137,21 @@ echo "==> matchbox-panel: system-monitor /proc/meminfo parse"
 # showing a nonsense percentage. Now keyed off the labels.
 apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-system-monitor-meminfo.patch"
 
+echo "==> matchbox-panel: wireless applet fixes"
+# mb-applet-wireless has never been buildable or runnable as shipped:
+#
+#   - find_iwface() probed Mwd.iface, which is only assigned at the END of
+#     that function, so on the FIRST wireless interface it was still NULL
+#     and iwlib's strncpy(ifr_name, NULL, IFNAMSIZ) segfaulted. Verified
+#     under qemu-arm: unpacked upstream dies with SIGSEGV during startup
+#     enumeration on any host that has a wireless interface.
+#   - math.h was never included, so rint()/log() were implicitly declared
+#     as returning int -- a hard error on any modern compiler.
+#   - configure.ac passed have_libiw=yes as both the found AND not-found
+#     action of AC_CHECK_LIB, so the libiw probe result meant nothing, and
+#     WIRELESS_LIBS omitted -lm that the applet's own math needs.
+#
+# Needs libiw in the staging tree first: tools/build-libiw.sh.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-wireless-applet.patch"
+
 echo "==> X11 submodules ready to configure"
