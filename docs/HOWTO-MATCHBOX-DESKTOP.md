@@ -47,6 +47,8 @@ Nothing builds it. The classic one is `matchbox-desktop-classic`.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
+                                        # and libXrender staged first
 
 The last four are independent of each other once libmatchbox exists and
 can be built in parallel -- but give each its own `DESTDIR`, because they
@@ -130,6 +132,56 @@ new runtime libraries -- libX11, libXft, libfontconfig and libfreetype are
 already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
+
+**FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
+toolkit for writing our own apps against this X server, built as a shared
+library by `tools/build-fltk.sh` and installed **into
+`userspace/stage-target` itself** rather than a stage of its own -- it is
+part of that X sysroot, and anything cross-linking against FLTK later
+needs it on the same include/lib path as libX11. Four things about that
+build are not guessable:
+
+- **1.3, not 1.4/1.5.** 1.3.11 is the last autotools + C++98 + X11-only
+  release. 1.4 makes CMake primary, wants C++11, and defaults to a
+  Wayland backend with Pango/Cairo font handling -- all dead weight
+  against a kdrive server on a PXA255.
+- **`--x-includes` / `--x-libraries` are mandatory.** FLTK finds X via
+  `AC_PATH_XTRA`, which searches hardcoded *host* paths and knows nothing
+  about a cross sysroot. Same trap as matchbox-window-manager.
+- **`--enable-xft` explicitly**, not just left at its default. This board
+  has no core X bitmap fonts at all (see "Fonts are mandatory" below), so
+  without Xft every FLTK label renders blank. Passing the flag makes
+  configure *abort* when Xft is missing instead of quietly building that
+  unusable library.
+- **JPEG stays bundled; zlib and libpng do not.** FLTK vendors all three.
+  zlib and libpng are already cross-built and staged for the rest of the
+  desktop, so `--disable-localzlib --disable-localpng` avoids shipping a
+  second copy of each inside `libfltk_images`. Nothing here stages a
+  libjpeg, so that one stays bundled (linked in statically -- configure
+  compiles it `-fPIC` because `--enable-shared` is on).
+
+It is the **only C++ component in the stack**, so the payload now also
+ships `libstdc++.so.6` out of the toolchain sysroot alongside
+`libgcc_s.so.1`. That is 1.6MB stripped, by far the largest single thing
+FLTK adds; the three FLTK libraries together are about 1MB.
+
+`fltktest` (`userspace/src/fltktest.cxx`, shipped to
+`/usr/local/bin/fltktest`) is the FLTK counterpart of `sdltest`: it prints
+its version line *before* opening the display, so a loader failure and an
+X failure look different, then shows a window with text and a drawn shape.
+Run it from `st`, or over SSH with `DISPLAY=:0`.
+
+**Verified on hardware 2026-07-31**: under the running Matchbox session it
+prints `fltktest: FLTK 1.3.11`, opens its window, and renders text and
+graphics on the panel -- confirmed by eye, not inferred from an exit code.
+
+One benign line to expect on stderr:
+
+    XOpenIM() failed
+
+There is no X input method server on this device and nothing here needs
+one -- FLTK warns once and carries on. It is not a symptom of a broken
+build.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a

@@ -41,6 +41,18 @@ set -eu
 #                                   that hasn't done the X11 bring-up yet
 #                                   still gets a complete ALSA/MPlayer/SDL
 #                                   build out of this script.
+#   6. tools/build-fltk.sh          FLTK 1.3 (libfltk.so.1.3 + _images +
+#                                   _forms, shared) and the fltktest smoke
+#                                   test. Like st, it needs the X11 stack
+#                                   staged first and is skipped -- not
+#                                   fatal -- when it isn't. Unlike SDL it
+#                                   installs INTO userspace/stage-target
+#                                   rather than a stage of its own, because
+#                                   it is part of that X11 sysroot: the
+#                                   X11/Matchbox payload ships it, and
+#                                   anything cross-linking against FLTK
+#                                   later needs it on the same include/lib
+#                                   path as libX11.
 #
 # NOT BUILT HERE: the X11/matchbox stack itself (userspace/src/libX11,
 # xserver, matchbox-window-manager, pixman, ...). Those are git submodules
@@ -52,10 +64,11 @@ set -eu
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,
 # stage-sdl, stage-sdl-runtime), the vendored upstream source trees under
-# userspace/src/, userspace/src/md5sum, and userspace/src/st/st.
+# userspace/src/, userspace/src/md5sum, userspace/src/st/st, and everything
+# tools/build-fltk.sh installs into userspace/stage-target.
 #
 # Usage:
-#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]
+#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk]
 #
 # --force        rebuild every component from scratch (re-extract sources,
 #                reconfigure). Slow: MPlayer alone is a ~15 MiB static binary
@@ -66,6 +79,7 @@ set -eu
 #                the useful one when you only touched the audio stack.
 # --skip-sdl     don't build SDL 1.2 / sdltest.
 # --skip-st      don't build st.
+# --skip-fltk    don't build FLTK / fltktest.
 #
 # Env overrides are passed straight through to the per-component scripts;
 # see those for the full list. The common ones:
@@ -85,6 +99,7 @@ SKIP_ALSA=0
 SKIP_MPLAYER=0
 SKIP_SDL=0
 SKIP_ST=0
+SKIP_FLTK=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --force)        FORCE=1;        shift ;;
@@ -92,13 +107,14 @@ while [ $# -gt 0 ]; do
         --skip-mplayer) SKIP_MPLAYER=1; shift ;;
         --skip-sdl)     SKIP_SDL=1;     shift ;;
         --skip-st)      SKIP_ST=1;      shift ;;
+        --skip-fltk)    SKIP_FLTK=1;    shift ;;
         -h|--help)
-            sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '3,93p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "tools/build-userspace.sh: unknown argument: $1" >&2
-            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st]" >&2
+            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk]" >&2
             exit 1
             ;;
     esac
@@ -178,6 +194,18 @@ else
     echo "==> --skip-st: not building st"
 fi
 
+# --- 6. FLTK (needs the X11 stack already staged -- see header) ------------
+if [ "$SKIP_FLTK" -eq 0 ]; then
+    if [ -f "$REPO/userspace/stage-target/usr/lib/pkgconfig/xft.pc" ]; then
+        echo "==> building FLTK"
+        sh "$REPO/tools/build-fltk.sh" $FORCE_ARG
+    else
+        echo "==> skipping FLTK (userspace/stage-target has no X11/Xft stack staged yet)"
+    fi
+else
+    echo "==> --skip-fltk: not building FLTK"
+fi
+
 echo ""
 echo "==> userspace build complete"
 # Explicit ifs rather than `[ ... ] && echo`: a false test on the last such
@@ -197,6 +225,9 @@ if [ -d "$REPO/userspace/stage-sdl-runtime" ]; then
 fi
 if [ -f "$REPO/userspace/src/st/st" ]; then
     echo "    st:      $REPO/userspace/src/st/st ($(du -h "$REPO/userspace/src/st/st" 2>/dev/null | cut -f1))"
+fi
+if [ -f "$REPO/userspace/stage-target/usr/lib/libfltk.so.1.3" ]; then
+    echo "    fltk:    $REPO/userspace/stage-target/usr/lib/libfltk.so.1.3 ($(du -h "$REPO/userspace/stage-target/usr/lib/libfltk.so.1.3" 2>/dev/null | cut -f1))"
 fi
 echo ""
 echo "    Deploy with tools/build-and-deploy.sh (or tools/chunked-deploy.sh)."
