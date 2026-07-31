@@ -72,3 +72,7 @@
 [submodule "matchbox-common"]
 	path = userspace/src/matchbox-common
 	url = https://git.yoctoproject.org/matchbox-common
+[submodule "mb-applet-card"]
+	path = userspace/src/mb-applet-card
+	url = https://github.com/sugarkrap/mb-applet-card
+	branch = main

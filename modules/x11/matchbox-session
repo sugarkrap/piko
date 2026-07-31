@@ -26,6 +26,9 @@ APPLETS="mb-applet-menu-launcher"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
 APPLETS="$APPLETS,mb-applet-wireless"
+# Self-hiding: mb-applet-card shows a tray icon only while an SD or CF
+# card is actually inserted, so it costs nothing to always start it.
+APPLETS="$APPLETS,mb-applet-card"
 APPLETS="$APPLETS,mb-applet-clock"
 
 # Not enabled:

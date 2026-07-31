@@ -39,6 +39,9 @@ D_WM="${D_WM:-/tmp/mbwm-stage}"
 D_DESKTOP="${D_DESKTOP:-/tmp/mb-stage-desktop}"
 D_PANEL="${D_PANEL:-/tmp/mb-stage-panel}"
 D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
+# mb-applet-card is its own repo/submodule rather than part of
+# matchbox-panel, so it gets its own DESTDIR too.
+D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 
 DEPLOY=0
 TARGET=""
@@ -106,7 +109,7 @@ done
 # it and nothing else drags it in.
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
