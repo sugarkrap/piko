@@ -257,8 +257,35 @@ fi
 #
 # The .replaced files cannot be deleted while their process lives; they are
 # swept at the start of the next deploy.
+# Note for anyone editing the remote script below: it is inside a
+# single-quoted argument, so it must not contain a single quote anywhere --
+# not even in a comment or an apostrophe.
 ssh $SSH_OPTS -i "$KEY" "$TARGET" '
 rm -f /usr/bin/*.replaced /usr/local/bin/*.replaced 2>/dev/null
+
+# Stale per-user keybindings shadow the ones we ship. The window manager
+# routine keys_load_and_grab() (src/keys.c) tries $HOME/.matchbox/kbdconfig
+# FIRST and only falls back to the compiled-in CONFDIR, which for the WM is
+# /usr/etc/matchbox -- it is configured with --prefix=/usr and no
+# --sysconfdir, unlike matchbox-desktop-classic which does pass
+# --sysconfdir=/etc. The session runs as root with HOME=/root, so a
+# /root/.matchbox/kbdconfig left over from an earlier image silently wins
+# over whatever this payload installs, with no warning anywhere. That cost
+# real debugging time on 2026-08-01: a corrected kbdconfig was deployed and
+# the old binding was still in force, because the file being read was never
+# the file being shipped.
+#
+# Removing it is the same call as --no-session for the panel mbdock.session
+# (see modules/x11/matchbox-session): on an appliance the config is defined
+# in tracked source and has to be identical on every boot, so per-user state
+# that can outlive and override it gets deleted rather than merged. If you
+# ever do want a hand-tuned local kbdconfig on a device, drop these lines --
+# they will otherwise remove it on every deploy.
+if [ -f /root/.matchbox/kbdconfig ]; then
+    rm -f /root/.matchbox/kbdconfig
+    echo "    removed stale /root/.matchbox/kbdconfig (it shadowed the shipped one)"
+fi
+
 n=0
 while [ "$n" -lt 20 ]; do
     out="$(/usr/local/bin/untar /tmp/mb.tar / 2>&1)"
