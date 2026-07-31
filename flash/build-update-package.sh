@@ -12,6 +12,10 @@ set -eu
 #     under "/" (etc/*, usr/sbin/*, init -- whatever's actually committed
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
+#   - the X11/Matchbox desktop (libX11/libXft/fontconfig/freetype, the
+#     four Matchbox apps, st) -- only if tools/build-x11-stack.sh's own
+#     prerequisites (a separate uclibc-for-X11 toolchain, third-party
+#     deps) are available locally; see "X11/Matchbox desktop" below
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
 #     and usr/sbin/piko-smf-write, the NAND writer it drives
 #   - boot/zImage-smf, the mtd1 bootstrap kernel, when one is present
@@ -33,12 +37,27 @@ set -eu
 #   KERNEL_DIR     kernel-src/linux-7.1.4 checkout (gitignored, local only)
 #   TOOLCHAIN      directory holding CROSS_COMPILE-prefixed binaries
 #   CROSS_COMPILE  cross toolchain prefix
+#   SKIP_X11       set to 1 to skip the X11/Matchbox desktop entirely, even
+#                  if its prerequisites are available (e.g. a kernel-only
+#                  respin where rebuilding/restaging the whole desktop
+#                  would just add time for no reason)
 #
 # If KERNEL_DIR doesn't exist (e.g. in CI, which has no local buildroot/
 # kernel-src checkout -- see docs/HOWTO-BUILD-DEPLOY-KERNEL.md), this
 # script still produces a valid, useful package: piko-update itself plus
 # the full rootfs/config overlay, just without a kernel bump. It prints
 # which mode it ran in.
+#
+# X11/Matchbox desktop: folded in via tools/build-x11-stack.sh +
+# tools/build-st.sh + tools/build-matchbox-payload.sh (same idempotent
+# build tools tools/build-and-deploy.sh uses for the live path), then every
+# file in the resulting payload is added to MANIFEST individually --
+# regular files via manifest_add, symlinks (shared-library SONAME aliases)
+# via manifest_add_symlink, matching the SYMLINK line format
+# userspace/src/piko-update.c's extractor understands. Not fatal if the
+# X11 toolchain/third-party deps aren't provisioned locally: same graceful
+# "still produces a valid, useful package" fallback as a missing
+# KERNEL_DIR, just noted in MANIFEST as "not included" either way.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$REPO/update.tar}"
@@ -78,6 +97,28 @@ manifest_add() {
 
     md5="$(md5sum "$src" | cut -d' ' -f1)"
     echo "$md5 $dest" >> "$MANIFEST"
+    echo "$dest" >> "$FILES_LIST"
+}
+
+# manifest_add_symlink SRC_SYMLINK DEST_REL_PATH
+# Records SRC_SYMLINK (a real symlink on the build host) as a symlink in
+# both the staged payload and MANIFEST, instead of manifest_add's plain
+# `cp` dereferencing it into a duplicate copy of whatever it points at.
+# The X11/Matchbox payload relies on symlinks for shared-library SONAME
+# aliases (e.g. libX11.so.6 -> libX11.so.6.3.0); userspace/src/piko-update.c
+# has a SYMLINK MANIFEST-line format specifically for this. The final tar
+# call below has no -h/--dereference, so these stay real typeflag '2'
+# entries in the archive.
+manifest_add_symlink() {
+    src="$1"
+    dest="$2"
+    target="$(readlink "$src")"
+
+    stage_dest="$STAGE/payload/$dest"
+    mkdir -p "$(dirname "$stage_dest")"
+    ln -sf "$target" "$stage_dest"
+
+    echo "SYMLINK $dest -> $target" >> "$MANIFEST"
     echo "$dest" >> "$FILES_LIST"
 }
 
@@ -178,6 +219,48 @@ $SD_MODULES"
 else
     echo "==> KERNEL_DIR not found ($KERNEL_DIR) -- rootfs-only package (no kernel bump)"
     echo "# kernel: not included (rootfs-only package, no local kernel-src build found)" >> "$MANIFEST"
+fi
+
+# X11/Matchbox desktop (libX11/libXft/fontconfig/freetype, the four
+# Matchbox apps, and st). Until this was added, this offline package never
+# carried the desktop at all -- only tools/chunked-deploy.sh (live over
+# SSH) could ship it, so an SD-card recovery update always dropped a
+# device back to a console until someone separately remembered to
+# redeploy the desktop afterward.
+#
+# tools/build-x11-stack.sh and tools/build-st.sh are both idempotent (skip
+# anything already built/staged), so calling them unconditionally is cheap
+# once the stack exists. Not fatal if they fail or their prerequisites
+# (the separate uclibc-for-X11 toolchain, third-party deps) aren't
+# provisioned -- same "still produces a valid, useful package" philosophy
+# as the kernel being optional above. SKIP_X11=1 opts out entirely (e.g. a
+# kernel-only respin where rebuilding/restaging the whole desktop would
+# just add time for no reason).
+if [ "${SKIP_X11:-0}" -eq 1 ]; then
+    echo "==> SKIP_X11=1 -- not including the X11/Matchbox desktop"
+    echo "# x11-matchbox-desktop: not included (SKIP_X11=1)" >> "$MANIFEST"
+elif sh "$REPO/tools/build-x11-stack.sh" >&2 && sh "$REPO/tools/build-st.sh" >&2; then
+    PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/mb-payload}"
+    if sh "$REPO/tools/build-matchbox-payload.sh" >&2; then
+        echo "==> packaging X11/Matchbox payload ($PAYLOAD_DIR) into the update package"
+        ( cd "$PAYLOAD_DIR" && find . -type f -o -type l ) | sed 's#^\./##' | while read -r rel; do
+            src="$PAYLOAD_DIR/$rel"
+            if [ -L "$src" ]; then
+                manifest_add_symlink "$src" "$rel"
+            else
+                manifest_add "$src" "$rel"
+            fi
+        done
+        echo "# x11-matchbox-desktop: included" >> "$MANIFEST"
+    else
+        echo "build-update-package: X11 payload assembly failed -- continuing without it" >&2
+        echo "# x11-matchbox-desktop: not included (payload assembly failed)" >> "$MANIFEST"
+    fi
+else
+    echo "build-update-package: X11/Matchbox stack not built -- continuing without it" >&2
+    echo "  (needs tools/build-uclibc-toolchain.sh + tools/build-thirdparty-deps.sh" >&2
+    echo "  staged first -- see docs/HOWTO-MATCHBOX-DESKTOP.md)" >&2
+    echo "# x11-matchbox-desktop: not included (stack not built)" >> "$MANIFEST"
 fi
 
 echo "==> writing $OUT"
