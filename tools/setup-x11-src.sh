@@ -113,4 +113,45 @@ echo "==> matchbox-window-manager: build fixes"
 apply_patch "$SRC/matchbox-window-manager" "$PATCHES/matchbox-gconf-m4-fallback.patch"
 apply_patch "$SRC/matchbox-window-manager" "$PATCHES/matchbox-missing-includes.patch"
 
+echo "==> matchbox-panel: battery applet via /proc/apm"
+# mb-applet-battery has two upstream backends and we can use neither:
+# HAVE_APM_H wants apm.h + -lapm from Debian's apmd, which we do not
+# cross-build, and USE_ACPI_LINUX reads /proc/acpi, which this board does
+# not have. So configure silently dropped the applet from bin_PROGRAMS
+# and the panel had no battery indicator to load.
+#
+# The kernel is built with CONFIG_APM_EMULATION=y + CONFIG_SHARPSL_PM=y,
+# so /proc/apm carries real charge state from the Sharp PM driver. This
+# adds --enable-proc-apm, which parses that file directly and needs no
+# new library. It also fixes the .desktop install, which upstream gates
+# on WANT_APM alone -- so the ACPI backend never installed a menu entry
+# either.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-battery-proc-apm.patch"
+
+echo "==> matchbox-panel: system-monitor /proc/meminfo parse"
+# mb-applet-system-monitor read /proc/meminfo by FIELD POSITION, matching
+# the field order of 2.6.0. The kernel has inserted fields since --
+# MemAvailable landed third in 3.14 -- so every value after MemFree came
+# out of the wrong line and the unsigned "used" arithmetic underflowed
+# into a huge number. Symptom: a correct CPU bar next to a memory bar
+# showing a nonsense percentage. Now keyed off the labels.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-system-monitor-meminfo.patch"
+
+echo "==> matchbox-panel: wireless applet fixes"
+# mb-applet-wireless has never been buildable or runnable as shipped:
+#
+#   - find_iwface() probed Mwd.iface, which is only assigned at the END of
+#     that function, so on the FIRST wireless interface it was still NULL
+#     and iwlib's strncpy(ifr_name, NULL, IFNAMSIZ) segfaulted. Verified
+#     under qemu-arm: unpacked upstream dies with SIGSEGV during startup
+#     enumeration on any host that has a wireless interface.
+#   - math.h was never included, so rint()/log() were implicitly declared
+#     as returning int -- a hard error on any modern compiler.
+#   - configure.ac passed have_libiw=yes as both the found AND not-found
+#     action of AC_CHECK_LIB, so the libiw probe result meant nothing, and
+#     WIRELESS_LIBS omitted -lm that the applet's own math needs.
+#
+# Needs libiw in the staging tree first: tools/build-libiw.sh.
+apply_patch "$SRC/matchbox-panel" "$PATCHES/matchbox-panel-wireless-applet.patch"
+
 echo "==> X11 submodules ready to configure"

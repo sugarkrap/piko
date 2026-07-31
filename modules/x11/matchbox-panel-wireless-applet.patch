@@ -1,0 +1,85 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -227,10 +227,19 @@
+ wifi_enabled=no
+ 
+ AC_CHECK_HEADERS(iwlib.h, have_iwlib_h=yes, have_iwlib_h=no)
+-AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=yes)
++dnl Upstream passed have_libiw=yes as BOTH the found and not-found action,
++dnl so this check could never fail and the result meant nothing. -lm is
++dnl listed as an other-library because libiw's frequency helpers reference
++dnl floor/log10/pow unless it was built -DWE_NOLIBM, and without it the
++dnl probe can fail for a reason that has nothing to do with libiw.
++AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=no, [-lm])
+ 
+ if test x$have_iwlib_h = x"yes" && test x$have_libiw = x"yes"; then
+-	WIRELESS_LIBS="-liw"
++	dnl mb-applet-wireless itself calls rint() and log() to scale link
++	dnl quality, so it needs libm whatever libiw was built with. (Harmless
++	dnl on uclibc, which folds the math symbols into libc and ships only a
++	dnl static libm.a -- the applet gains no new DT_NEEDED.)
++	WIRELESS_LIBS="-liw -lm"
+ 	wifi_enabled=yes
+ fi
+ AC_SUBST(WIRELESS_LIBS)
+--- a/applets/mb-applet-wireless.c
++++ b/applets/mb-applet-wireless.c
+@@ -36,6 +36,11 @@
+ 
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
++/* update_wireless() scales link quality with rint() and log(). math.h was
++ * never included, so both were implicitly declared as returning int --
++ * which silently truncated the result on older compilers and is a hard
++ * error on anything modern. */
++#include <math.h>
+ 
+ #include <netdb.h>      /* gethostbyname, getnetbyname */
+ #if 0
+@@ -138,9 +143,15 @@
+   if (WInfo.has_stats) 
+     {
+       /* via http://www.snorp.net/files/patches/wireless-applet.c */
+-      Mwd.quality = (int)rint ((log (WInfo.stats.qual.qual) / log (94)) * 100);
++      /* qual.qual is a __u8 and reads 0 with no association (and on hostap
++       * while the link is down), where log(0) is -inf and casting that to
++       * int is undefined. Take the floor directly instead. */
++      if (WInfo.stats.qual.qual == 0)
++	Mwd.quality = 0;
++      else
++	Mwd.quality = (int)rint ((log (WInfo.stats.qual.qual) / log (94)) * 100);
+ 
+-      if (Mwd.quality > 100) 
++      if (Mwd.quality > 100)
+ 	Mwd.quality = 100;
+       else 
+ 	if (Mwd.quality < 0) 
+@@ -350,16 +361,23 @@
+  if (iw_get_basic_config(Wfd, ifname, &WInfo.b) < 0)
+    return 0;
+ 
+- /* dont stop check interfaces till we find one that supports stats 
++ /* dont stop check interfaces till we find one that supports stats
+   * works round odd issues on Z with host AP.
+  */
+- if (Mwd.iface != NULL && WInfo.has_stats == 1) 
++ if (Mwd.iface != NULL && WInfo.has_stats == 1)
+    return 0;
+ 
+- if(iw_get_range_info(Wfd, Mwd.iface, &(WInfo.range)) >= 0)
+-   WInfo.has_range = 1;  
++ /* These probe the interface currently being enumerated, so they must use
++  * ifname. They passed Mwd.iface, which is only assigned at the bottom of
++  * this function -- so on the FIRST wireless interface it was still NULL,
++  * and iwlib's iw_get_ext() does strncpy(ifr_name, ifname, IFNAMSIZ) on
++  * it. The applet segfaulted during startup enumeration on any machine
++  * that actually had a wireless interface, which is presumably why it was
++  * never shipped. */
++ if(iw_get_range_info(Wfd, ifname, &(WInfo.range)) >= 0)
++   WInfo.has_range = 1;
+ 
+- if (iw_get_stats(Wfd, Mwd.iface, 
++ if (iw_get_stats(Wfd, ifname,
+ 		  &(WInfo.stats),
+ 		  &(WInfo.range), WInfo.has_range) >= 0)
+    WInfo.has_stats = 1;

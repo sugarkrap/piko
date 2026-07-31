@@ -152,6 +152,33 @@ cp "$STAGE"/usr/share/fonts/truetype/dejavu/*.ttf \
    "$PAYLOAD/usr/share/fonts/truetype/dejavu/"
 cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 
+# The session file decides which panel applets actually run. Without it
+# matchbox-session falls through to its built-in default, which starts
+# matchbox-panel with no arguments -- and the panel's compiled-in default
+# is only menu-launcher + clock. See the file's own comments.
+mkdir -p "$PAYLOAD/etc/matchbox"
+cp "$REPO/modules/x11/matchbox-session" "$PAYLOAD/etc/matchbox/session"
+chmod 755 "$PAYLOAD/etc/matchbox/session"
+
+# Every applet the session asks for must be in the payload, or the panel
+# just logs a session timeout per missing one and carries on looking
+# half-broken. Cheaper to catch it here than on the device.
+# Evaluate just the APPLETS= lines rather than pattern-matching them, so
+# reformatting the list in that file cannot silently defeat this check.
+applets="$(sh -c "$(grep '^APPLETS=' "$REPO/modules/x11/matchbox-session")
+                  echo \"\$APPLETS\"" | tr ',' ' ')"
+[ -n "$applets" ] || { echo "FAILED: parsed no applets from modules/x11/matchbox-session" >&2; exit 1; }
+for a in $applets; do
+    if [ ! -f "$PAYLOAD/usr/bin/$a" ]; then
+        echo "FAILED: /etc/matchbox/session runs $a but it is not in the payload." >&2
+        echo "Rebuild matchbox-panel (mb-applet-battery needs --enable-proc-apm;" >&2
+        echo "see docs/HOWTO-MATCHBOX-DESKTOP.md) or drop it from" >&2
+        echo "modules/x11/matchbox-session." >&2
+        exit 1
+    fi
+    echo "    applet: $a"
+done
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.
@@ -216,5 +243,42 @@ if [ "$want" != "$got" ]; then
     echo "FAILED: short transfer (sent $want, device has $got)" >&2
     exit 1
 fi
-ssh $SSH_OPTS -i "$KEY" "$TARGET" "/usr/local/bin/untar /tmp/mb.tar / && rm -f /tmp/mb.tar"
-echo "==> deployed. Start it with:  DISPLAY=:0 matchbox-session &"
+# Unpacking over a *running* binary fails with ETXTBSY ("Text file busy"),
+# and untar stops at the first one -- so a live Matchbox session used to
+# abort the deploy partway through, leaving a half-updated tree.
+#
+# There is no way to stop the session first: this device's busybox has no
+# kill, killall, pkill or nohup applet, and nothing else can signal a pid.
+# So use the property that ETXTBSY blocks *writing* to a busy executable
+# but not *renaming* it -- the running process keeps its inode, and untar
+# is free to create a fresh file at the original path. Retry per offending
+# file rather than pre-emptively moving things aside, so we only ever touch
+# a path that is both in the payload and genuinely blocking.
+#
+# The .replaced files cannot be deleted while their process lives; they are
+# swept at the start of the next deploy.
+ssh $SSH_OPTS -i "$KEY" "$TARGET" '
+rm -f /usr/bin/*.replaced /usr/local/bin/*.replaced 2>/dev/null
+n=0
+while [ "$n" -lt 20 ]; do
+    out="$(/usr/local/bin/untar /tmp/mb.tar / 2>&1)"
+    if [ -z "${out##*extracted*}" ]; then
+        echo "    $out"
+        rm -f /tmp/mb.tar
+        exit 0
+    fi
+    busy="$(echo "$out" | sed -n "s|^untar: could not create //\.\(/.*\): Text file busy\$|\1|p")"
+    if [ -z "$busy" ]; then
+        echo "$out" >&2
+        exit 1
+    fi
+    mv -f "$busy" "$busy.replaced" || exit 1
+    echo "    in use, moved aside: $busy"
+    n=$((n + 1))
+done
+echo "FAILED: still blocked after $n retries" >&2
+exit 1' || { echo "FAILED: unpack on device failed" >&2; exit 1; }
+echo "==> deployed."
+echo "    A session started before this deploy is still running the OLD"
+echo "    binaries from their original inodes. Reboot, or restart it with:"
+echo "        DISPLAY=:0 matchbox-session &"
