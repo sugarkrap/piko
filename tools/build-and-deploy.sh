@@ -41,7 +41,7 @@ set -eu
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
 # --skip-userspace skips building the cross-compiled userspace
-# (tools/build-userspace.sh: md5sum + ALSA + MPlayer) and forwards
+# (tools/build-userspace.sh: md5sum + ALSA + MPlayer + SDL) and forwards
 # --no-userspace to chunked-deploy.sh so it does not ship a stale staged
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
@@ -51,6 +51,7 @@ ADAPTER=""
 FORCE_KERNEL_SRC=0
 KERNEL_ONLY=0
 SKIP_USERSPACE=0
+SKIP_X11=0
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -64,6 +65,10 @@ while [ $# -gt 0 ]; do
             ;;
         --kernel-only)
             KERNEL_ONLY=1
+            shift
+            ;;
+        --skip-x11)
+            SKIP_X11=1
             shift
             ;;
         --skip-userspace)
@@ -150,7 +155,7 @@ if ! (
 fi
 echo "==> build OK"
 
-# Userspace (md5sum + ALSA + MPlayer). Delegated to tools/build-userspace.sh
+# Userspace (md5sum + ALSA + MPlayer + SDL). Delegated to tools/build-userspace.sh
 # rather than open-coded here -- it is the single entry point for every
 # cross-built userspace component, and each step it runs is idempotent, so
 # this is cheap on every subsequent invocation once things are built.
@@ -166,7 +171,7 @@ if [ "$KERNEL_ONLY" -eq 1 ]; then
 elif [ "$SKIP_USERSPACE" -eq 1 ]; then
     echo "==> --skip-userspace: not building userspace components"
 else
-    echo "==> building userspace (md5sum + ALSA + MPlayer) via tools/build-userspace.sh..."
+    echo "==> building userspace (md5sum + ALSA + MPlayer + SDL) via tools/build-userspace.sh..."
     if ! (
         export PATH TOOLCHAIN_BIN_DIR CROSS_COMPILE
         sh "$REPO/tools/build-userspace.sh"
@@ -179,10 +184,31 @@ else
     echo "==> userspace build OK"
 fi
 
+# --- X11 + Matchbox desktop -------------------------------------------
+# Repackages the already-built X stack into the single tar that
+# chunked-deploy ships (see section 9 there). This only *collects*: the
+# X submodules and Matchbox components are built separately, because a
+# from-scratch X build is long and almost never what you want on a
+# routine kernel redeploy. See docs/HOWTO-MATCHBOX-DESKTOP.md.
+#
+# Missing pieces are not fatal here -- the payload script fails loudly if
+# a component is absent, and a kernel-only or X-less deploy is a
+# perfectly normal thing to want.
+if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
+    echo "==> repacking the X11/Matchbox payload..."
+    if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
+        echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    else
+        echo "==> X11 payload NOT built -- deploying without it" >&2
+        echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
+        tail -3 /tmp/x11-payload-build.log >&2
+    fi
+fi
+
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> deploying to $TARGET (zImage only)..."
 else
-    echo "==> deploying to $TARGET (zImage + sound + WiFi/PCMCIA modules)..."
+    echo "==> deploying to $TARGET (zImage + modules + X11/Matchbox)..."
 fi
 set -- "$TARGET"
 if [ -n "$ADAPTER" ]; then

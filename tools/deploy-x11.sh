@@ -272,6 +272,16 @@ echo "==> local deploy tree assembled and stripped: $(du -sh "$DEPLOY_TREE" | cu
 # the first time -- see header comment) ---
 send_file "$DEPLOY_TREE/lib/ld-uClibc-1.0.54.so" "/lib/ld-uClibc-1.0.54.so"
 send_file "$DEPLOY_TREE/lib/libuClibc-1.0.54.so" "/lib/libuClibc-1.0.54.so"
+# `cat > file` over ssh (send_file's transfer mechanism) creates the
+# remote file with the default umask, NOT the source's executable bit --
+# confirmed on real hardware to land as 644. That's silently fatal for
+# ld-uClibc-1.0.54.so specifically: the kernel's ELF loader opens the
+# PT_INTERP target via the same open_exec() path (and therefore the same
+# MAY_EXEC permission check) it uses for the top-level binary, so a
+# non-executable dynamic linker makes EVERY dynamically-linked binary on
+# the device fail execve() with EACCES ("Permission denied") -- this was
+# silently breaking matchbox-remote/Xfbdev until caught here.
+ssh_do "chmod 0755 /lib/ld-uClibc-1.0.54.so /lib/libuClibc-1.0.54.so"
 ssh_do "
     set -e
     ln -sf ld-uClibc-1.0.54.so /lib/ld-uClibc.so.1

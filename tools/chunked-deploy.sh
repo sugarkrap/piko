@@ -21,10 +21,10 @@ set -eu
 # adapters and the Zaurus is only reachable via one of them.
 # --target user@host sets the SSH destination explicitly. A positional
 # user@host is also accepted for backwards compatibility.
-# --no-userspace skips the MPlayer + ALSA-runtime payload (section 8). That
-# payload is also skipped automatically when the staged trees do not exist
-# or when the device lacks free space -- see section 8 for why the space
-# check refuses rather than half-deploying.
+# --no-userspace skips the MPlayer + ALSA-runtime + SDL payload (section 8).
+# That payload is also skipped automatically when the staged trees do not
+# exist or when the device lacks free space -- see section 8 for why the
+# space check refuses rather than half-deploying.
 # --kernel-only skips every module/script/helper deployment step below and
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
@@ -103,6 +103,12 @@ REPO="${REPO:-$DEFAULT_REPO}"
 # a clean checkout that has not built them yet -- section 8 skips silently).
 MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
 ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
+SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
+# Toolchain sysroot copy of the uClibc dynamic linker -- only needed for
+# SDL (see tools/build-sdl.sh's header for why it alone, unlike the rest
+# of this static userland, is a shared library).
+HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
+TCROOT="${TCROOT:-$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot}"
 # Heavy software lives on the SD card, not on the ~68 MiB root jffs2.
 # /mnt/card/.zaurus is the hidden overlay described in
 # rootfs/etc/zaurus-card.sh; its usr/bin is already on PATH (unconditionally,
@@ -394,6 +400,20 @@ done
 send_file "$REPO/rootfs/etc/init.d/rcS" "/etc/init.d/rcS"
 ssh_do "chmod 0755 /etc/init.d/rcS"
 
+# 6a. Graphical session: xsession brings up Xfbdev -> Zaurus keymap ->
+# Matchbox, and inittab runs it on tty1 in place of the getty, so the
+# device boots to a desktop rather than an ash prompt. xsession falls
+# back to a getty itself on every failure path, so shipping these cannot
+# strand the machine at a blank screen -- and dropbear starts earlier in
+# rcS, so SSH is up either way.
+#
+# Deployed BEFORE the X11 payload below on purpose: if the payload
+# transfer dies partway over this flaky link, xsession finds no Xfbdev
+# and drops to a console instead of init respawning into a broken state.
+send_file "$REPO/rootfs/etc/init.d/xsession" "/etc/init.d/xsession"
+ssh_do "chmod 0755 /etc/init.d/xsession"
+send_file "$REPO/rootfs/etc/inittab" "/etc/inittab"
+
 # 6b. hostap.conf -- sets iw_mode=2 on the correct module (hostap_cs, not
 # hostap; iw_mode is declared in hostap_hw.c which hostap_cs.c #includes
 # directly). Was previously only ever deployed by hand, never tracked by
@@ -434,7 +454,7 @@ send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
-# 8. Userspace media payload: MPlayer + the ALSA runtime config tree.
+# 8. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
 # e.g. a clean checkout that has not run tools/build-userspace.sh yet).
@@ -449,10 +469,18 @@ ssh_do "chmod 0755 /usr/sbin/sdapps"
 #                         "Unknown PCM cards.pcm.default".
 #   * aplay/amixer/alsactl -- also static; small, and the only way to test
 #                         or adjust the audio path on the device.
+#   * libSDL-1.2.so.0 + sdltest -- SDL is dynamically linked (the one
+#                         exception to this section's static convention --
+#                         see tools/build-sdl.sh's header for why), so
+#                         shipping it also bootstraps /lib/ld-uClibc*.so +
+#                         /lib/libc.so onto the device if not already
+#                         there (see the SDL block below for the
+#                         executable-bit gotcha that bootstrap has to get
+#                         right, found on real hardware).
 # Only the config files this board can actually use are sent (the upstream
 # tree also carries ~70 cards/*.conf for hardware that does not exist here);
 # each send_file is several SSH round trips over a slow, flaky link.
-if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; then
+if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d "$SDL_STAGE" ]; then
     # Preflight: JFFS2 needs free space to garbage-collect. Filling the root
     # filesystem on this board is not a recoverable mistake over SSH, so
     # refuse up front instead of half-deploying and wedging it.
@@ -463,7 +491,13 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
     case "$MPLAYER_DEST" in /mnt/*) MPLAYER_ON_ROOT=0 ;; esac
     MPLAYER_SIZED=""
     [ "$MPLAYER_ON_ROOT" -eq 1 ] && MPLAYER_SIZED="$MPLAYER_STAGE/usr/bin/mplayer"
-    for f in $MPLAYER_SIZED \
+    SDL_SO_REAL=""
+    if [ -d "$SDL_STAGE/usr/lib" ]; then
+        SDL_SO_REAL="$(cd "$SDL_STAGE/usr/lib" && ls libSDL-1.2.so.0.* 2>/dev/null | head -1 || true)"
+    fi
+    SDL_SIZED=""
+    [ -n "$SDL_SO_REAL" ] && SDL_SIZED="$SDL_STAGE/usr/lib/$SDL_SO_REAL"
+    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" \
              "$ALSA_STAGE/usr/bin/aplay" "$ALSA_STAGE/usr/bin/amixer" \
              "$ALSA_STAGE/usr/sbin/alsactl"; do
         # Explicit if, not `[ -f ] && ...`: under `set -e` a false test at
@@ -506,6 +540,44 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
                 ssh_do "chmod 0755 /usr/$b"
             done
         fi
+        # SDL: small (a few hundred KiB), always goes to the root
+        # filesystem like ALSA above, never card-gated like MPlayer.
+        if [ -n "$SDL_SO_REAL" ]; then
+            if [ -f "$TCROOT/lib/ld-uClibc-1.0.54.so" ] && [ -f "$TCROOT/lib/libuClibc-1.0.54.so" ]; then
+                send_file "$TCROOT/lib/ld-uClibc-1.0.54.so" "/lib/ld-uClibc-1.0.54.so"
+                send_file "$TCROOT/lib/libuClibc-1.0.54.so" "/lib/libuClibc-1.0.54.so"
+                # `cat > file` (send_file's transfer mechanism) creates the
+                # remote file with the default umask, NOT the source's
+                # executable bit -- confirmed on real hardware to land as
+                # 644. That's silently fatal for ld-uClibc-1.0.54.so
+                # specifically: the kernel's ELF loader opens the
+                # PT_INTERP target via the same open_exec() path (and
+                # therefore the same MAY_EXEC permission check) it uses
+                # for the top-level binary, so a non-executable dynamic
+                # linker makes EVERY dynamically-linked binary on the
+                # device fail execve() with EACCES ("Permission denied"),
+                # not just SDL's -- this silently broke
+                # matchbox-remote/Xfbdev too until caught here.
+                ssh_do "chmod 0755 /lib/ld-uClibc-1.0.54.so /lib/libuClibc-1.0.54.so"
+                ssh_do "
+                    set -e
+                    ln -sf ld-uClibc-1.0.54.so /lib/ld-uClibc.so.1
+                    ln -sf ld-uClibc.so.1 /lib/ld-uClibc.so.0
+                    ln -sf libuClibc-1.0.54.so /lib/libc.so.0
+                    ln -sf libuClibc-1.0.54.so /lib/libc.so.1
+                "
+            else
+                echo "==> WARNING: toolchain sysroot runtime libs missing under $TCROOT/lib" >&2
+                echo "    -- cannot bootstrap dynamic linking; SDL will only run if a" >&2
+                echo "    previous deploy already put ld-uClibc/libc.so on the device." >&2
+            fi
+            send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/usr/lib/$SDL_SO_REAL"
+            ssh_do "ln -sf '$SDL_SO_REAL' /usr/lib/libSDL-1.2.so.0"
+            if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
+                send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
+                ssh_do "chmod 0755 /usr/bin/sdltest"
+            fi
+        fi
         # Heavy apps: card-only. If there is no card, skip them rather than
         # falling back to flash -- that is the whole point of the split.
         if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
@@ -540,6 +612,48 @@ fi
 
 ssh_do "rm -rf '$REMOTE_STAGE'"
 
+# 9. X11 + Matchbox desktop payload.
+#
+# Shipped as ONE tar and unpacked on the device with our own untar
+# (userspace/src/untar.c): the stack is ~400 files, and that many
+# individual send_file round trips over this link would be brutal. The
+# device's busybox has no tar at all, which is precisely why untar exists.
+#
+# Built by tools/build-matchbox-payload.sh, which also verifies every
+# DT_NEEDED is satisfied and every ELF is really ARM before packing.
+# Skipped (with a note, not an error) when the tar has not been built --
+# a kernel-only redeploy should not have to build all of X first.
+X11_PAYLOAD="${X11_PAYLOAD:-/tmp/matchbox-payload.tar}"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
+    echo "==> X11/Matchbox payload ($(wc -c < "$X11_PAYLOAD") bytes)"
+    if [ "$(ssh_do "if [ -x /usr/local/bin/untar ]; then echo 1; else echo 0; fi")" != "1" ]; then
+        # untar is a small static binary with no dependencies, so it can
+        # always be (re)built and pushed even on a bare device.
+        echo "FAILED: /usr/local/bin/untar missing on the device." >&2
+        echo "Build it and push it first:" >&2
+        echo "  \$GCC -march=armv5te -O2 -static -o untar userspace/src/untar.c" >&2
+        exit 1
+    fi
+    send_file "$X11_PAYLOAD" "/tmp/x11-payload.tar"
+    # A running X server holds its own binary open, so unpacking over it
+    # fails with "Text file busy" and the payload only half-lands. Stop
+    # the session first -- we are replacing exactly those binaries.
+    # Clients before the server, so the WM is not killed out from under
+    # its display. No pkill/awk here (busybox is minimal), so PIDs are
+    # read out of ps with the shell; `kill` is our own static one from
+    # userspace/src/kill.c, since this busybox has no kill applet either.
+    echo "==> stopping any running graphical session"
+    ssh_do "for p in \$(ps | grep -E 'matchbox|xev' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
+    ssh_do "for p in \$(ps | grep Xfbdev | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
+    ssh_do "/usr/local/bin/untar /tmp/x11-payload.tar / && rm -f /tmp/x11-payload.tar"
+    echo "==> X11/Matchbox stack unpacked"
+    echo "    (session stopped for the update; it restarts on reboot,"
+    echo "     or run: DISPLAY=:0 matchbox-session &)"
+elif [ "$KERNEL_ONLY" -eq 0 ]; then
+    echo "==> no X11 payload at $X11_PAYLOAD -- skipping"
+    echo "    (build it with tools/build-matchbox-payload.sh)"
+fi
+
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
@@ -548,6 +662,9 @@ echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
+fi
+if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$SDL_STAGE/usr/lib" ]; then
+    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest (if staged)"
 fi
 echo ""
 echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"

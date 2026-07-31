@@ -25,6 +25,11 @@ set -eu
 #                                   first is a hard ordering dependency, not
 #                                   a preference.
 #   3. tools/build-mplayer.sh       MPlayer (video/audio playback).
+#   4. tools/build-sdl.sh           SDL 1.2 (libSDL-1.2.so.0, shared -- see
+#                                   its header for why this one component is
+#                                   dynamically linked against this project's
+#                                   otherwise-static convention) plus the
+#                                   sdltest dummy smoke-test app.
 #
 # NOT BUILT HERE: the X11/matchbox stack (userspace/src/libX11, xserver,
 # matchbox-window-manager, pixman, ...). Those are git submodules that were
@@ -34,11 +39,12 @@ set -eu
 # If you add a build-x11.sh, wire it in here.
 #
 # Everything produced is a build artifact and is gitignored: the staging
-# trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer), the
-# vendored upstream source trees under userspace/src/, and userspace/src/md5sum.
+# trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,
+# stage-sdl, stage-sdl-runtime), the vendored upstream source trees under
+# userspace/src/, and userspace/src/md5sum.
 #
 # Usage:
-#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer]
+#   tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl]
 #
 # --force        rebuild every component from scratch (re-extract sources,
 #                reconfigure). Slow: MPlayer alone is a ~15 MiB static binary
@@ -47,6 +53,7 @@ set -eu
 #                already have a usable userspace/stage-alsa to link against).
 # --skip-mplayer don't build MPlayer -- much the slowest step, so this is
 #                the useful one when you only touched the audio stack.
+# --skip-sdl     don't build SDL 1.2 / sdltest.
 #
 # Env overrides are passed straight through to the per-component scripts;
 # see those for the full list. The common ones:
@@ -64,18 +71,20 @@ REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 FORCE=0
 SKIP_ALSA=0
 SKIP_MPLAYER=0
+SKIP_SDL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --force)        FORCE=1;        shift ;;
         --skip-alsa)    SKIP_ALSA=1;    shift ;;
         --skip-mplayer) SKIP_MPLAYER=1; shift ;;
+        --skip-sdl)     SKIP_SDL=1;     shift ;;
         -h|--help)
             sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "tools/build-userspace.sh: unknown argument: $1" >&2
-            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer]" >&2
+            echo "Usage: tools/build-userspace.sh [--force] [--skip-alsa] [--skip-mplayer] [--skip-sdl]" >&2
             exit 1
             ;;
     esac
@@ -135,6 +144,14 @@ else
     echo "==> --skip-mplayer: not building MPlayer"
 fi
 
+# --- 4. SDL 1.2 (independent of ALSA/MPlayer -- video only, audio disabled) -
+if [ "$SKIP_SDL" -eq 0 ]; then
+    echo "==> building SDL 1.2"
+    sh "$REPO/tools/build-sdl.sh" $FORCE_ARG
+else
+    echo "==> --skip-sdl: not building SDL"
+fi
+
 echo ""
 echo "==> userspace build complete"
 # Explicit ifs rather than `[ ... ] && echo`: a false test on the last such
@@ -148,6 +165,9 @@ if [ -d "$REPO/userspace/stage-alsa-runtime" ]; then
 fi
 if [ -f "$REPO/userspace/stage-mplayer/usr/bin/mplayer" ]; then
     echo "    mplayer: $REPO/userspace/stage-mplayer/usr/bin/mplayer ($(du -h "$REPO/userspace/stage-mplayer/usr/bin/mplayer" 2>/dev/null | cut -f1))"
+fi
+if [ -d "$REPO/userspace/stage-sdl-runtime" ]; then
+    echo "    sdl:     $REPO/userspace/stage-sdl-runtime ($(du -sh "$REPO/userspace/stage-sdl-runtime" 2>/dev/null | cut -f1))"
 fi
 echo ""
 echo "    Deploy with tools/build-and-deploy.sh (or tools/chunked-deploy.sh)."

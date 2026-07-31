@@ -43,7 +43,7 @@ for arg in "$@"; do
         *) PKGS="$PKGS $arg" ;;
     esac
 done
-[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig dejavu"
+[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig xkeyboard-config dejavu"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -100,6 +100,19 @@ usr/lib/pkgconfig/freetype2.pc"
 3ba2dd92158718acec5caaf1a716043b5aa055c27b081d914af3ccb40dce8a55 \
 usr/lib/pkgconfig/fontconfig.pc"
         ;;
+    xkeyboard-config)
+        # The XKB rules/symbols/keycodes database. Needed at *runtime* by
+        # the X server (via xkbcomp) -- without it X cannot compile a
+        # keymap at all and dies with "Failed to activate core devices".
+        # Data-only in effect, but it has a real build: the rules files
+        # are generated from templates, so it cannot just be untarred.
+        # 2.32 is the last autotools release; 2.33+ switched to meson,
+        # which would mean carrying a meson cross file for a package that
+        # compiles nothing. Nothing here needs a newer keyboard database.
+        echo "2.32 https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-2.32.tar.bz2 \
+1feee317ba39b91902b0cbd2987c0c73e6afbfc8f4c096367a5c86c216c036a8 \
+usr/share/X11/xkb/rules/base"
+        ;;
     dejavu)
         # Not a build -- font data. The device ships with NO fonts at all
         # and no /etc/fonts, so libXft/fontconfig resolve nothing and every
@@ -142,6 +155,10 @@ configure_args() {
         echo "--disable-static --disable-docs --with-arch=arm --sysconfdir=/etc --localstatedir=/var"
         ;;
     expat)      echo "--disable-static --without-docbook --without-examples --without-tests" ;;
+    xkeyboard-config)
+        # --disable-nls avoids needing intltool/gettext for translations
+        # nothing on this device will ever read.
+        echo "--disable-nls --with-xkb-rules-symlink=xorg" ;;
     *)          echo "--disable-static" ;;
     esac
 }
@@ -207,6 +224,16 @@ build_one() {
           # no --host and picks the compiler up from $CC.
           ./configure --prefix=/usr
       else
+          # xkeyboard-config's configure wants xproto/kbproto, which are
+          # arch-independent protocol headers living in the host's
+          # xorgproto. Every X submodule build already reads them from
+          # there, and this package compiles nothing, so widening the
+          # search for it alone is safe. It is NOT widened globally --
+          # the compiled packages must not be able to see host libraries.
+          if [ "$name" = xkeyboard-config ]; then
+              PKG_CONFIG_LIBDIR="$PKG_CONFIG_LIBDIR:/usr/share/pkgconfig"
+              export PKG_CONFIG_LIBDIR
+          fi
           ./configure --host="$HOST" --build="$(uname -m)-pc-linux-gnu" \
                       --prefix=/usr $(configure_args "$name")
       fi

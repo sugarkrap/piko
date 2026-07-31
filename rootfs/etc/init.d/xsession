@@ -1,0 +1,82 @@
+#!/bin/sh
+# Bring up the graphical session: Xfbdev -> Zaurus keymap -> Matchbox.
+#
+# Run from inittab in place of the tty1 getty, so the device boots
+# straight to the desktop instead of an ash prompt. inittab respawns
+# this, so it must NOT exit quickly on failure or init will spin: the
+# failure paths below all fall back to a console login on this tty, which
+# also means a broken X never leaves the machine unusable.
+#
+# Recovery, in order of preference:
+#   * SSH still works regardless -- dropbear starts in rcS, before this.
+#   * If X fails, this drops you to a login on tty1 anyway.
+#   * To disable permanently: comment the tty1 line in /etc/inittab back
+#     to the getty version and reboot.
+#
+# Device notes: PATH does not include /usr/local/bin, where Xfbdev lives,
+# so paths here are absolute. There is no tmpfs /tmp on this rootfs (it
+# is jffs2), so logs here hit flash -- keep them small.
+
+XSERVER=/usr/local/bin/Xfbdev
+XKBCOMP=/usr/bin/xkbcomp
+KEYMAP=/etc/X11/zaurus.xkb
+XKBDIR=/usr/share/X11/xkb
+SESSION=/usr/bin/matchbox-session
+XLOG=/tmp/xfbdev.log
+SLOG=/tmp/matchbox-session.log
+
+# event1 = matrix-keypad (the built-in keyboard), event2 = ADS7846
+# touchscreen. kdrive's auto-detection cannot be relied on here: it takes
+# the first /dev/input/eventN that *opens*, not the first that is really a
+# pointer, so it would grab event0 (gpio-keys-polled) and the touchscreen
+# would never be used. Both devices are therefore named explicitly.
+KBD_DEV=/dev/input/event1
+PTR_DEV=/dev/input/event2
+
+fallback_to_console() {
+	echo ""
+	echo "=== graphical session unavailable: $1 ==="
+	echo "=== falling back to a console login on this tty ==="
+	echo "=== X server log: $XLOG ==="
+	echo ""
+	exec /sbin/getty -L 38400 tty1 linux
+}
+
+[ -x "$XSERVER" ] || fallback_to_console "$XSERVER missing"
+[ -x "$SESSION" ] || fallback_to_console "$SESSION missing (matchbox-common not installed?)"
+
+"$XSERVER" -retro \
+	-keybd "evdev,,device=$KBD_DEV" \
+	-mouse "evdev,,device=$PTR_DEV" \
+	> "$XLOG" 2>&1 &
+
+# Wait for the server to actually accept connections rather than sleeping
+# a fixed amount: cold-start here includes fontconfig building its cache,
+# which is slow on a 400MHz part with no fc-cache binary shipped.
+i=0
+while [ "$i" -lt 60 ]; do
+	[ -e /tmp/.X11-unix/X0 ] && break
+	sleep 1
+	i=$((i + 1))
+done
+[ -e /tmp/.X11-unix/X0 ] || fallback_to_console "X server did not start within 60s"
+
+DISPLAY=:0
+export DISPLAY
+
+# Zaurus keyboard layout: redefines the physical Fn key (which the kernel
+# reports as plain KEY_F3) as ISO_Level3_Shift and maps the Fn symbol
+# layer, so / : [ ] | etc. are typable. Non-fatal -- without it the
+# keyboard still works, it just falls back to the stock us layout.
+if [ -r "$KEYMAP" ]; then
+	"$XKBCOMP" -I"$XKBDIR" "$KEYMAP" :0 > /dev/null 2>&1 \
+		|| echo "warning: could not apply $KEYMAP, using default layout"
+fi
+
+# matchbox-session execs matchbox-window-manager after backgrounding the
+# desktop and panel, so this blocks for the life of the session. If the
+# user exits the WM, fall through to a console rather than letting init
+# respawn us into a loop.
+"$SESSION" > "$SLOG" 2>&1
+
+fallback_to_console "session exited"

@@ -4,10 +4,20 @@
 # One-time system setup (mounts, mdev, network, dropbear).
 ::sysinit:/etc/init.d/rcS
 
-# Login prompt on the framebuffer console (VT1). getty sets up the tty
-# then execs /bin/login. Log in as root/zaurus or piko/piko (change with
-# passwd). Respawned if it exits.
-tty1::respawn:/sbin/getty -L 38400 tty1 linux
+# Graphical session on the framebuffer console (VT1): Xfbdev, the Zaurus
+# keymap, then Matchbox (window manager + desktop + panel). This replaces
+# the getty that used to live here, so the device boots to a desktop
+# rather than an ash prompt.
+#
+# xsession falls back to `getty` itself on every failure path (X missing,
+# X not up within 60s, session exited), so a broken graphical stack still
+# leaves a usable login on this tty instead of an init respawn loop.
+# SSH is unaffected either way -- dropbear starts in rcS, before this.
+#
+# To go back to a plain console, comment this out and uncomment the getty
+# line below.
+tty1::respawn:/etc/init.d/xsession
+#tty1::respawn:/sbin/getty -L 38400 tty1 linux
 
 # Reboot / shutdown handling.
 # ctrlaltdel uses the kexec-based softreboot (not /sbin/reboot's PXA
