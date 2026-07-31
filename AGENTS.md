@@ -24,7 +24,8 @@ the `smf` NAND partition fetches and kexecs a full stage-2 kernel + rootfs
 stored on `home`. Full history and bug post-mortems are in `docs/` (the
 `DEADLETTER-*.md` files — read the relevant one before touching kexec,
 flashing, the cipher, etc.; resolved/historical material has been moved to
-`docs/archive/` to keep the top level lean).
+`docs/archive/` to keep the top level lean). **`docs/README.md` indexes
+every document** — start there rather than guessing from filenames.
 
 ## HARD CONSTRAINTS — do not violate
 

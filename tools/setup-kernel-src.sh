@@ -5,7 +5,7 @@ set -eu
 # pristine kernel.org tarball, then applies every hand-patched file this
 # project tracks in git. This is the automated version of the manual,
 # "no automated apply-script yet -- do this by hand, carefully, file by
-# file" procedure in docs/HANDOFF.md -- read that doc for the full
+# file" procedure in docs/archive/HANDOFF.md -- read that doc for the full
 # rationale behind each file. kernel-src/ itself stays gitignored (it's a
 # multi-hundred-MB build tree, not source, see .gitignore) -- this script
 # is what makes it reproducible without vendoring it.
@@ -36,7 +36,7 @@ KERNEL_DIR="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION"
 TARBALL="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz"
 MARKER="$KERNEL_DIR/.piko-patched"
-TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
+TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
@@ -139,17 +139,17 @@ echo "==> applying the pxa2xx-spi double-SSP-request fix"
 copy_in "$REPO/modules/spi/spi_pxa2xx_platform_patched.c" drivers/spi/spi-pxa2xx-platform.c
 
 echo "==> applying reference current-driver snapshots"
-copy_in "$REPO/drivers/spitz.c"      arch/arm/mach-pxa/spitz.c
-copy_in "$REPO/drivers/spitz_pm.c"   arch/arm/mach-pxa/spitz_pm.c
-copy_in "$REPO/drivers/sharpsl_pm.c" arch/arm/mach-pxa/sharpsl_pm.c
-copy_in "$REPO/drivers/pxa25x_udc.c" drivers/usb/gadget/udc/pxa25x_udc.c
+copy_in "$REPO/modules/mach-pxa/spitz.c"          arch/arm/mach-pxa/spitz.c
+copy_in "$REPO/modules/mach-pxa/spitz_pm.c"       arch/arm/mach-pxa/spitz_pm.c
+copy_in "$REPO/modules/mach-pxa/sharpsl_pm.c"     arch/arm/mach-pxa/sharpsl_pm.c
+copy_in "$REPO/modules/usb-gadget/pxa25x_udc.c"   drivers/usb/gadget/udc/pxa25x_udc.c
 # pxa25x_udc.c fetches the D+ pullup line via
 # devm_gpiod_get_index_optional(..., "pullup", ...) instead of the old
 # platform_data mach->gpio_pullup path, but the matching struct field
 # (pullup_gpio) doesn't exist in any pristine header -- caught by a real
 # CI build failing with "struct pxa25x_udc has no member named
-# pullup_gpio". See the PATCHED comment in drivers/pxa25x_udc.h itself.
-copy_in "$REPO/drivers/pxa25x_udc.h" drivers/usb/gadget/udc/pxa25x_udc.h
+# pullup_gpio". See the PATCHED comment in the header itself.
+copy_in "$REPO/modules/usb-gadget/pxa25x_udc.h"   drivers/usb/gadget/udc/pxa25x_udc.h
 
 echo "==> applying the W100 (Imageon) display driver"
 copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c

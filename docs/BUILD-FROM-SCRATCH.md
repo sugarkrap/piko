@@ -1,7 +1,8 @@
-# Handoff: building this project from scratch on another machine
+# Building this project from scratch on another machine
 
-*Written 2026-07-31, the day the Zaurus first booted straight to a
-graphical desktop.*
+*First written 2026-07-31, the day the Zaurus first booted straight to a
+graphical desktop. Kept current — this is the living build guide, not a
+dated snapshot.*
 
 Read `AGENTS.md` first -- it has the hard constraints (no USB cable, no
 serial cable, last spare board) that explain why a lot of this is shaped
