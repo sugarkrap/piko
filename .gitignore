@@ -151,6 +151,12 @@ userspace/stage-alsa-runtime/
 # device payload (a single statically-linked mplayer binary).
 userspace/src/MPlayer-*/
 userspace/stage-mplayer/
+# tools/build-sdl.sh: vendored SDL-1.2.15 release tarball + source tree,
+# and its staged dev install / device-payload runtime tree (shared
+# libSDL-1.2.so.0 + the sdltest smoke-test binary).
+userspace/src/SDL-*/
+userspace/stage-sdl/
+userspace/stage-sdl-runtime/
 # X11 cross-build staging trees: stage-target is the ARM sysroot every X
 # package is configured/installed against (~58MB of headers, .so, .pc);
 # stage-host holds the host-side helpers an earlier bring-up session used.

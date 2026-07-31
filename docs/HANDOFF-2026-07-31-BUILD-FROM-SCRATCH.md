@@ -23,7 +23,8 @@ touchscreen.
 
 Working: framebuffer X, keyboard (with a custom XKB layout for the
 Zaurus Fn symbol row), touchscreen as an absolute pointer, WiFi, SSH,
-audio, SD card, MPlayer.
+audio, SD card, MPlayer, SDL 1.2 (fbcon backend, confirmed drawing to
+the panel via `sdltest` -- see `tools/build-sdl.sh`).
 
 ---
 
