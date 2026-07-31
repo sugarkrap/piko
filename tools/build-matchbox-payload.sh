@@ -22,6 +22,10 @@ set -eu
 #   tools/build-matchbox-payload.sh [--deploy [user@host]] [--adapter IFACE]
 #
 # Without --deploy it just writes the tar and stops, so you can inspect it.
+# tools/chunked-deploy.sh (section 9) also ships this same tar, chunked and
+# lock-protected -- prefer that when doing a full kernel+userspace+X11
+# redeploy via tools/build-and-deploy.sh; use --deploy here directly for a
+# quick X11-only iteration.
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 STAGE="$REPO/userspace/stage-target"
