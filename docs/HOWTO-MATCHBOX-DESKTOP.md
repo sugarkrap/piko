@@ -121,6 +121,16 @@ neither upstream backend works here.
 architecture-independent -- no `.c` files anywhere, no ELF output;
 `--host` only makes configure complete.
 
+**st** (suckless terminal, `userspace/src/st`) has no configure step at
+all -- it's a bare Makefile whose `config.mk` hardcodes `X11INC`/`X11LIB`
+to `/usr/X11R6`, which does not exist here. `tools/build-st.sh` overrides
+both to the staging tree; everything else (fontconfig/freetype2 via
+`pkg-config`) already works from the common environment above. It needs no
+new runtime libraries -- libX11, libXft, libfontconfig and libfreetype are
+already shipped for the rest of the desktop -- and its binary is picked up
+straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
+same as xkbcomp/xev.
+
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
 640x480 clamshell. Two upstream bugs in that variant if you use it:

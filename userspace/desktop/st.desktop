@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=st
+Comment=Simple terminal
+Exec=st
+Icon=st
+Terminal=false
+Categories=Development;

@@ -75,6 +75,7 @@ libfontenc libxkbfile libmd"
 XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
+ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -124,7 +125,8 @@ done
 mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin"
 for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
             "$XKBCOMP_BIN:usr/bin/xkbcomp" \
-            "$XEV_BIN:usr/local/bin/xev"; do
+            "$XEV_BIN:usr/local/bin/xev" \
+            "$ST_BIN:usr/local/bin/st"; do
     src="${spec%:*}"; dst="${spec##*:}"
     if [ ! -f "$src" ]; then
         echo "FAILED: missing $src -- build that component first" >&2
@@ -178,6 +180,13 @@ for a in $applets; do
     fi
     echo "    applet: $a"
 done
+
+# st's menu launcher + icon. Categories=Development matches the vfolder
+# whose displayed Name is "Programming" (data/vfolders-desktop/Development.directory
+# in matchbox-common), which is how it lands in that app-folder on the desktop.
+mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
+cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
+cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
 
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths

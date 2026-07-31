@@ -72,3 +72,6 @@
 [submodule "matchbox-common"]
 	path = userspace/src/matchbox-common
 	url = https://git.yoctoproject.org/matchbox-common
+[submodule "st"]
+	path = userspace/src/st
+	url = https://git.suckless.org/st
