@@ -121,6 +121,47 @@ done
     chmod "$mode" "$dst"
 done
 
+# SSH file transfer (scp + sftp-server + dbclient/dropbearkey), built by
+# tools/build-ssh.sh. Not part of rootfs/ because they are cross-compiled
+# binaries, and this repo tracks source, never copied-in binaries.
+#
+# A freshly flashed board that cannot receive files is the thing this
+# guards against: the base image's own dropbear can serve sftp the moment
+# /usr/libexec/sftp-server exists, and until now it never did.
+#
+# The SSH server itself is NOT overlaid by default -- the base image
+# already carries a dropbear proven to work on this hardware, and this is
+# a recovery-flash image, i.e. exactly the situation where an untested
+# server binary would be worst. PIKO_SSH_REPLACE_DROPBEAR=1 opts in.
+SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+if [ -d "$SSH_STAGE" ]; then
+    . "$REPO/tools/ssh-payload.sh"
+    ssh_list="$SSH_PAYLOAD_FILES"
+    if [ "${PIKO_SSH_REPLACE_DROPBEAR:-0}" = "1" ]; then
+        echo "==> PIKO_SSH_REPLACE_DROPBEAR=1: also overlaying the rebuilt dropbear"
+        ssh_list="$ssh_list
+$SSH_PAYLOAD_SERVER"
+    fi
+    for entry in $ssh_list; do
+        src="$SSH_STAGE/${entry%%:*}"
+        rest="${entry#*:}"
+        rel="${rest%%:*}"
+        if [ ! -f "$src" ]; then
+            echo "build-mtd3-jffs2: $SSH_STAGE exists but $src is missing" >&2
+            echo "  rerun tools/build-ssh.sh -- refusing to ship a half payload" >&2
+            exit 1
+        fi
+        dst="$OVERLAY/$rel"
+        mkdir -p "$(dirname "$dst")"
+        cp "$src" "$dst"
+        chmod "0${rest#*:}" "$dst"
+        echo "    ssh payload: /$rel"
+    done
+else
+    echo "build-mtd3-jffs2: WARNING -- no $SSH_STAGE, this image will have no" >&2
+    echo "  scp/sftp-server. Run tools/build-ssh.sh first if that is not intended." >&2
+fi
+
 echo "==> unpacking base image $BASE_JFFS2 (via the real kernel jffs2 driver -- needs sudo)"
 MERGED="$STAGE/merged"
 sudo "$REPO/tools/jffs2-mount-extract.sh" "$BASE_JFFS2" "$MERGED"

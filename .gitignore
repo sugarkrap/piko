@@ -133,7 +133,12 @@ userspace/wpa_supplicant-2.11/
 userspace/wireless_tools.29/
 userspace/bin/
 # upstream source trees vendored under userspace/src/
-userspace/src/dropbear-2025.88/
+# dropbear + openssh: fetched, sha256-verified and built by
+# tools/build-ssh.sh (scp + sftp-server + a reproducible dropbear); the
+# version-globbed patterns mean bumping DROPBEAR_VERSION/OPENSSH_VERSION in
+# that script does not also need a .gitignore edit.
+userspace/src/dropbear-*/
+userspace/src/openssh-*/
 userspace/src/kexec-tools-2.0.30/
 userspace/src/mtd-utils-2.2.0/
 userspace/src/microwindows/
@@ -147,6 +152,9 @@ userspace/src/alsa-utils-*/
 # regenerated from tools/build-alsa.sh, not source.
 userspace/stage-alsa/
 userspace/stage-alsa-runtime/
+# tools/build-ssh.sh output: the device payload (scp, sftp-server,
+# dbclient, dropbearkey, dropbear), already usr/... rooted.
+userspace/stage-ssh/
 # tools/build-mplayer.sh: vendored MPlayer-1.5 release tarball + source tree
 # (bundles its own ffmpeg/ snapshot -- ~130MB extracted), and its staged
 # device payload (a single statically-linked mplayer binary).
