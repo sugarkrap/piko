@@ -21,8 +21,9 @@ Toolchain: `arm-unknown-linux-gnueabi`, built locally via crosstool-ng
 
 **QEMU smoke test passed.** Built QEMU 9.1.0 locally (last version with the
 `spitz` machine — see "QEMU notes" below) and booted `zImage-corgi-7.1.4`
-under `-M spitz` with a minimal busybox initramfs
-(`initramfs/initramfs-minimal.cpio.gz`, 1.1 MB): full boot to an
+under `-M spitz` with a minimal busybox initramfs (built to a local scratch
+path, e.g. `/tmp/initramfs-minimal.cpio.gz`, 1.1 MB — not tracked in git;
+see "QEMU notes" below for how it's assembled): full boot to an
 interactive shell, `spitz_misc_charging: Charging on.` confirms
 `sharpsl_pm`'s runtime path (the same family `corgi_pm.c` uses) actually
 executes correctly, not just compiles. Reuse:
@@ -30,7 +31,7 @@ executes correctly, not just compiles. Reuse:
 ```sh
 qemu-spitz/build/qemu-system-arm -M spitz \
   -kernel zImage-corgi-7.1.4 \
-  -initrd initramfs/initramfs-minimal.cpio.gz \
+  -initrd /tmp/initramfs-minimal.cpio.gz \
   -append "console=ttyS0 earlyprintk" -serial stdio -nographic -monitor none
 ```
 
@@ -106,7 +107,7 @@ snapshot for mutual consistency:
   parameter** — updated `hostap_80211_header_parse()`'s signature in
   `hostap_main.c`.
 
-All files live in `hostap-work/` at the project root (20 driver files +
+All files live in `modules/hostap/` at the project root (20 driver files +
 `lib80211*` + `michael_mic.c`). Full kernel build with `CONFIG_HOSTAP_CS=m`
 succeeds, zero warnings. Completely untested at runtime — no CF/PCMCIA
 WiFi card exercised this on real hardware or emulation.
@@ -181,36 +182,43 @@ surfaced more API changes that a source read missed:
 
 ## Files here
 
-- `corgi_v6.0.c` — original board file, last mainline version (v6.0).
-- `corgi_patched.c` / `corgi_pm_patched.c` — **compile-verified clean
-  (zero warnings) against Linux 7.1.4**, kept in sync with the working
-  copies under `kernel-src/linux-7.1.4/arch/arm/mach-pxa/`.
-- `corgi.h` — the board's GPIO/hardware-constant header, deleted alongside
-  `corgi.c` in the same cleanup. Pulled unchanged from v6.0 — it's pure
-  `#define`s, nothing in it depends on removed kernel APIs.
+- `modules/mach-pxa/corgi_patched.c` / `modules/mach-pxa/corgi_pm_patched.c`
+  — **compile-verified clean (zero warnings) against Linux 7.1.4**, kept in
+  sync with the working copies under `kernel-src/linux-7.1.4/arch/arm/mach-pxa/`.
+  (Moved out of the repo root into `modules/mach-pxa/` 2026-07-30, alongside
+  the rest of the `*_patched.c`/`.S` files, which now live under `modules/`
+  grouped by the kernel subsystem/directory they patch — see
+  `tools/setup-kernel-src.sh`'s `copy_in` calls for the authoritative
+  source→destination mapping.)
+- `modules/mach-pxa/corgi.h` — the board's GPIO/hardware-constant header,
+  deleted alongside `corgi.c` in the same cleanup. Pulled unchanged from
+  v6.0 — it's pure `#define`s, nothing in it depends on removed kernel APIs.
 - `zImage-corgi-7.1.4` / `kernel.config-corgi-7.1.4` — the actual build
   output: a ready-to-flash (untested on hardware) compressed kernel image
   and the `.config` that produced it.
 - `kernel-src/linux-7.1.4/` — full kernel source tree with everything
   above applied, plus `Kconfig`/`Makefile` wiring for `MACH_CORGI`.
-- `w100/w100fb.c`, `w100/w100fb.h` (public, `include/video/`) — last
-  pre-removal version (v6.0) of the driver for Corgi's actual display
+- `modules/w100/w100fb.c`, `modules/w100/w100fb.h` (public, `include/video/`)
+  — last pre-removal version (v6.0) of the driver for Corgi's actual display
   chip, the ATI Imageon W100. Removed Oct 2022 as collateral of the
   board-file cleanup ("all of which are now removed, so remove this
   driver as well" — not removed for being broken).
-- `w100/w100fb_private.h` — the driver's own private register-definitions
-  header (`drivers/video/fbdev/w100fb.h` — same filename as the public
-  one, different file). Also needed, not obvious until the compile
-  actually asked for it.
-- `w100/w100fb_patched.c` — **compile-verified clean (zero warnings)**
+- `modules/w100/w100fb_private.h` — the driver's own private
+  register-definitions header (`drivers/video/fbdev/w100fb.h` — same
+  filename as the public one, different file). Also needed, not obvious
+  until the compile actually asked for it.
+- `modules/w100/w100fb_patched.c` — **compile-verified clean (zero warnings)**
   against Linux 7.1.4, kept in sync with the working copy under
   `kernel-src/linux-7.1.4/drivers/video/fbdev/w100fb.c`.
-- `w100/Kconfig_fbdev`, `w100/Makefile_fbdev` — the `FB_W100` Kconfig entry
-  and Makefile wiring, for reference when re-adding it to a current tree.
-- `sharpsl_pm_v6.0.c` / `sharpsl_pm_current.c` — diffed for reference; this
-  shared power-management driver needed almost no changes (see below).
+- `modules/w100/Kconfig_fbdev`, `modules/w100/Makefile_fbdev` — the
+  `FB_W100` Kconfig entry and Makefile wiring, for reference when
+  re-adding it to a current tree.
+- `drivers/spitz.c`, `drivers/spitz_pm.c`,
+  `drivers/sharpsl_pm.c`, `drivers/pxa25x_udc.c` — tracked
+  reference snapshots applied by `tools/setup-kernel-src.sh` when rebuilding
+  `kernel-src/linux-7.1.4/`.
 
-## What `corgi_patched.c` changes vs. `corgi_v6.0.c`, and why
+## What `modules/mach-pxa/corgi_patched.c` changes, and why
 
 1. **Dropped `.handle_irq = pxa25x_handle_irq` from all three
    `MACHINE_START` blocks** (Corgi/Shepherd/Husky). `struct machine_desc`
@@ -332,13 +340,15 @@ host tooling" pattern as the toolchain's `libcody` problem:
   support to boot a local kernel image, so `configure
   --disable-libnfs` sidesteps it rather than patching dead code.
 
-`initramfs/` holds the minimal busybox rootfs used for the boot smoke
-test — `busybox-1.36.1` built statically (`CONFIG_STATIC=y`), with the
-`tc` applet disabled (`networking/tc.c` fails against current kernel
-headers with an incomplete `struct tc_cbq_wrropt`; not needed for a
-shell). Applet symlinks were generated by listing `busybox --list`
-through `qemu-arm` (user-mode emulation) since the binary can't run
-directly on this x86_64 host.
+The minimal busybox rootfs used for the boot smoke test is built to a local
+scratch directory (not tracked in git — the project's actual rootfs is
+`rootfs/`, staged onto the device's `home` partition; this one is just a
+throwaway QEMU boot aid) — `busybox-1.36.1` built statically
+(`CONFIG_STATIC=y`), with the `tc` applet disabled (`networking/tc.c`
+fails against current kernel headers with an incomplete `struct
+tc_cbq_wrropt`; not needed for a shell). Applet symlinks were generated by
+listing `busybox --list` through `qemu-arm` (user-mode emulation) since the
+binary can't run directly on this x86_64 host.
 
 ## Our build toolchain (separate from the crosstool-ng thread above)
 
@@ -349,7 +359,7 @@ toolchain, at
 arm-buildroot-linux-uclibcgnueabi-*`. It's a sibling project's buildroot
 tree (built for that project's own DOSBox-on-Zaurus work), reused here
 because it already has the OABI-clean uClibc patches this hardware's
-ancient recovery kernel needs (see `docs/DEADLETTER.md` for why OABI matters —
+ancient recovery kernel needs (see `docs/archive/DEADLETTER.md` for why OABI matters —
 Cacko's recovery-mode kernel is 2.4.18, pre-EABI, and rejects any ELF with a
 nonzero `EF_ARM_EABI_VER`).
 
@@ -407,7 +417,7 @@ the recovery kernel — this exact mistake happened once already (a stale
 EABI-built `piko-install` sat on the card undetected until `readelf`
 caught it).
 
-`flash/encsh.c` (the `updater.sh` cipher tool) and `flash/piko-backup.c`
+`tools/src/encsh.c` (the `updater.sh` cipher tool) and `flash/piko-backup.c`
 are built the same way. `encsh` itself is the one exception — it's a
 **host-side** tool (operates on files before they reach the SD card, never
 runs on the Zaurus), so it's built with the system's native `gcc`, not this
@@ -421,7 +431,7 @@ before ever flashing real hardware. Two things to know:
 
 1. **QEMU's `-M spitz` needs `CONFIG_MACH_SPITZ=y` compiled in**, separate
    from whatever real-hardware machine type the board actually needs
-   (`MACH_HUSKY` for this project's SL-C760/860 — see `docs/HANDOFF.md` for why
+   (`MACH_HUSKY` for this project's SL-C760/860 — see `docs/archive/HANDOFF.md` for why
    it's Husky, not Corgi, despite the codename). Multiple machine
    descriptors coexist fine in one kernel image; QEMU's board ID (713) and
    the real device's ID are matched independently at runtime. A kernel

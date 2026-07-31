@@ -1,0 +1,41 @@
+#!/bin/sh
+# cardinfo -- PCMCIA/Prism2 socket-level diagnostics, for when the card
+# isn't even showing up as wlan0 yet (a step before netinfo/wifiup are
+# useful at all). Filters dmesg down to pcmcia/hostap/card lines only --
+# the jffs2 CLEANMARKER boot spam otherwise drowns everything out.
+
+echo "== loaded PCMCIA/WiFi modules =="
+lsmod | grep -iE "pcmcia|hostap|lib80211"
+
+echo "== PCMCIA socket state (sysfs) =="
+for s in /sys/class/pcmcia_socket/socket*; do
+	test -d "$s" || continue
+	echo "-- $s --"
+	cat "$s/card_type" 2>/dev/null
+	cat "$s/cardctl" 2>/dev/null
+done
+
+echo "== PCMCIA devices bound to a driver =="
+ls /sys/bus/pcmcia/devices/ 2>/dev/null
+for d in /sys/bus/pcmcia/devices/*; do
+	test -d "$d" || continue
+	echo "-- $d --"
+	cat "$d/function" 2>/dev/null
+	readlink "$d/driver" 2>/dev/null
+done
+
+echo "== net interfaces =="
+ls /sys/class/net/ 2>/dev/null
+
+echo "== dmesg, pcmcia/hostap/card lines only (no jffs2 noise) =="
+dmesg | grep -iE "pcmcia|hostap|prism|cs:|socket"
+
+echo "== dmesg, any kernel WARNING/BUG/Oops, with context =="
+# A bare grep for pcmcia/hostap can hit only the "Modules linked in: ..."
+# line of an Oops/WARN backtrace (it lists every loaded module, so it
+# often contains "pcmcia"/"hostap" as a substring) while missing the
+# actual warning message and call trace around it -- -B/-A pulls the
+# whole thing in instead of just that one incidental line.
+dmesg | grep -iE -B5 -A25 "WARNING:|Oops|BUG:|Call trace"
+
+echo "== done =="

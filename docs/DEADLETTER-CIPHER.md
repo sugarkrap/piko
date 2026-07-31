@@ -17,7 +17,7 @@ kernel). That was wrong to conclude from — something else must have put that
 kernel there, not a plain `updater.sh` run through the boot-ROM menu. Trust
 direct hardware confirmation over inference from indirect evidence.
 
-## The tool: `flash/encsh.c`
+## The tool: `tools/src/encsh.c`
 
 Real, historical Sharp/Cacko tool, written by "sash@cacko.biz", part of the
 Cacko ROM kit. Original source recovered from
@@ -28,7 +28,7 @@ way, see below). It's a **static single-byte substitution cipher**: a fixed
 256-byte lookup table, not XOR, not anything key-dependent. Encoding and
 decoding are both simple table lookups (decode is the inverse permutation).
 
-Our `flash/encsh.c` is a clean reimplementation with the same algorithm,
+Our `tools/src/encsh.c` is a clean reimplementation with the same algorithm,
 built as a **host-side tool** (compiled with the system's native `gcc`, not
 the ARM cross-toolchain — it operates on files before they reach the SD
 card, never runs on the Zaurus itself). Usage:
@@ -139,9 +139,29 @@ For any new `updater.sh` swap:
    result against the confirmed set (any statistically-derived mapping that
    contradicts a confirmed one is wrong — the confirmed set is ground
    truth, not the solver's output).
-3. Once a fuller table is confirmed, update `flash/encsh.c`'s `enctab[]`
+3. Once a fuller table is confirmed, update `tools/src/encsh.c`'s `enctab[]`
    with the corrected values so the general-purpose tool works without
    needing this manual derivation every time.
+
+## Restoration note (2026-07-28)
+
+`flash/updater-encoded.sh` was accidentally deleted during an unrelated
+repo cleanup pass (a "remove all the other updater variants" sweep that
+didn't know this one was load-bearing, not a duplicate). Rather than
+re-tracking the ciphered bytes as a committed artifact, it's now a build
+output: `tools/encode-updater.py` encodes `flash/updater-uncoded.sh`'s
+plaintext with the 21 confirmed mappings above (hardcoded in the script,
+NOT `tools/src/encsh.c`'s built-in `enctab[]`, which is still wrong for
+this device per above) and writes `flash/updater-encoded.sh`, gitignored.
+Verified once that the script's output matches: its first 10 bytes came
+out byte-for-byte identical to the `24 22 c7 03 a8 30 c7 6e 73 2f`
+documented above.
+
+Run `tools/encode-updater.py` any time `updater-uncoded.sh` changes, and
+before staging an SD card for a flash. If it refuses a byte as
+unconfirmed, extend `CONFIRMED_MAPPING` in the script via the same
+known-plaintext technique used to derive the mappings above — don't
+guess, and don't fall back to `encsh`'s table.
 
 ## A process note, not just a technical one
 

@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# Installed as /etc/matchbox/session. matchbox-session (from
+# matchbox-common) prefers $HOME/.matchbox/session, then this file, then
+# falls back to its own built-in default -- which starts the panel with no
+# arguments at all. That fallback is why the panel only ever showed two
+# applets: with no --default-apps, matchbox-panel uses the compiled-in
+# DEFAULT_SESSIONS, which is exactly
+# "mb-applet-menu-launcher,mb-applet-clock" (src/session.c:3).
+#
+# --no-session is not optional here. Without it the panel reads
+# $HOME/.matchbox/mbdock.session if that file exists and ignores
+# --default-apps completely (src/session.c:73-99) -- and the panel *writes*
+# that file on every clean exit. So a device that has ever run the panel
+# has a stale two-applet list on disk that would silently override
+# whatever we ask for here. --no-session also stops it being rewritten,
+# which is what we want on an appliance: the applet list is defined here,
+# in tracked source, and is identical on every boot.
+#
+# All --default-apps entries dock at the same gravity (END, i.e. the right
+# of a south-oriented panel) in list order. Per-applet placement needs the
+# mbdock.session file format instead, which is not worth reintroducing the
+# stale-state problem for.
+
+APPLETS="mb-applet-menu-launcher"
+APPLETS="$APPLETS,mb-applet-system-monitor"
+APPLETS="$APPLETS,mb-applet-battery"
+APPLETS="$APPLETS,mb-applet-wireless"
+APPLETS="$APPLETS,mb-applet-clock"
+
+# Not enabled:
+#
+#   mb-launcher-term     mb-applet-launcher -o -1 -l mbterm.png \
+#                            mb-applet-xterm-wrapper.sh
+#                        The wrapper execs rxvt or xterm; the payload
+#                        ships neither, so this would be a dead button.
+#                        Add it here once a terminal is in the image.
+
+matchbox-desktop &
+
+matchbox-panel --orientation south --no-session --default-apps "$APPLETS" &
+
+exec matchbox-window-manager "$@"

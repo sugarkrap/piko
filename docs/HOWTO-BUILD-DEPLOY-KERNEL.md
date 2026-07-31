@@ -1,7 +1,7 @@
 # How to build and deploy a new stage-2 kernel (+ modules)
 
 *Written 2026-07-26, right after fixing the WiFi/PCMCIA ABI-mismatch
-regression (`DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
+regression (`docs/archive/DEADLETTER-WIFI-SSH.md`) caused by redeploying a kernel
 without its matching modules. This is now the canonical procedure —
 follow it exactly, especially the "always deploy everything together"
 rule.*
@@ -13,9 +13,9 @@ on whether the device is currently reachable over SSH:
 
 | Situation | Use |
 |---|---|
-| Device boots, WiFi/SSH work, you're updating the stage-2 kernel and/or modules | **`flash/build-and-deploy.sh`** (this doc) |
-| Device is unreachable over SSH / unbootable / bricked | SD-card recovery flash — `flash/FLASH-MTD1-MTD3-SAFE.md` |
-| You need to change the *bootstrap* partition itself (`mtd1`/`smf`, the tiny kexec loader) | SD-card recovery flash — `flash/FLASH-MTD1-MTD3-SAFE.md` |
+| Device boots, WiFi/SSH work, you're updating the stage-2 kernel and/or modules | **`tools/build-and-deploy.sh`** (this doc) |
+| Device is unreachable over SSH / unbootable / bricked | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
+| You need to change the *bootstrap* partition itself (`mtd1`/`smf`, the tiny kexec loader) | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
 
 The stage-2 kernel + rootfs live on `home` (`mtd3`), which is a normal
 writable filesystem while the device is running — that's why it can be
@@ -24,20 +24,51 @@ flashing via the Cacko recovery menu + SD card is now reserved for the
 bootstrap partition and true recovery, per `AGENTS.md`'s "last spare
 board" constraint (scope every flash to only what changed).
 
-## Normal path: `flash/build-and-deploy.sh`
+## Normal path: `tools/build-and-deploy.sh`
 
 ```sh
-flash/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
+tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
-This does three things, in order, and stops immediately if any step fails:
+Toolchain selection is automatic: the script uses the first compiler it
+finds in `PATH` among `arm-buildroot-linux-uclibcgnueabi-gcc`,
+`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-linux-gnueabi-gcc`, and
+`arm-unknown-linux-gnueabi-gcc`. You can override this explicitly with:
+
+```sh
+CROSS_COMPILE=arm-linux-gnueabi- tools/build-and-deploy.sh [user@host]
+```
+
+If your compiler binaries are not in `PATH`, point the script at them:
+
+```sh
+TOOLCHAIN_BIN_DIR=/path/to/toolchain/bin tools/build-and-deploy.sh [user@host]
+```
+
+This does four things, in order, and stops immediately if any step fails:
 
 1. **Checks the device is reachable over SSH first** (fails fast with a
    pointer to the recovery doc if not — no point spending 15-25 minutes
    building if there's nothing to deploy to).
-2. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
+2. **Reconstructs `kernel-src/linux-7.1.4`** via `tools/setup-kernel-src.sh`
+   — downloads a pristine kernel.org tarball and applies every tracked
+   patch under `modules/` (Corgi board files, W100, sharpsl NAND,
+   hostap_cs + lib80211, and the mach-pxa/wireless/crypto Kconfig+Makefile
+   wiring). Idempotent — a marker file skips this once a tree is already
+   patched, so it's cheap on every run. Pass `--force-kernel-src` to
+   `build-and-deploy.sh` if you've changed a tracked patch file and need
+   it re-applied.
+3. **Cross-compiles `zImage` + all modules** with the buildroot toolchain,
    logging full (untruncated) output to `/tmp/kbuild-<timestamp>.log`.
-3. **Deploys** by calling `flash/chunked-deploy.sh`, which pushes (over a
+3b. **Builds the cross-compiled userspace** via `tools/build-userspace.sh`
+   — `userspace/src/md5sum`, then ALSA (`tools/build-alsa.sh`), then
+   MPlayer (`tools/build-mplayer.sh`). That order is a hard dependency:
+   MPlayer links `libasound.a` out of `userspace/stage-alsa`. Every step is
+   idempotent, so this is cheap once built. Skip it with
+   `--skip-userspace` (which also forwards `--no-userspace` to
+   `chunked-deploy.sh`, so a stale staged payload isn't shipped either).
+   The X11/matchbox stack is **not** built here — see that script's header.
+4. **Deploys** by calling `tools/chunked-deploy.sh`, which pushes (over a
    known-flaky WiFi link, chunked + retried + size-verified):
    - the new `zImage` → `/boot/zImage-full` (auto-backs up the old one to
      `/boot/zImage-full.bak`)
@@ -47,7 +78,28 @@ This does three things, in order, and stops immediately if any step fails:
      `soc_common`, `pxa2xx_base`, `pxa2xx_sharpsl`, `hostap`, `hostap_cs`,
      `lib80211` + its WEP/CCMP/TKIP crypto modules, `libarc4`)
    - the `audioon`/`audinfo` helper scripts (single-word names, per
-     `AGENTS.md`'s device-keyboard typing constraint)
+     `AGENTS.md`'s device-keyboard typing constraint), sent verbatim from
+     `rootfs/usr/sbin/` — they used to be inline heredocs in
+     `chunked-deploy.sh`, which created a second source of truth that
+     silently overwrote committed edits to the tracked files
+   - the media payload: MPlayer plus the `/usr/share/alsa` config tree and
+     `aplay`/`amixer`/`alsactl`. Everything is statically linked, so the
+     only "shared" dependency is that config tree — `libasound` opens
+     `alsa.conf` by absolute path at runtime even when linked statically,
+     and without it every PCM open fails with
+     `Unknown PCM cards.pcm.default`.
+
+     MPlayer is ~16 MiB against a ~68 MiB root jffs2. A preflight refuses
+     the payload rather than half-deploying if it would leave under 4 MiB
+     free (jffs2 needs room to garbage-collect, and a full root is not
+     recoverable over SSH on this board). To keep it off flash entirely:
+
+     ```sh
+     MPLAYER_DEST=/mnt/card/mplayer tools/build-and-deploy.sh root@<ip>
+     ```
+
+     An `/mnt/card` destination is mounted automatically first and is not
+     charged against the root filesystem budget.
 
 It does **not** reboot the device automatically — you do that manually
 once you're ready:
@@ -76,6 +128,7 @@ this script.
 ## Manual steps (if you need to do it by hand)
 
 ```sh
+tools/setup-kernel-src.sh   # only needed once per fresh clone / patch change
 cd kernel-src/linux-7.1.4
 export PATH="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin:$PATH"
 export ARCH=arm CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-
@@ -93,7 +146,7 @@ echo "exit: $?"
   board) and a full `zImage modules` build can consume several GB and
   15-25+ minutes. A build failing with a bare `Error 2` and no visible
   cause has been disk-space exhaustion before.
-- Once built, deploy with `flash/chunked-deploy.sh [user@host]` directly
+- Once built, deploy with `tools/chunked-deploy.sh [user@host]` directly
   (this is exactly what `build-and-deploy.sh` calls after a successful
   build).
 
@@ -112,6 +165,31 @@ ssh -i ~/.ssh/zaurus_ed25519 root@10.43.112.72 "
 Expect: new kernel version/build date, all WiFi/PCMCIA + sound modules
 `Live` with no errors, zero hits in the dmesg grep, `wlan0` up with an
 IP and an associated AP in `iwconfig`.
+
+### Verifying audio actually plays
+
+The sound card registering is **not** evidence that audio works — it can
+register, open, and report `state: RUNNING` while transferring nothing. Two
+extra checks are cheap and catch the real failure modes (see
+`docs/DEADLETTER-AUDIO-I2S-SILENT.md`):
+
+```sh
+grep pxa-dma /proc/interrupts       # note the count
+aplay -d 4 /root/test-mono22k.wav   # must return exit 0, not hang
+grep pxa-dma /proc/interrupts       # count MUST have increased
+```
+
+No `amixer` step is needed — the driver's defaults (`Jack Function=Off`,
+`Speaker Function=On`, volume 121/127) are already the correct **speaker**
+configuration and are verified audible as-is. `Jack Function=Off` means "no
+jack plugged in", not "muted"; setting it to `Headphone` routes audio to the
+headphone jack and will make the speaker test look broken.
+
+A `pxa-dma` count that does not move means the I2S link is enabled but
+unclocked — samples are never transferred no matter what ALSA reports. A
+hang (rather than an error) is the same failure. Note there is no `kill`
+applet in this busybox, so a hung `aplay` holds the PCM open until
+`softreboot`.
 
 ## If it goes wrong (no post-kexec panic fallback)
 

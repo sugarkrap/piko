@@ -1,0 +1,69 @@
+[submodule "matchbox-window-manager"]
+	path = userspace/src/matchbox-window-manager
+	url = ../matchbox-window-manager
+[submodule "libX11"]
+	path = userspace/src/libX11
+	url = https://gitlab.freedesktop.org/xorg/lib/libX11.git
+[submodule "xserver"]
+	path = userspace/src/xserver
+	url = https://gitlab.freedesktop.org/xorg/xserver.git
+[submodule "xorg-macros"]
+	path = userspace/src/xorg-macros
+	url = https://gitlab.freedesktop.org/xorg/util/macros.git
+[submodule "xtrans"]
+	path = userspace/src/xtrans
+	url = https://gitlab.freedesktop.org/xorg/lib/libxtrans.git
+[submodule "libXfont"]
+	path = userspace/src/libXfont
+	url = https://gitlab.freedesktop.org/xorg/lib/libXfont.git
+[submodule "libfontenc"]
+	path = userspace/src/libfontenc
+	url = https://gitlab.freedesktop.org/xorg/lib/libfontenc.git
+[submodule "xcb-proto"]
+	path = userspace/src/xcb-proto
+	url = https://gitlab.freedesktop.org/xorg/proto/xcbproto.git
+[submodule "libXau"]
+	path = userspace/src/libXau
+	url = https://gitlab.freedesktop.org/xorg/lib/libxau.git
+[submodule "libXdmcp"]
+	path = userspace/src/libXdmcp
+	url = https://gitlab.freedesktop.org/xorg/lib/libxdmcp.git
+[submodule "libxcb"]
+	path = userspace/src/libxcb
+	url = https://gitlab.freedesktop.org/xorg/lib/libxcb.git
+[submodule "libxkbfile"]
+	path = userspace/src/libxkbfile
+	url = https://gitlab.freedesktop.org/xorg/lib/libxkbfile.git
+[submodule "pixman"]
+	path = userspace/src/pixman
+	url = https://gitlab.freedesktop.org/pixman/pixman.git
+[submodule "libXext"]
+	path = userspace/src/libXext
+	url = https://gitlab.freedesktop.org/xorg/lib/libxext.git
+[submodule "xkbcomp"]
+	path = userspace/src/xkbcomp
+	url = https://gitlab.freedesktop.org/xorg/app/xkbcomp.git
+[submodule "xev"]
+	path = userspace/src/xev
+	url = https://gitlab.freedesktop.org/xorg/app/xev.git
+[submodule "matchbox-desktop"]
+	path = userspace/src/matchbox-desktop
+	url = https://git.yoctoproject.org/matchbox-desktop-2
+[submodule "libmatchbox"]
+	path = userspace/src/libmatchbox
+	url = https://git.yoctoproject.org/libmatchbox
+[submodule "libXrender"]
+	path = userspace/src/libXrender
+	url = https://gitlab.freedesktop.org/xorg/lib/libxrender.git
+[submodule "libXft"]
+	path = userspace/src/libXft
+	url = https://gitlab.freedesktop.org/xorg/lib/libxft.git
+[submodule "matchbox-desktop-classic"]
+	path = userspace/src/matchbox-desktop-classic
+	url = https://git.yoctoproject.org/matchbox-desktop
+[submodule "matchbox-panel"]
+	path = userspace/src/matchbox-panel
+	url = https://git.yoctoproject.org/matchbox-panel
+[submodule "matchbox-common"]
+	path = userspace/src/matchbox-common
+	url = https://git.yoctoproject.org/matchbox-common

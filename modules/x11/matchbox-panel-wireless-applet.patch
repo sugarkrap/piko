@@ -1,0 +1,227 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -227,10 +227,19 @@
+ wifi_enabled=no
+ 
+ AC_CHECK_HEADERS(iwlib.h, have_iwlib_h=yes, have_iwlib_h=no)
+-AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=yes)
++dnl Upstream passed have_libiw=yes as BOTH the found and not-found action,
++dnl so this check could never fail and the result meant nothing. -lm is
++dnl listed as an other-library because libiw's frequency helpers reference
++dnl floor/log10/pow unless it was built -DWE_NOLIBM, and without it the
++dnl probe can fail for a reason that has nothing to do with libiw.
++AC_CHECK_LIB(iw, iw_sockets_open, have_libiw=yes, have_libiw=no, [-lm])
+ 
+ if test x$have_iwlib_h = x"yes" && test x$have_libiw = x"yes"; then
+-	WIRELESS_LIBS="-liw"
++	dnl mb-applet-wireless itself calls rint() and log() to scale link
++	dnl quality, so it needs libm whatever libiw was built with. (Harmless
++	dnl on uclibc, which folds the math symbols into libc and ships only a
++	dnl static libm.a -- the applet gains no new DT_NEEDED.)
++	WIRELESS_LIBS="-liw -lm"
+ 	wifi_enabled=yes
+ fi
+ AC_SUBST(WIRELESS_LIBS)
+--- a/applets/mb-applet-wireless.c
++++ b/applets/mb-applet-wireless.c
+@@ -36,6 +36,14 @@
+ 
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
++/* update_wireless() uses rint() and log(). These do currently resolve via
++ * iwlib.h, which includes math.h itself, but relying on a third-party
++ * header's include list for our own declarations is a trap waiting to
++ * spring. Declare what we use. */
++#include <math.h>
++/* inet_ntop, for the address shown in the popup. struct ifreq and IFNAMSIZ
++ * already arrive via iwlib.h, which includes <net/if.h>. */
++#include <arpa/inet.h>
+ 
+ #include <netdb.h>      /* gethostbyname, getnetbyname */
+ #if 0
+@@ -104,8 +112,56 @@
+ int  Wfd; /* file descriptor for socket */
+ static struct wireless_info WInfo;
+ 
++/* IPv4 address currently configured on an interface, or NULL if it has
++ * none (not associated yet, or DHCP still running). Returns a pointer to
++ * static storage. */
++static const char *
++iface_address(const char *ifname)
++{
++  static char   addr[INET_ADDRSTRLEN];
++  struct ifreq  ifr;
++  int           fd;
++
++  addr[0] = '\0';
++
++  if (ifname == NULL)
++    return NULL;
++
++  /* SIOCGIFADDR needs its own socket; Wfd is one, but it belongs to iwlib
++   * and reusing it here would be relying on an implementation detail. */
++  fd = socket(AF_INET, SOCK_DGRAM, 0);
++  if (fd < 0)
++    return NULL;
++
++  memset(&ifr, 0, sizeof(ifr));
++  ifr.ifr_addr.sa_family = AF_INET;
++  strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
++
++  if (ioctl(fd, SIOCGIFADDR, &ifr) == 0)
++    {
++      struct sockaddr_in *sin = (struct sockaddr_in *) &ifr.ifr_addr;
++
++      if (inet_ntop(AF_INET, &sin->sin_addr, addr, sizeof(addr)) == NULL)
++	addr[0] = '\0';
++    }
++
++  close(fd);
++
++  return addr[0] != '\0' ? addr : NULL;
++}
++
++/* Signal level and noise come back as raw __u8. When they are really dBm
++ * the value is a signed 8-bit quantity stuffed into that byte, so anything
++ * at or above 64 has to have 0x100 subtracted -- otherwise a perfectly
++ * normal -39dBm reads as "217dBm". */
++static int
++iw_dbm(int raw)
++{
++  return raw >= 64 ? raw - 0x100 : raw;
++}
++
+ Bool
+-update_wireless(void) 
++update_wireless(void)
+ {
+   /* urg, iwlib api :/ */
+ 
+@@ -138,17 +194,34 @@
+   if (WInfo.has_stats) 
+     {
+       /* via http://www.snorp.net/files/patches/wireless-applet.c */
+-      Mwd.quality = (int)rint ((log (WInfo.stats.qual.qual) / log (94)) * 100);
++      /* qual.qual is a __u8 and reads 0 with no association (and on hostap
++       * while the link is down), where log(0) is -inf and casting that to
++       * int is undefined. Take the floor directly instead. */
++      if (WInfo.stats.qual.qual == 0)
++	Mwd.quality = 0;
++      else
++	Mwd.quality = (int)rint ((log (WInfo.stats.qual.qual) / log (94)) * 100);
+ 
+-      if (Mwd.quality > 100) 
++      if (Mwd.quality > 100)
+ 	Mwd.quality = 100;
+       else 
+ 	if (Mwd.quality < 0) 
+ 	  Mwd.quality = 0;
+ 
+-      Mwd.level = (int)WInfo.stats.qual.level;
+-      Mwd.noise = (int)WInfo.stats.qual.noise;
+-    } 
++      /* Same test iwlib's own printer uses to decide the units. */
++      if ((WInfo.stats.qual.updated & IW_QUAL_DBM)
++	  || (WInfo.has_range
++	      && WInfo.stats.qual.level > WInfo.range.max_qual.level))
++	{
++	  Mwd.level = iw_dbm(WInfo.stats.qual.level);
++	  Mwd.noise = iw_dbm(WInfo.stats.qual.noise);
++	}
++      else
++	{
++	  Mwd.level = (int)WInfo.stats.qual.level;
++	  Mwd.noise = (int)WInfo.stats.qual.noise;
++	}
++    }
+   else 
+     {
+       Mwd.quality = -1;
+@@ -282,10 +355,11 @@
+ void
+ button_callback (MBTrayApp *app, int x, int y, Bool is_released )
+ {
+-  char tray_msg[256];
++  char tray_msg[320];		/* + the Address line */
+   char quality[10];
+-  char level[10];
+-  char noise[10];
++  char level[12];		/* "-100dBm" + NUL */
++  char noise[12];
++  const char *addr;
+ 
+   update_wireless();
+   
+@@ -293,29 +367,34 @@
+     snprintf (quality, 10, "%u%%", Mwd.quality);
+   else
+   	strncpy (quality, "Unknown", 10);
++  /* %d, not %u: these are dBm and therefore negative. */
+   if (Mwd.level != -1)
+-    snprintf (level, 10, "%udBm", Mwd.level);
++    snprintf (level, sizeof(level), "%ddBm", Mwd.level);
+   else
+-  	strncpy (level, "Unknown", 10);
++  	strncpy (level, "Unknown", sizeof(level));
+   if (Mwd.noise != -1)
+-    snprintf (noise, 10, "%udBm", Mwd.noise);
++    snprintf (noise, sizeof(noise), "%ddBm", Mwd.noise);
+   else
+-  	strncpy (noise, "Unknown", 10);
++  	strncpy (noise, "Unknown", sizeof(noise));
+ 
+   if (!is_released) return;
+ 
+-  snprintf(tray_msg, 256,
++  addr = iface_address(Mwd.iface);
++
++  snprintf(tray_msg, sizeof(tray_msg),
+ 	  "%s:\n"
+-	  "  Mode: %s\n" 
++	  "  Mode: %s\n"
+ 	  "  ESSID: %s\n"
++	  "  Address: %s\n"
+ 	  "  Quality: %s\n"
+ 	  "  Level: %s\n"
+ 	  "  Noise: %s\n",
+-	  Mwd.iface, 
++	  Mwd.iface,
+ 	  Mwd.mode ? Mwd.mode : "Unknown",
+ 	  Mwd.essid ? Mwd.essid  : "Unknown",
+-	  quality, 
+-	  level, 
++	  addr ? addr : "None",
++	  quality,
++	  level,
+ 	  noise );
+ 
+   mb_tray_app_tray_send_message(app, tray_msg, 5000);
+@@ -350,16 +429,23 @@
+  if (iw_get_basic_config(Wfd, ifname, &WInfo.b) < 0)
+    return 0;
+ 
+- /* dont stop check interfaces till we find one that supports stats 
++ /* dont stop check interfaces till we find one that supports stats
+   * works round odd issues on Z with host AP.
+  */
+- if (Mwd.iface != NULL && WInfo.has_stats == 1) 
++ if (Mwd.iface != NULL && WInfo.has_stats == 1)
+    return 0;
+ 
+- if(iw_get_range_info(Wfd, Mwd.iface, &(WInfo.range)) >= 0)
+-   WInfo.has_range = 1;  
++ /* These probe the interface currently being enumerated, so they must use
++  * ifname. They passed Mwd.iface, which is only assigned at the bottom of
++  * this function -- so on the FIRST wireless interface it was still NULL,
++  * and iwlib's iw_get_ext() does strncpy(ifr_name, ifname, IFNAMSIZ) on
++  * it. The applet segfaulted during startup enumeration on any machine
++  * that actually had a wireless interface, which is presumably why it was
++  * never shipped. */
++ if(iw_get_range_info(Wfd, ifname, &(WInfo.range)) >= 0)
++   WInfo.has_range = 1;
+ 
+- if (iw_get_stats(Wfd, Mwd.iface, 
++ if (iw_get_stats(Wfd, ifname,
+ 		  &(WInfo.stats),
+ 		  &(WInfo.range), WInfo.has_range) >= 0)
+    WInfo.has_stats = 1;
