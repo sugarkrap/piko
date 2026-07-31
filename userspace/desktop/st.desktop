@@ -2,7 +2,7 @@
 Type=Application
 Name=st
 Comment=Simple terminal
-Exec=st
-Icon=st
+Exec=/usr/local/bin/st
+Icon=st.png
 Terminal=false
 Categories=Development;

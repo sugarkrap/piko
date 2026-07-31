@@ -540,14 +540,18 @@ fi
 #                         "Unknown PCM cards.pcm.default".
 #   * aplay/amixer/alsactl -- also static; small, and the only way to test
 #                         or adjust the audio path on the device.
-#   * libSDL-1.2.so.0 + sdltest -- SDL is dynamically linked (the one
-#                         exception to this section's static convention --
-#                         see tools/build-sdl.sh's header for why), so
-#                         shipping it also bootstraps /lib/ld-uClibc*.so +
-#                         /lib/libc.so onto the device if not already
-#                         there (see the SDL block below for the
-#                         executable-bit gotcha that bootstrap has to get
-#                         right, found on real hardware).
+#   * libSDL-1.2.so.0 + sdltest + pikalibrate -- SDL is dynamically linked
+#                         (the one exception to this section's static
+#                         convention -- see tools/build-sdl.sh's header for
+#                         why), so shipping it also bootstraps
+#                         /lib/ld-uClibc*.so + /lib/libc.so onto the device
+#                         if not already there (see the SDL block below for
+#                         the executable-bit gotcha that bootstrap has to
+#                         get right, found on real hardware). pikalibrate
+#                         also gets /etc/piko/touchscreen.cfg pushed, but
+#                         ONLY if the device doesn't already have one --
+#                         it holds real calibration state once run, not a
+#                         file this script should ever clobber.
 # Only the config files this board can actually use are sent (the upstream
 # tree also carries ~70 cards/*.conf for hardware that does not exist here);
 # each send_file is several SSH round trips over a slow, flaky link.
@@ -568,7 +572,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
     fi
     SDL_SIZED=""
     [ -n "$SDL_SO_REAL" ] && SDL_SIZED="$SDL_STAGE/usr/lib/$SDL_SO_REAL"
-    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" \
+    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" "$SDL_STAGE/usr/bin/pikalibrate" \
              "$ALSA_STAGE/usr/bin/aplay" "$ALSA_STAGE/usr/bin/amixer" \
              "$ALSA_STAGE/usr/sbin/alsactl"; do
         # Explicit if, not `[ -f ] && ...`: under `set -e` a false test at
@@ -647,6 +651,23 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
                 send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
                 ssh_do "chmod 0755 /usr/bin/sdltest"
+            fi
+            if [ -f "$SDL_STAGE/usr/bin/pikalibrate" ]; then
+                send_file "$SDL_STAGE/usr/bin/pikalibrate" "/usr/bin/pikalibrate"
+                ssh_do "chmod 0755 /usr/bin/pikalibrate"
+            fi
+            # touchscreen.cfg holds USER-CALIBRATED STATE once pikalibrate has
+            # been run -- unlike every other rootfs/etc/* file in this script,
+            # it must NOT be unconditionally overwritten on a routine
+            # redeploy, or a real calibration would get silently reset back
+            # to the tracked defaults.
+            if [ -f "$REPO/rootfs/etc/piko/touchscreen.cfg" ]; then
+                if [ "$(ssh_do "test -f /etc/piko/touchscreen.cfg && echo yes || echo no")" = "no" ]; then
+                    ssh_do "mkdir -p /etc/piko"
+                    send_file "$REPO/rootfs/etc/piko/touchscreen.cfg" "/etc/piko/touchscreen.cfg"
+                else
+                    echo "==> /etc/piko/touchscreen.cfg already exists on device, leaving it alone"
+                fi
             fi
         fi
         # Heavy apps: card-only. If there is no card, skip them rather than
@@ -741,7 +762,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
 fi
 if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$SDL_STAGE/usr/lib" ]; then
-    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest (if staged)"
+    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest + /usr/bin/pikalibrate (if staged)"
 fi
 echo ""
 echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"

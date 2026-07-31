@@ -25,7 +25,7 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--build-only] [user@host]
 # Example:
 #   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -41,18 +41,31 @@ set -eu
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
 # --skip-userspace skips building the cross-compiled userspace
-# (tools/build-userspace.sh: md5sum + SSH file transfer + ALSA + MPlayer
-# + SDL) and forwards
+# (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
+# + st + FLTK) and forwards
 # --no-userspace to chunked-deploy.sh so it does not ship a stale staged
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
+# --build-only builds everything this script would normally build (kernel,
+# modules, userspace, the X11/Matchbox payload) and then STOPS, without
+# contacting the device at all -- no SSH reachability probe up front and no
+# chunked-deploy.sh handoff at the end. No target argument is needed or used.
+#
+# That exists because CI has no device to deploy to, and because building
+# and shipping are genuinely separate concerns: without it, the only way to
+# exercise this build path was to also flash a board. Anything that wants
+# "build exactly what a real deploy would build, then let me package it
+# myself" -- CI, an offline update package, a dev with the board in a
+# drawer -- should use this rather than reimplementing the build order and
+# letting the two drift.
 
 ADAPTER=""
 FORCE_KERNEL_SRC=0
 KERNEL_ONLY=0
 SKIP_USERSPACE=0
 SKIP_X11=0
+BUILD_ONLY=0
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -76,6 +89,10 @@ while [ $# -gt 0 ]; do
             SKIP_USERSPACE=1
             shift
             ;;
+        --build-only)
+            BUILD_ONLY=1
+            shift
+            ;;
         *)
             TARGET="$1"
             shift
@@ -90,18 +107,28 @@ if [ -n "$ADAPTER" ]; then
 fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
-TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
+# The toolchain tools/build-uclibc-toolchain.sh produces, same default every
+# other build script here uses. This used to point at one developer's
+# buildroot checkout, which exists on no other machine -- including CI.
+TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
-echo "==> checking $TARGET is reachable over SSH before spending time building..."
-if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a"; then
-    echo "FAILED: $TARGET is not reachable over SSH." >&2
-    echo "This script only handles the routine SSH-based redeploy path." >&2
-    echo "If the device is unreachable/unbootable, or you need to change" >&2
-    echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
-    echo "procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md" >&2
-    exit 1
+# --build-only never touches the device, so the probe that exists purely to
+# fail fast before a long build would be both pointless and, in CI, a
+# guaranteed failure.
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "==> --build-only: building without contacting any device"
+else
+    echo "==> checking $TARGET is reachable over SSH before spending time building..."
+    if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a"; then
+        echo "FAILED: $TARGET is not reachable over SSH." >&2
+        echo "This script only handles the routine SSH-based redeploy path." >&2
+        echo "If the device is unreachable/unbootable, or you need to change" >&2
+        echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
+        echo "procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md" >&2
+        exit 1
+    fi
 fi
 
 echo "==> reconstructing kernel-src (download + apply tracked patches)..."
@@ -156,7 +183,8 @@ if ! (
 fi
 echo "==> build OK"
 
-# Userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL). Delegated to
+# Userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL + st + FLTK).
+# Delegated to
 # tools/build-userspace.sh
 # rather than open-coded here -- it is the single entry point for every
 # cross-built userspace component, and each step it runs is idempotent, so
@@ -173,7 +201,7 @@ if [ "$KERNEL_ONLY" -eq 1 ]; then
 elif [ "$SKIP_USERSPACE" -eq 1 ]; then
     echo "==> --skip-userspace: not building userspace components"
 else
-    echo "==> building userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL) via tools/build-userspace.sh..."
+    echo "==> building userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL + st + FLTK) via tools/build-userspace.sh..."
     if ! (
         export PATH TOOLCHAIN_BIN_DIR CROSS_COMPILE
         sh "$REPO/tools/build-userspace.sh"
@@ -205,6 +233,23 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
         echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
         tail -3 /tmp/x11-payload-build.log >&2
     fi
+fi
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+    echo ""
+    echo "==> --build-only: everything built, nothing deployed."
+    # Report what actually exists rather than what was requested: a step
+    # that degraded (the X11 payload prints a warning and carries on) must
+    # not be reported here as if it had succeeded.
+    if [ -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
+        echo "    zImage:      $KERNEL_DIR/arch/arm/boot/zImage ($(wc -c < "$KERNEL_DIR/arch/arm/boot/zImage") bytes)"
+    fi
+    if [ -f /tmp/matchbox-payload.tar ]; then
+        echo "    X11 payload: /tmp/matchbox-payload.tar ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    fi
+    echo ""
+    echo "    Deploy it later with:  tools/chunked-deploy.sh [user@host]"
+    exit 0
 fi
 
 if [ "$KERNEL_ONLY" -eq 1 ]; then

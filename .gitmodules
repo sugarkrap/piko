@@ -75,3 +75,6 @@
 [submodule "st"]
 	path = userspace/src/st
 	url = https://git.suckless.org/st
+[submodule "userspace/src/fltk"]
+	path = userspace/src/fltk
+	url = https://github.com/fltk/fltk.git

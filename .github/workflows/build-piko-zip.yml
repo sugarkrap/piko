@@ -33,9 +33,11 @@ name: Build piko.zip (SD-card recovery-flash package)
 #     glibc's getpwnam/getpwuid go through NSS and dlopen() modules this
 #     rootfs does not have, even from a static binary. It is built by
 #     tools/build-uclibc-toolchain.sh into its OWN directory
-#     (PIKO_TOOLCHAIN_DIR=toolchain-uclibc), deliberately not the default
-#     toolchain/ where the OABI toolchain above installs a same-named
-#     triplet. See the steps themselves for the full argument.
+#     (PIKO_TOOLCHAIN_DIR=toolchain-x11, shared with
+#     build-update-package.yml, which needs the same toolchain for the
+#     desktop payload), deliberately not the default toolchain/ where the
+#     OABI toolchain above installs a same-named triplet. See the steps
+#     themselves for the full argument.
 #
 # Two independent kernel builds happen against the SAME reconstructed
 # kernel-src/linux-7.1.4 tree (tools/setup-kernel-src.sh, shared with
@@ -215,20 +217,23 @@ jobs:
       # own PIKO_TOOLCHAIN_DIR and their own cache -- one silently
       # overwriting the other is exactly the failure this avoids.
       #
-      # The cache key is shared with build-update-package.yml on purpose:
-      # whichever workflow builds it first, the other restores it.
+      # Cache path AND key deliberately match build-update-package.yml's
+      # "X11/Matchbox toolchain" steps: it is the same toolchain from the
+      # same tracked config, so sharing one cache entry means only one of
+      # the two workflows ever pays the crosstool-NG build. The name over
+      # there is about what first needed it, not a different toolchain.
       - name: Cache uClibc toolchain (crosstool-NG build)
-        id: uclibc-toolchain-cache
         uses: actions/cache@v4
         with:
-          path: toolchain-uclibc
-          key: uclibc-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          path: toolchain-x11
+          key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
           save-always: true
 
       - name: Provision uClibc toolchain
+        env:
+          PIKO_TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain-x11
         run: |
-          PIKO_TOOLCHAIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc" \
-              ./tools/build-uclibc-toolchain.sh
+          ./tools/build-uclibc-toolchain.sh
 
       # Upstream release tarballs, sha256-verified by the script itself --
       # cached so a rerun doesn't re-fetch from matt.ucc.asn.au/openbsd.org.
@@ -242,7 +247,7 @@ jobs:
 
       - name: Build scp + sftp-server (+ a reproducible dropbear)
         run: |
-          TOOLCHAIN_BIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc/x-tools/arm-unknown-linux-uclibcgnueabi/bin" \
+          TOOLCHAIN_BIN_DIR="$GITHUB_WORKSPACE/toolchain-x11/x-tools/arm-unknown-linux-uclibcgnueabi/bin" \
               ./tools/build-ssh.sh
           {
             echo "### SSH file transfer payload (staged into mtd3.jffs2)"

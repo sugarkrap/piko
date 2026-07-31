@@ -14,6 +14,18 @@ name: Build piko-update package
 # this device for real once already (DEADLETTER-WIFI-SSH.md). A package
 # that fails this is never uploaded.
 #
+# The package also carries usr/sbin/piko-smf-write and (when one is
+# present locally) the boot/zImage-smf bootstrap kernel. QEMU's spitz has
+# no Sharp-FTL smf partition, so the smoke test cannot flash one -- it
+# instead pins down that the smf paths stay inert: the writer ships, a dry
+# run stages no bootstrap write, and --commit-smf with nothing pending is
+# a clean no-op. The real NAND write only ever happens on hardware, by
+# hand, via `smfcommit` (docs/HOWTO-OFFLINE-UPDATE.md).
+#
+# Note CI never carries a bootstrap image: flash/zImage-* is gitignored,
+# so CI packages are always "no bootstrap included". That is the intended
+# fallback, not a failure.
+#
 # If kernel-src reconstruction itself fails for some other reason (a
 # kernel.org hiccup, an oldconfig failure, etc.), the job falls back to a
 # rootfs-only package (piko-update + rootfs/ overlay, no kernel bump)
@@ -25,6 +37,28 @@ name: Build piko-update package
 # expensive and network-heavy part) is cached across runs keyed on the
 # inputs that actually affect it, so a run where nothing kernel-related
 # changed restores instantly instead of re-downloading from kernel.org.
+#
+# The package also carries the X11/Matchbox desktop (libX11/libXft/
+# fontconfig/freetype, the four Matchbox apps, st) via
+# tools/build-x11-stack.sh + tools/build-st.sh + tools/build-matchbox-
+# payload.sh -- see flash/build-update-package.sh's own header for how
+# that gets folded into MANIFEST. This needs a THIRD toolchain, entirely
+# separate from the gcc-arm-linux-gnueabi used for the kernel/piko-update
+# above: the X11 stack needs uClibc-ng, built by
+# tools/build-uclibc-toolchain.sh into its own toolchain-x11/ directory so
+# it can never collide with anything else. Same reasoning as the parallel
+# setup in .github/workflows/build-piko-zip.yml (see that file's header
+# for the full rationale) -- this is a second, independent instance of
+# that same pattern for a different output package.
+#
+# The X11 submodule build itself is NOT cached (restoring a cache there
+# could silently overwrite what actions/checkout --recursive just
+# correctly checked out); only the toolchain and the third-party source
+# downloads are. If the X11 toolchain/deps aren't ready for any reason,
+# flash/build-update-package.sh degrades gracefully to a package without
+# the desktop, same as a kernel-src failure degrades to rootfs-only --
+# this job never fails just because the (much heavier, from-scratch) X11
+# build had a bad day.
 
 on:
   workflow_dispatch: {}
@@ -32,84 +66,137 @@ on:
     branches: [main]
     paths:
       - "userspace/src/**"
+      - "userspace/desktop/**"
       - "rootfs/**"
       - "flash/build-update-package.sh"
+      # Compiled into the package and exec'd by piko-update for every smf
+      # operation, so a change here changes what ships.
+      - "flash/piko-smf-write.c"
+      - "tools/setup-kernel-src.sh"
       - "tools/build-ssh.sh"
       - "tools/ssh-payload.sh"
       - "tools/build-uclibc-toolchain.sh"
       - "tools/uclibc-toolchain.config"
-      - "tools/setup-kernel-src.sh"
+      - "tools/build-thirdparty-deps.sh"
+      - "tools/setup-x11-src.sh"
+      - "tools/build-x11-stack.sh"
+      - "tools/build-st.sh"
+      - "tools/build-libiw.sh"
+      - "tools/build-matchbox-payload.sh"
       - "flash/qemu-smoke-test.sh"
       - "modules/**"
+      - "modules/x11/**"
       - "kernel.config-corgi-7.1.4"
+      - ".gitmodules"
       - ".github/workflows/build-update-package.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
+      - name: Check out repo (submodules -- X11/Matchbox stack)
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install ARM cross-compiler + kernel build/QEMU dependencies
+      - name: Install ARM cross-compiler + kernel build/QEMU/X11 build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-arm-linux-gnueabi \
               bison flex bc libssl-dev libelf-dev \
-              qemu-system-arm cpio
-          # crosstool-NG build deps, for the uClibc toolchain the SSH
-          # payload needs (see that step below). Same list
-          # build-piko-zip.yml installs for the OABI toolchain.
-          sudo apt-get install -y -qq \
-              build-essential git autoconf automake texinfo \
+              qemu-system-arm cpio \
+              build-essential git autoconf automake bison flex texinfo \
               gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
-              patch gawk python3-dev rsync
+              patch gawk python3-dev rsync \
+              pkg-config python3 x11proto-dev
+          # x11proto-dev is the Debian/Ubuntu package for the merged
+          # xorgproto headers (xproto, kbproto, randrproto, ...) -- every
+          # X.Org submodule build reads these from the HOST's
+          # /usr/share/pkgconfig (see tools/build-x11-stack.sh's
+          # PKG_CONFIG_LIBDIR). autoconf/automake/... etc. are
+          # crosstool-NG's own build dependencies, needed to provision the
+          # X11 toolchain below.
+
+      # Slow-but-cacheable, entirely separate from gcc-arm-linux-gnueabi
+      # above -- see this workflow's header for why the X11 stack needs
+      # its own toolchain. Same script and tracked config
+      # (tools/uclibc-toolchain.config) a fresh dev machine runs; nothing
+      # CI-specific about it.
+      - name: Cache X11/Matchbox toolchain (crosstool-NG build)
+        id: x11-toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain-x11
+          key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          save-always: true
+
+      - name: Provision X11/Matchbox toolchain
+        id: x11_toolchain
+        env:
+          PIKO_TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain-x11
+        run: |
+          set +e
+          ./tools/build-uclibc-toolchain.sh
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            echo "TOOLCHAIN_BIN_DIR=${PIKO_TOOLCHAIN_DIR}/x-tools/arm-unknown-linux-uclibcgnueabi/bin" >> "$GITHUB_ENV"
+          else
+            echo "X11 toolchain provisioning failed (exit $rc) -- package will ship without the desktop." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Only the raw downloaded tarballs -- keyed on the version pins
+      # inside the script itself. NOT userspace/stage-target (the built
+      # output): that gets rebuilt fresh every run, same reasoning as the
+      # X11 submodules not being cached (see this workflow's header).
+      - name: Cache third-party source downloads (zlib/expat/libpng/freetype/fontconfig/xkeyboard-config/dejavu)
+        if: steps.x11_toolchain.outputs.rc == '0'
+        uses: actions/cache@v4
+        with:
+          path: userspace/.thirdparty-cache
+          key: thirdparty-src-v1-${{ hashFiles('tools/build-thirdparty-deps.sh') }}
+          save-always: true
+
+      - name: Build third-party X11 dependencies
+        if: steps.x11_toolchain.outputs.rc == '0'
+        run: |
+          ./tools/build-thirdparty-deps.sh
 
       # scp + sftp-server (+ dbclient/dropbearkey) for the rootfs overlay.
       # An offline update package is what a device that is NOT reachable
       # over the network gets -- i.e. exactly the device that most needs
       # working file transfer the next time round.
       #
-      # These specifically cannot use the apt gcc-arm-linux-gnueabi
-      # installed above, even though everything else in this job does and
-      # even though they are statically linked: glibc's getpwnam/getpwuid
-      # go through NSS, which dlopen()s libnss_files.so.2 at runtime out of
-      # a static binary too, and that file does not exist on this rootfs.
-      # sftp-server would link, pass every ELF check, and then die with
-      # "No user found for uid 0" on the device. tools/build-ssh.sh's NSS
-      # check refuses to produce such a binary; see its header.
+      # Reuses the uClibc toolchain provisioned above, and genuinely needs
+      # it: these cannot be built with the apt gcc-arm-linux-gnueabi this
+      # job uses for piko-update, even though they are equally static.
+      # glibc routes getpwnam/getpwuid through NSS, which dlopen()s
+      # libnss_files.so.2 at runtime out of a static binary too, and that
+      # file does not exist on this rootfs -- sftp-server would link, pass
+      # every ELF check, and then die with "No user found for uid 0" on
+      # the device. tools/build-ssh.sh refuses to emit such a binary; see
+      # its header.
       #
-      # Cache key shared with build-piko-zip.yml, which builds the same
-      # toolchain -- whichever workflow runs first, the other restores it.
-      - name: Cache uClibc toolchain (crosstool-NG build)
-        uses: actions/cache@v4
-        with:
-          path: toolchain-uclibc
-          key: uclibc-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
-          save-always: true
-
+      # Non-fatal for the same reason the X11 steps are: a package with
+      # the rootfs overlay and no SSH payload is still a real, useful
+      # offline update, and better than no artifact at all.
       - name: Cache dropbear/OpenSSH release tarballs
+        if: steps.x11_toolchain.outputs.rc == '0'
         uses: actions/cache@v4
         with:
           path: |
             userspace/src/dropbear-*.tar.bz2
             userspace/src/openssh-*.tar.gz
           key: ssh-tarballs-${{ hashFiles('tools/build-ssh.sh') }}
+          save-always: true
 
-      # Non-fatal, same philosophy as the kernel-src fallback below: a
-      # package with the rootfs overlay and no SSH payload is still a real,
-      # useful offline update, and is strictly better than no artifact at
-      # all. flash/build-update-package.sh skips the payload on its own
-      # when userspace/stage-ssh is absent, and says so in its output --
-      # this step only makes the reason visible in the run summary.
       - name: Build scp + sftp-server (uClibc toolchain)
+        if: steps.x11_toolchain.outputs.rc == '0'
         id: ssh_payload
         run: |
           set +e
-          PIKO_TOOLCHAIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc" \
-              ./tools/build-uclibc-toolchain.sh && \
-          TOOLCHAIN_BIN_DIR="$GITHUB_WORKSPACE/toolchain-uclibc/x-tools/arm-unknown-linux-uclibcgnueabi/bin" \
-              ./tools/build-ssh.sh
+          ./tools/build-ssh.sh
           rc=$?
           set -e
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
