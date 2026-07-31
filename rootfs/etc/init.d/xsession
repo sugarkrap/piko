@@ -64,6 +64,15 @@ done
 DISPLAY=:0
 export DISPLAY
 
+# init runs this with essentially no environment, so HOME is unset --
+# every matchbox tool that looks under $HOME (themes, the wallpaper
+# picker's persisted choice, ...) silently falls back to mb_util_get_
+# homedir()'s /tmp default instead of finding anything here. This
+# session runs as root (see the file header), so give it root's real
+# home rather than leave HOME unset.
+HOME=/root
+export HOME
+
 # Zaurus keyboard layout: redefines the physical Fn key (which the kernel
 # reports as plain KEY_F3) as ISO_Level3_Shift and maps the Fn symbol
 # layer, so / : [ ] | etc. are typable. Non-fatal -- without it the

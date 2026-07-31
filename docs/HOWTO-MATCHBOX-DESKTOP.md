@@ -12,6 +12,10 @@ For the panel's applets specifically -- what exists, the four upstream bugs
 that had to be fixed, and why a two-applet panel is the default rather than
 a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
+For **writing our own GUI apps** against this X server, see
+`docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
+cross-compile line for your own programs.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -47,6 +51,8 @@ Nothing builds it. The classic one is `matchbox-desktop-classic`.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
+                                        # and libXrender staged first
 
 The last four are independent of each other once libmatchbox exists and
 can be built in parallel -- but give each its own `DESTDIR`, because they
@@ -131,6 +137,39 @@ already shipped for the rest of the desktop -- and its binary is picked up
 straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
 same as xkbcomp/xev.
 
+**xev** (`userspace/src/xev`) needs no special flags -- it is a stock
+X.Org autotools package, links against libX11 only, and
+`tools/build-x11-stack.sh` already builds it as part of the default
+package list. Its binary is read straight out of `userspace/src/xev/xev`,
+same as xkbcomp/Xfbdev.
+
+Its menu entry (`userspace/desktop/xev.desktop`) launches it **inside st**
+rather than bare, because xev only ever writes to stdout: started from the
+desktop that stdout is inherited from matchbox-session, which
+`/etc/init.d/xsession` redirects to `/tmp/matchbox-session.log` -- and
+`/tmp` here is jffs2 on NAND, not tmpfs, so every event line would be a
+flash write. In a terminal the events are visible live and nothing is
+written. Both halves of `Exec=` are absolute paths, and `Icon=` carries
+its `.png` extension, for the two reasons st.desktop had to be fixed for:
+`/usr/local/bin` is not on this device's `PATH`, and
+`mb_dot_desktop_icon_get_full_path()` never auto-appends an extension.
+
+**FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
+toolkit for writing our own apps against this X server, cross-built as a
+shared library by `tools/build-fltk.sh` and installed **into
+`userspace/stage-target` itself** rather than a stage of its own -- it is
+part of that X sysroot, and anything cross-linking against FLTK later
+needs it on the same include/lib path as libX11. Four of its configure
+choices are not guessable (`--x-includes`/`--x-libraries`, an explicit
+`--enable-xft`, system-vs-bundled image libraries, and building only
+`src/` + the image dirs) and it is the only C++ component in the stack,
+so the payload also ships `libstdc++.so.6`.
+
+**`docs/HOWTO-FLTK.md` covers all of it** -- the build, what is
+deliberately turned off, how to test it on the device with `fltktest`,
+the verified cross-compile line for your own apps, and a troubleshooting
+table. Verified on hardware 2026-07-31.
+
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
 640x480 clamshell. Two upstream bugs in that variant if you use it:
@@ -182,6 +221,71 @@ What matters for *building*:
 - Do not drop `--no-session` from that file. A stale
   `$HOME/.matchbox/mbdock.session` silently overrides `--default-apps`, and
   the panel rewrites it on every clean exit.
+
+---
+
+## Wallpaper: modes, formats, and why it's cached raw
+
+`matchbox-desktop` already had a background system (`--bg`, XSettings,
+theme `DesktopBgSpec=`); this extends it rather than replacing it.
+
+**Modes**, passed as `mode:filename` (or via the picker, see below):
+
+    img-mosaic:<filename>       tiles the image (alias: img-tiled:)
+    img-centered:<filename>     centers it, no scaling
+    img-stretched:<filename>    scales to fill, distorts aspect ratio
+    img-filled:<filename>       scales to cover, crops overflow,
+                                 keeps aspect ratio (alias: img-fill:)
+
+**Formats**: PNG, JPEG (if libmb was built `USE_JPG` -- the payload
+here is not, see below), XPM, and now **BMP** -- uncompressed 24/32bpp
+and 8bpp-paletted, decoded by a small loader added directly to
+`libmatchbox/libmb/mbpixbuf.c` with no new library dependency. This
+matters more than it looks: this build's `libmb.so.1` is linked
+against `libpng16` only, not libjpeg, so BMP is the easiest format to
+hand this device a wallpaper in without cross-building libjpeg too.
+
+**Why the result is cached, not just the source image.** Decoding a
+JPEG/PNG and scaling it to 480x640 is real CPU on an unaccelerated
+PXA255, and the original code paid that cost on *every launch* --
+including every boot, for a wallpaper that never changes between
+boots. `mbdesktop_view_init_bg()` now bakes the fully composited,
+already-scaled/cropped/tiled, already-pixel-format-converted result
+(RGB565 on this display) to `~/.matchbox/wallpaper.cache` as a raw
+byte dump the first time a wallpaper is resolved, and every later
+launch is just an `fread()` straight into the image buffer -- no
+decode, no scale, no color conversion. The cache is invalidated
+automatically if the desktop size, the mode+filename, or the source
+file's mtime changes; the write is temp-file-then-`rename()` so a
+power loss mid-boot (this device is fragile) can't leave a half
+written cache behind. Solid colors and gradients are pure in-memory
+math already and are never cached.
+
+**Setting it.** `mb-wallpaper-picker` is a small standalone touch app
+(built alongside `matchbox-desktop`, same `libmb` dependency, nothing
+extra) that scans `/usr/share/backgrounds` and
+`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files,
+shows a thumbnail grid with a 4-way mode selector, and on tap:
+writes `$HOME/.matchbox/wallpaper` (the file `matchbox-desktop` reads
+at startup, so the choice survives a reboot) and sets the
+`_MB_WALLPAPER_SPEC` property on the root window so an *already
+running* desktop updates immediately. The property exists because
+this device's busybox has no `kill`/`killall`/`pkill` at all -- there
+is no way to signal the running process, so an X property it already
+watches via `PropertyNotify` (the same mechanism `_MB_THEME_NAME`
+already used for live theme switches) is the only avenue. It ships a
+`.desktop` launcher with `Categories=Settings`, so it shows up in the
+desktop's Settings folder automatically via matchbox-common's
+vfolders -- no wiring needed beyond installing the file.
+
+Precedence at startup: `--bg` on the command line wins outright;
+otherwise a live `_MB_WALLPAPER_SPEC` root property (set by the
+picker in the current session) beats the persisted
+`$HOME/.matchbox/wallpaper` file, which beats the theme's
+`DesktopBgSpec=` default. `xsession` exports `HOME=/root` explicitly
+for this to work at all on a real boot -- `init` launches it with
+essentially no environment, so without that, every `$HOME`-based
+lookup here (and in themes) silently fell back to `/tmp`.
 
 ---
 

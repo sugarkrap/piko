@@ -67,7 +67,7 @@ flash/zImage
 flash/zImage-*
 flash/zImage.*
 # compiled flash helpers -- the matching *.c sources are tracked
-flash/pico-smf-write
+flash/piko-smf-write
 flash/piko-backup
 # tools/build-piko-install.sh's actual output location (flat in flash/,
 # matching where piko.cfg/updater.sh expect it on the SD card) -- distinct
@@ -116,6 +116,7 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/cardinfo
 !rootfs/usr/sbin/sdapps
 !rootfs/usr/sbin/bright
+!rootfs/usr/sbin/smfcommit
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;

@@ -1,5 +1,5 @@
 /*
- * pico-smf-write.c v2 - FTL-aware in-system SMF kernel slot writer
+ * piko-smf-write.c v3 - FTL-aware in-system SMF kernel slot writer
  *
  * The Sharp SL FTL stores logical->physical block mappings in the NAND OOB
  * (out-of-band) area.  For 512-byte pages with 16-byte OOB, the layout is:
@@ -19,10 +19,23 @@
  * which writes data AND free OOB bytes (8-15) together in one page program,
  * preserving the FTL mapping.
  *
- * Usage: pico-smf-write <mtd_dev> <image> <laddr> <max_size> [backup_path]
+ * Usage: piko-smf-write [--compare] <mtd_dev> <image> <laddr> <max_size> [backup_path]
+ *        piko-smf-write --backup <mtd_dev> <outfile>
  *   laddr     : decimal logical start address (e.g. 917504 = 0xE0000)
  *   max_size  : maximum image size in bytes (e.g. 1294336)
  *   backup    : optional path to dump full MTD before writing
+ *
+ * --compare is READ-ONLY: it scans the FTL and compares the logical range
+ * against <image> without erasing or writing anything. Exit status is the
+ * whole interface:
+ *   0 = flash already holds exactly this image (nothing to do)
+ *   3 = flash differs (a write would be needed)
+ *   1 = could not tell (I/O error, bad geometry, unmapped blocks)
+ *
+ * That 0-vs-3 distinction is what lets piko-update ship the bootstrap
+ * image in every package and still touch NAND only on the rare release
+ * that actually changes it -- see userspace/src/piko-update.c. Any answer
+ * other than a confident 0 must be treated as "do not skip the write".
  */
 
 #include <errno.h>
@@ -179,25 +192,249 @@ out:
     return ret;
 }
 
+/*
+ * Re-read the MTD and the backup file side by side and require them to
+ * match byte for byte.
+ *
+ * backup_mtd() above checks that every write() returned, which says the
+ * bytes reached the JFFS2 page cache -- not that they reached flash, and
+ * not that the file is the length it should be. On this board the backup
+ * is the entire recovery story for a bad smf write (no serial, no USB,
+ * last spare board -- AGENTS.md), so "the copy ran without erroring" is
+ * not a strong enough claim to erase a bootstrap partition on.
+ */
+static int verify_backup(const char *mtddev, const char *backup_path,
+                         uint32_t total_size)
+{
+    int in_fd  = open(mtddev, O_RDONLY);
+    int bak_fd = open(backup_path, O_RDONLY);
+    uint8_t *a = NULL, *b = NULL;
+    struct stat st;
+    int ret = -1;
+    uint32_t off = 0;
+
+    if (in_fd < 0)  { perror("open mtd for backup verify"); goto out; }
+    if (bak_fd < 0) { perror("open backup for verify"); goto out; }
+
+    if (fstat(bak_fd, &st) < 0) { perror("stat backup"); goto out; }
+    if ((uint32_t)st.st_size != total_size) {
+        fprintf(stderr, "backup verify FAILED: %s is %ld bytes, expected %u\n",
+                backup_path, (long)st.st_size, total_size);
+        goto out;
+    }
+
+    a = malloc(COPY_BUFSZ);
+    b = malloc(COPY_BUFSZ);
+    if (!a || !b) { perror("malloc verify bufs"); goto out; }
+
+    while (off < total_size) {
+        size_t chunk = (total_size - off) > COPY_BUFSZ ? COPY_BUFSZ : (total_size - off);
+        ssize_t n1 = read(in_fd, a, chunk);
+        ssize_t n2 = read(bak_fd, b, chunk);
+
+        if (n1 <= 0 || n2 != n1) {
+            fprintf(stderr, "backup verify FAILED: short read at offset %u\n", off);
+            goto out;
+        }
+        if (memcmp(a, b, (size_t)n1) != 0) {
+            fprintf(stderr, "backup verify FAILED: mismatch near offset %u\n", off);
+            goto out;
+        }
+        off += (uint32_t)n1;
+    }
+
+    printf("backup verified: %s (%u bytes) matches %s\n",
+           backup_path, total_size, mtddev);
+    ret = 0;
+
+out:
+    free(a); free(b);
+    if (in_fd  >= 0) close(in_fd);
+    if (bak_fd >= 0) close(bak_fd);
+    return ret;
+}
+
+/*
+ * Scan every physical block's OOB and build the FTL logical->physical map.
+ * log2phy[] gets UINT32_MAX for logical blocks with no physical home;
+ * phy_free[] is set for physical blocks carrying no valid logical number
+ * (erased, or wear-levelling spares) so the writer can allocate from them.
+ *
+ * Read-only. Shared by the write path and --compare specifically so the
+ * two can never disagree about where a given logical block actually lives
+ * -- a compare that read the wrong blocks would report "already correct"
+ * and silently skip a write the board needed.
+ */
+static void ftl_scan(int fd, uint32_t total_blocks, uint32_t erasesize,
+                     uint32_t oobsize, uint32_t *log2phy, uint8_t *phy_free)
+{
+    uint32_t mapped = 0, free_count = 0;
+
+    for (uint32_t i = 0; i < total_blocks; i++)
+        log2phy[i] = UINT32_MAX;
+
+    for (uint32_t p = 0; p < total_blocks; p++) {
+        loff_t baddr = (loff_t)(p * erasesize);
+
+        int bad = ioctl(fd, MEMGETBADBLOCK, &baddr);
+        if (bad > 0) continue;  /* skip bad blocks */
+
+        int lognum = read_block_lognum(fd, p * erasesize, oobsize);
+        if (lognum >= 0 && (uint32_t)lognum < total_blocks) {
+            if (log2phy[lognum] == UINT32_MAX) {
+                log2phy[lognum] = p;
+                mapped++;
+            }
+        } else {
+            phy_free[p] = 1;
+            free_count++;
+        }
+    }
+    printf("FTL scan: %u mapped, %u free/unallocated\n", mapped, free_count);
+}
+
+/*
+ * --compare implementation. Returns 0 identical, 3 different, 1 undetermined.
+ *
+ * The tail of the last erase block is compared against 0xFF padding, which
+ * is exactly what the write path lays down (Step 5 memsets to 0xFF before
+ * copying the final partial chunk) and what its own Step 7 verify expects.
+ * Keeping the two identical is the point -- otherwise a freshly written
+ * image would compare as "different" forever and re-flash on every run.
+ */
+static int do_compare(int fd, const char *image_path, uint32_t laddr,
+                      uint32_t image_size, uint32_t erasesize,
+                      uint32_t oobsize, uint32_t total_blocks)
+{
+    uint32_t log_start  = laddr / erasesize;
+    uint32_t num_blocks = (image_size + erasesize - 1) / erasesize;
+    uint32_t *log2phy   = malloc(sizeof(uint32_t) * total_blocks);
+    uint8_t  *phy_free  = calloc(total_blocks, 1);
+    uint8_t  *src_buf   = malloc(erasesize);
+    uint8_t  *dst_buf   = malloc(erasesize);
+    int src_fd = -1;
+    int rc = 1;
+    uint32_t remaining = image_size;
+
+    if (!log2phy || !phy_free || !src_buf || !dst_buf) {
+        perror("malloc compare buffers");
+        goto out;
+    }
+
+    src_fd = open(image_path, O_RDONLY);
+    if (src_fd < 0) { perror("open image for compare"); goto out; }
+
+    ftl_scan(fd, total_blocks, erasesize, oobsize, log2phy, phy_free);
+
+    for (uint32_t i = 0; i < num_blocks; i++) {
+        uint32_t L = log_start + i;
+        uint32_t chunk = remaining < erasesize ? remaining : erasesize;
+        uint32_t got = 0;
+        off_t off;
+        ssize_t rn;
+
+        if (log2phy[L] == UINT32_MAX) {
+            /* No physical block backs this logical one, so there is
+             * nothing to compare against -- report "undetermined", never
+             * "identical", so the caller writes rather than skipping. */
+            printf("compare: logical %u is unmapped\n", L);
+            goto out;
+        }
+
+        memset(src_buf, 0xFF, erasesize);
+        memset(dst_buf, 0x00, erasesize);
+
+        while (got < chunk) {
+            ssize_t n = read(src_fd, src_buf + got, chunk - got);
+            if (n <= 0) { perror("read image for compare"); goto out; }
+            got += (uint32_t)n;
+        }
+
+        off = (off_t)log2phy[L] * (off_t)erasesize;
+        rn = pread(fd, dst_buf, erasesize, off);
+        if (rn < 0) { perror("pread mtd for compare"); goto out; }
+        if ((uint32_t)rn != erasesize) {
+            fprintf(stderr, "compare: short read at physical %u\n", log2phy[L]);
+            goto out;
+        }
+
+        if (memcmp(src_buf, dst_buf, erasesize) != 0) {
+            printf("compare: differs at logical %u (physical %u)\n", L, log2phy[L]);
+            rc = 3;
+            goto out;
+        }
+
+        remaining -= chunk;
+    }
+
+    printf("compare: flash already holds this exact image (%u bytes)\n", image_size);
+    rc = 0;
+
+out:
+    if (src_fd >= 0) close(src_fd);
+    free(log2phy); free(phy_free); free(src_buf); free(dst_buf);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 5 || argc > 6) {
+    int compare_only = 0;
+    int argbase = 1;
+
+    /* piko-smf-write --backup <mtddev> <outfile>
+     * Dump the whole partition and prove the dump is readable and correct,
+     * with no erase or write anywhere in the path. Split out from the
+     * writer's own optional backup step so a caller can take the backup,
+     * confirm it, and only then decide to commit -- see smf_commit() in
+     * userspace/src/piko-update.c. */
+    if (argc > 1 && strcmp(argv[1], "--backup") == 0) {
+        struct mtd_info_user bmi;
+        int bfd;
+
+        if (argc != 4) {
+            fprintf(stderr, "usage: %s --backup <mtddev> <outfile>\n", argv[0]);
+            return 2;
+        }
+        bfd = open(argv[2], O_RDONLY);
+        if (bfd < 0) { perror("open mtd"); return 1; }
+        if (ioctl(bfd, MEMGETINFO, &bmi) < 0) {
+            perror("MEMGETINFO"); close(bfd); return 1;
+        }
+        close(bfd);
+
+        printf("backing up %s (%u bytes) to %s\n", argv[2], bmi.size, argv[3]);
+        if (backup_mtd(argv[2], argv[3], bmi.size) != 0)
+            return 1;
+        if (verify_backup(argv[2], argv[3], bmi.size) != 0)
+            return 1;
+        return 0;
+    }
+
+    if (argc > 1 && strcmp(argv[1], "--compare") == 0) {
+        compare_only = 1;
+        argbase = 2;
+    }
+
+    if (argc - argbase < 4 || argc - argbase > 5) {
         fprintf(stderr,
-            "usage: %s <mtddev> <image> <laddr> <max_size> [backup_file]\n"
+            "usage: %s [--compare] <mtddev> <image> <laddr> <max_size> [backup_file]\n"
             "  laddr    : decimal logical start address (e.g. 917504 = 0xE0000)\n"
-            "  max_size : max image bytes (e.g. 1294336)\n",
+            "  max_size : max image bytes (e.g. 1294336)\n"
+            "  --compare: read-only; exit 0 = flash matches, 3 = differs, 1 = unknown\n",
             argv[0]);
         return 2;
     }
 
-    const char *mtd_dev   = argv[1];
-    const char *image_path = argv[2];
-    uint32_t laddr    = (uint32_t)strtoul(argv[3], NULL, 0);
-    uint32_t max_size = (uint32_t)strtoul(argv[4], NULL, 0);
-    const char *backup_path = (argc == 6) ? argv[5] : NULL;
+    const char *mtd_dev   = argv[argbase];
+    const char *image_path = argv[argbase + 1];
+    uint32_t laddr    = (uint32_t)strtoul(argv[argbase + 2], NULL, 0);
+    uint32_t max_size = (uint32_t)strtoul(argv[argbase + 3], NULL, 0);
+    const char *backup_path = (argc - argbase == 5) ? argv[argbase + 4] : NULL;
 
-    /* Open MTD device and get geometry. */
-    int fd = open(mtd_dev, O_RDWR);
+    /* Open MTD device and get geometry. --compare never needs write access,
+     * so don't ask for it -- an O_RDONLY fd cannot erase this partition no
+     * matter what goes wrong below. */
+    int fd = open(mtd_dev, compare_only ? O_RDONLY : O_RDWR);
     if (fd < 0) { perror("open mtd"); return 1; }
 
     struct mtd_info_user mi;
@@ -242,6 +479,13 @@ int main(int argc, char **argv)
         close(fd); return 1;
     }
 
+    if (compare_only) {
+        int rc = do_compare(fd, image_path, laddr, image_size,
+                            erasesize, oobsize, total_blocks);
+        close(fd);
+        return rc;
+    }
+
     /* ------------------------------------------------------------------ *
      * Step 1: Scan FTL to build logical->physical map.                   *
      * ------------------------------------------------------------------ */
@@ -253,28 +497,8 @@ int main(int argc, char **argv)
         perror("malloc FTL tables"); free(log2phy); free(phy_free);
         close(fd); return 1;
     }
-    for (uint32_t i = 0; i < total_blocks; i++)
-        log2phy[i] = UINT32_MAX;
 
-    uint32_t mapped = 0, free_count = 0;
-    for (uint32_t p = 0; p < total_blocks; p++) {
-        loff_t baddr = (loff_t)(p * erasesize);
-
-        int bad = ioctl(fd, MEMGETBADBLOCK, &baddr);
-        if (bad > 0) continue;  /* skip bad blocks */
-
-        int lognum = read_block_lognum(fd, p * erasesize, oobsize);
-        if (lognum >= 0 && (uint32_t)lognum < total_blocks) {
-            if (log2phy[lognum] == UINT32_MAX) {
-                log2phy[lognum] = p;
-                mapped++;
-            }
-        } else {
-            phy_free[p] = 1;
-            free_count++;
-        }
-    }
-    printf("FTL scan: %u mapped, %u free/unallocated\n", mapped, free_count);
+    ftl_scan(fd, total_blocks, erasesize, oobsize, log2phy, phy_free);
 
     /* ------------------------------------------------------------------ *
      * Step 2: Choose physical blocks for each target logical block.       *
@@ -324,7 +548,9 @@ int main(int argc, char **argv)
      * ------------------------------------------------------------------ */
     if (backup_path) {
         printf("backing up full mtd to %s\n", backup_path);
-        if (backup_mtd(mtd_dev, backup_path, total_size) != 0) {
+        if (backup_mtd(mtd_dev, backup_path, total_size) != 0 ||
+            verify_backup(mtd_dev, backup_path, total_size) != 0) {
+            fprintf(stderr, "refusing to erase: backup could not be confirmed\n");
             free(target_phy); free(log2phy); free(phy_free);
             close(fd); return 1;
         }

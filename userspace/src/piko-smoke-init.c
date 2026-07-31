@@ -199,10 +199,64 @@ static int run_piko_update_dry_run(void)
     return 0;
 }
 
+/* Checks the smf/bootstrap half of piko-update without any NAND to write.
+ *
+ * QEMU's spitz machine has no Sharp-FTL smf partition, so this cannot
+ * exercise a real flash -- and that is the point. What it does pin down is
+ * that the *safe* paths stay safe: the writer ships, a dry run does not
+ * stage a bootstrap write, and asking to commit when nothing is pending is
+ * a clean no-op rather than an error or (much worse) an attempted write.
+ * Those are exactly the behaviours a careless refactor would break
+ * silently, since nobody exercises them on real hardware until the one day
+ * it matters. */
+static int run_smf_checks(void)
+{
+    pid_t pid;
+    int status;
+    int failed = 0;
+
+    if (access("/usr/sbin/piko-smf-write", X_OK) != 0) {
+        printf("smf FAILED: /usr/sbin/piko-smf-write not shipped in the package: %s\n",
+               strerror(errno));
+        failed = 1;
+    } else {
+        printf("smf OK: piko-smf-write present in package\n");
+    }
+
+    /* The dry run above must not have staged a bootstrap write. */
+    if (access("/boot/smf-pending", F_OK) == 0) {
+        printf("smf FAILED: --dry-run created /boot/smf-pending\n");
+        failed = 1;
+    } else {
+        printf("smf OK: --dry-run left no pending-bootstrap marker\n");
+    }
+
+    /* --commit-smf with nothing pending must succeed and do nothing. */
+    pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        char *argv[] = {"/usr/sbin/piko-update", "--commit-smf", NULL};
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    if (waitpid(pid, &status, 0) < 0)
+        return -1;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        printf("smf FAILED: --commit-smf with nothing pending did not exit 0\n");
+        failed = 1;
+    } else {
+        printf("smf OK: --commit-smf with nothing pending is a clean no-op\n");
+    }
+
+    return failed ? -1 : 0;
+}
+
 int main(void)
 {
     int modules_failed;
     int piko_update_failed;
+    int smf_failed;
 
     mount("proc", "/proc", "proc", 0, NULL);
     mount("sysfs", "/sys", "sysfs", 0, NULL);
@@ -221,8 +275,11 @@ int main(void)
     printf("\n-- exercising piko-update against the actual shipped package --\n");
     piko_update_failed = run_piko_update_dry_run();
 
+    printf("\n-- checking the smf/bootstrap paths stay inert --\n");
+    smf_failed = run_smf_checks();
+
     printf("\n");
-    if (modules_failed == 0 && piko_update_failed == 0) {
+    if (modules_failed == 0 && piko_update_failed == 0 && smf_failed == 0) {
         printf("PIKO-SMOKE-TEST: PASS\n");
     } else {
         printf("PIKO-SMOKE-TEST: FAIL:");
@@ -230,6 +287,8 @@ int main(void)
             printf(" module load failure");
         if (piko_update_failed)
             printf(" piko-update dry-run");
+        if (smf_failed)
+            printf(" smf checks");
         printf("\n");
     }
     fflush(stdout);

@@ -93,6 +93,10 @@ chmod 755 "$STAGE/root/init"
 # silently clobber piko-smoke-init.
 tar xf "$UPDATE_TAR" -C "$STAGE/root" usr/sbin/piko-update
 chmod 755 "$STAGE/root/usr/sbin/piko-update"
+# piko-update execs this for smf/NAND work; the smoke test checks it ships
+# and that the paths using it stay inert with no NAND present.
+tar xf "$UPDATE_TAR" -C "$STAGE/root" usr/sbin/piko-smf-write
+chmod 755 "$STAGE/root/usr/sbin/piko-smf-write"
 if tar tf "$UPDATE_TAR" | grep -q '^lib/modules/'; then
     tar xf "$UPDATE_TAR" -C "$STAGE/root" --wildcards 'lib/modules/*'
 fi
