@@ -94,11 +94,27 @@ MODULE_PARM_DESC(vsync_debug, "enable extra vsync timeout diagnostics");
  *   W100_VBLANK_US) and is what the tight poll in w100_vsync_pause()
  *   exists for.
  *
- * NEEDS ON-DEVICE VERIFICATION: whether mmGRAPHIC_OFFSET is among the
- * registers covered by the display double buffer is not documented in
- * anything we have. Boot with pan_hw_latch=1 pan_verify=1 once and read
- * the log -- see the comment on w100_pan_flip(). If the latch does not
- * cover it, set pan_hw_latch=0.
+ * VERIFIED ON HARDWARE (Corgi, 2026-07-31). mmGRAPHIC_OFFSET *is* covered
+ * by the display double buffer. Sampled through /dev/mem at 0x08010000
+ * while panning between two buffers (tools/src/fbflip.c hold):
+ *
+ *   yoffset=480 -> GRAPHIC_OFFSET = 0x0092bb00
+ *   yoffset=0   -> GRAPHIC_OFFSET = 0x00895b00
+ *
+ * which are exactly the two addresses w100fb_scanout_offset() computes for
+ * the 90-degree rotated mode, so the scanout base really moves. And
+ * mmDISP_DB_BUF_CNTL goes 0x79 -> 0x7b across the pan: en_db_buf (bit 0)
+ * stays set and update_db_buf_done (bit 1) asserts, i.e. the promotion
+ * completes rather than stranding the write in the shadow bank.
+ *
+ * Cost of each path, 20 flips each, same binary and board:
+ *
+ *   pan_hw_latch=1   mean    95 us   worst    125 us
+ *   pan_hw_latch=0   mean 18126 us   worst  25378 us
+ *
+ * The software path blocks ~18 ms of every 39 ms frame -- half a frame,
+ * which is what waiting on a randomly-phased vblank costs on average. The
+ * latch is ~190x cheaper and hands that time back to the decoder.
  */
 static bool w100_pan_hw_latch = true;
 module_param_named(pan_hw_latch, w100_pan_hw_latch, bool, 0644);
@@ -748,20 +764,17 @@ static unsigned long w100fb_scanout_offset(struct w100fb_par *par,
  * and the pan becomes non-blocking, so a decoder no longer forfeits a frame
  * period per flip just to be told when blanking started.
  *
- * NEEDS ON-DEVICE VERIFICATION. We have no w100 register spec that says
- * whether mmGRAPHIC_OFFSET is one of the double-buffered registers. Two
- * outcomes, both diagnosable:
+ * Confirmed working on this board -- see the measurements on the
+ * pan_hw_latch parameter above. The fallbacks below are kept anyway,
+ * because this driver also serves the w3200/w3220 (iPAQ hx4700) where none
+ * of that has been checked:
  *
- *   - It is buffered: flips are clean and tear-free. pan_verify=1 logs
- *     "vblank latch completed".
- *   - It is not buffered: the write takes effect immediately, so behaviour
- *     is the legacy mid-frame write (tearing, no worse than before) and
- *     pan_verify=1 reports that the latch never completed. Set
- *     pan_hw_latch=0 to go back to the software-timed path.
- *
- * A third case is guarded against directly below: if en_db_buf happens to be
- * clear, the shadow bank is not active, so a raw write would take effect
- * immediately and mid-frame. Fall back to the timed path for that flip.
+ *   - pan_verify=1 reports whether the promotion completes, so the same
+ *     question can be answered on another board in one boot.
+ *   - pan_hw_latch=0 returns to the software-timed write.
+ *   - If en_db_buf is clear the shadow bank is not active, so a raw write
+ *     would take effect immediately and mid-frame; fall back to the timed
+ *     path for that flip rather than tearing.
  */
 static void w100_pan_flip(unsigned long addr)
 {

@@ -15,7 +15,17 @@
  *   fbflip setup         try to claim a second buffer (yres_virtual = 2*yres)
  *   fbflip flip [n]      claim, fill the two buffers with solid colours, and
  *                        flip between them n times (default 60), timing each
+ *   fbflip hold [secs]   pan to the second buffer (solid blue) and STAY there
+ *                        for secs (default 5), then pan back
  *   fbflip vsync [n]     time FBIO_WAITFORVSYNC, for comparison
+ *
+ * 'hold' is the test that separates "the pan ioctl returned 0" from "the
+ * scanout address actually changed". X keeps drawing into buffer 0, so if
+ * the pan really took effect the screen goes solid blue and stays there
+ * while X's output becomes invisible. If the desktop remains on screen, the
+ * ioctl succeeded but the flip did not -- which is the failure mode to expect
+ * if mmGRAPHIC_OFFSET lands in the double-buffer shadow bank and is never
+ * promoted (see w100_pan_flip() in the driver).
  *
  * What to look for in 'flip': the two buffers are solid red and solid blue.
  * A clean flip shows solid colour. A torn flip shows a band of the other
@@ -40,6 +50,48 @@
 #ifndef FBIO_WAITFORVSYNC
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, unsigned int)
 #endif
+
+/*
+ * Direct register peek, so "the pan ioctl returned 0" can be told apart from
+ * "the scanout address actually moved" without anyone watching the panel.
+ *
+ * The w100 sits at 0x08000000 on Corgi and its register block is at +0x10000
+ * (same mapping the w100-warmup code in corgi_patched.c uses, and the same
+ * one DEADLETTER-W100-VSYNC.md sampled mmCRTC_FRAME through).
+ */
+#define W100_REGS_PHYS	0x08010000UL
+#define REG_GRAPHIC_OFFSET	0x0418
+#define REG_DISP_DB_BUF_CNTL	0x04D8
+
+static volatile unsigned char *regs;
+
+static int regs_open(void)
+{
+	int mfd = open("/dev/mem", O_RDONLY | O_SYNC);
+	void *p;
+
+	if (mfd < 0)
+		return -1;
+	p = mmap(NULL, 0x1000, PROT_READ, MAP_SHARED, mfd, W100_REGS_PHYS);
+	close(mfd);
+	if (p == MAP_FAILED)
+		return -1;
+	regs = p;
+	return 0;
+}
+
+static unsigned int reg_rd(unsigned int off)
+{
+	return *(volatile unsigned int *)(regs + off);
+}
+
+static void dump_regs(const char *when)
+{
+	if (!regs)
+		return;
+	printf("    [%s] GRAPHIC_OFFSET=%#010x  DISP_DB_BUF_CNTL=%#010x\n",
+	       when, reg_rd(REG_GRAPHIC_OFFSET), reg_rd(REG_DISP_DB_BUF_CNTL));
+}
 
 static long elapsed_us(struct timespec *a, struct timespec *b)
 {
@@ -175,6 +227,49 @@ int main(int argc, char **argv)
 
 	if (!strcmp(mode, "setup")) {
 		do_pan(fd, &var, 0);
+		return 0;
+	}
+
+	if (!strcmp(mode, "hold")) {
+		int secs = argc > 2 ? atoi(argv[2]) : 5;
+		size_t buf_bytes = (size_t)fix.line_length * var.yres;
+		size_t total = buf_bytes * 2;
+		unsigned short *fb;
+		unsigned int n;
+
+		fb = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (fb == MAP_FAILED) {
+			perror("mmap");
+			return 1;
+		}
+		/* Second buffer only: solid blue (RGB565 0x001F). */
+		for (n = 0; n < buf_bytes / 2; n++)
+			fb[buf_bytes / 2 + n] = 0x001F;
+
+		if (regs_open() < 0)
+			printf("(no /dev/mem access -- register peek disabled)\n");
+
+		printf("\npanning to buffer 1 (solid blue) for %d s...\n", secs);
+		dump_regs("before pan");
+		fflush(stdout);
+		if (do_pan(fd, &var, var.yres) < 0) {
+			printf("pan FAILED\n");
+			munmap(fb, total);
+			return 1;
+		}
+		dump_regs("just after pan");
+		sleep(secs);
+		dump_regs("after holding");
+		printf("panning back to buffer 0 (the desktop)\n");
+		do_pan(fd, &var, 0);
+		usleep(100000);
+		dump_regs("after panning back");
+		printf("\nexpected for this 90-degree rotated mode:\n"
+		       "  yoffset=0   -> GRAPHIC_OFFSET = 0x00895b00\n"
+		       "  yoffset=480 -> GRAPHIC_OFFSET = 0x0092bb00\n"
+		       "if the value does not move, the ioctl succeeded but the\n"
+		       "flip did not (shadow bank never promoted).\n");
+		munmap(fb, total);
 		return 0;
 	}
 
