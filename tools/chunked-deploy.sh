@@ -550,6 +550,40 @@ elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/build-ssh.sh)"
 fi
 
+# 7d. Package manager (opkg) + its wrappers.
+#
+# opkg itself is staged by tools/build-opkg.sh, not built here. It is a
+# single ~520KB static binary -- no libopkg.so, no libarchive.so -- so
+# there is nothing else to ship alongside it and it keeps working even if
+# a package it installed broke a shared library.
+#
+# /etc/opkg/opkg.conf is NOT optional and NOT cosmetic: it carries the
+# `arch` lines that refuse Sharp-era packages. Without the file opkg falls
+# back to a built-in architecture list containing "arm" and accepts them
+# silently. See the file's own header, and tools/test-opkg-gate.sh.
+#
+# kill is deployed because /usr/sbin/deskscan needs it (this busybox has
+# no kill/killall/pkill applet), and because the X11 payload step further
+# down already assumes /usr/local/bin/kill exists to stop the session.
+if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
+    send_file "$REPO/userspace/stage-target/usr/bin/opkg" "/usr/bin/opkg"
+    send_file "$REPO/rootfs/etc/opkg/opkg.conf" "/etc/opkg/opkg.conf"
+    send_file "$REPO/rootfs/usr/sbin/pkgadd"   "/usr/sbin/pkgadd"
+    send_file "$REPO/rootfs/usr/sbin/pkgdel"   "/usr/sbin/pkgdel"
+    send_file "$REPO/rootfs/usr/sbin/pkglist"  "/usr/sbin/pkglist"
+    send_file "$REPO/rootfs/usr/sbin/deskscan" "/usr/sbin/deskscan"
+    ssh_do "chmod 0755 /usr/bin/opkg /usr/sbin/pkgadd /usr/sbin/pkgdel /usr/sbin/pkglist /usr/sbin/deskscan"
+    ssh_do "chmod 0644 /etc/opkg/opkg.conf"
+    ssh_do "mkdir -p /var/lib/opkg/info /var/cache/opkg"
+else
+    echo "==> no staged opkg -- skipping (build it with tools/build-opkg.sh)"
+fi
+
+if [ -x "$REPO/userspace/src/kill" ]; then
+    send_file "$REPO/userspace/src/kill" "/usr/local/bin/kill"
+    ssh_do "chmod 0755 /usr/local/bin/kill"
+fi
+
 # 8. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,

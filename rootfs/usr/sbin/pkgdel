@@ -1,0 +1,47 @@
+#!/bin/sh
+# pkgdel: remove an installed package.
+#
+# Single word, per AGENTS.md. Package names have no awkward characters,
+# so this one can take the name directly:
+#
+#   pkgdel NAME     remove NAME (from wherever it is installed)
+#
+# See also: pkglist (what is installed), pkgadd (install).
+
+OPKG=/usr/bin/opkg
+CONF=/etc/opkg/opkg.conf
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT=/mnt/card
+
+if [ ! -x "$OPKG" ]; then
+    echo "pkgdel: $OPKG is missing -- opkg is not installed on this device."
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    echo "usage: pkgdel NAME"
+    echo
+    echo "Run pkglist to see what is installed."
+    exit 1
+fi
+
+# Add the card destination when a card is present, so packages installed
+# on the card can be removed too. Only when it is really mounted -- see
+# the note in /usr/sbin/pkgadd about opkg creating destination trees on
+# the NAND for destinations that are not there.
+if grep -q " $CARD_MNT " /proc/mounts 2>/dev/null; then
+    DEST_OPTS="--add-dest card:$CARD_ROOT"
+else
+    DEST_OPTS=""
+fi
+
+"$OPKG" --conf "$CONF" $DEST_OPTS remove "$@"
+RC=$?
+
+if [ "$RC" -eq 0 ]; then
+    # The desktop drops the icon by itself -- matchbox-desktop watches the
+    # application directories and reloads when a .desktop file goes away.
+    echo "Removed."
+fi
+
+exit "$RC"

@@ -168,6 +168,29 @@ else
     echo "==> skipping md5sum (no $MD5SUM_SRC)"
 fi
 
+# --- 1b. kill (the only way to signal a process on this device) -------------
+# This busybox has no kill, killall or pkill applet at all, so without this
+# binary there is no way to send a signal to anything. tools/chunked-deploy.sh
+# already RELIES on /usr/local/bin/kill existing (it stops the running X
+# session with it before unpacking the payload), and /usr/sbin/deskscan uses
+# it to ask matchbox-desktop to reload -- but until now nothing actually
+# built it, so a device that had never been hand-fed a copy simply did not
+# have one. Same -static reasoning as md5sum above.
+KILL_SRC="$REPO/userspace/src/kill.c"
+KILL_BIN="$REPO/userspace/src/kill"
+if [ -f "$KILL_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$KILL_BIN" ] || [ "$KILL_SRC" -nt "$KILL_BIN" ]; then
+        echo "==> building userspace/src/kill"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$KILL_BIN" "$KILL_SRC"
+        "${CROSS_COMPILE}strip" "$KILL_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/kill already up to date"
+    fi
+else
+    echo "==> skipping kill (no $KILL_SRC)"
+fi
+
 # --- 2. SSH file transfer (scp + sftp-server, and a reproducible dropbear) --
 # Deliberately early and unconditional: this is the transport everything
 # else in this list is delivered over (AGENTS.md -- no USB, no serial), so
