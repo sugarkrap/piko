@@ -47,6 +47,17 @@ locally (see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`) — also includes the
 stage-2 `zImage` and every module `chunked-deploy.sh` deploys. Every file
 gets an MD5 in a `MANIFEST` entry written into the package.
 
+**It also carries the X11/Matchbox desktop** (libX11/libXft/fontconfig/
+freetype, the four Matchbox apps, `st`) if the X11 toolchain and
+third-party deps are available locally — see `docs/HOWTO-MATCHBOX-DESKTOP.md`.
+`tools/build-x11-stack.sh` + `tools/build-st.sh` + `tools/build-matchbox-
+payload.sh` build/stage it (all idempotent), then every file in the
+resulting payload is folded into `MANIFEST` individually. Same graceful
+fallback as a missing `kernel-src/`: not fatal if the X11 prerequisites
+aren't ready, the package just ships without the desktop, noted as such
+in `MANIFEST`. Set `SKIP_X11=1` to skip it deliberately (e.g. a
+kernel-only respin).
+
 **kernel-src/ is gitignored and only reconstructed on demand.**
 `tools/setup-kernel-src.sh` automates `docs/HANDOFF.md`'s manual
 reconstruction procedure: download a pristine kernel.org tarball, then
@@ -184,9 +195,17 @@ ships its own `md5sum`). The first entry must be a file named `MANIFEST`:
 PIKO-UPDATE-PACKAGE 1
 # free-text lines starting with '#' are printed on the device and ignored
 <32-hex-char md5>  <path, relative to />
+SYMLINK <path, relative to /> -> <target>
 ...
 ```
 
 Every other entry must have a matching `MANIFEST` line and vice versa —
 `flash/build-update-package.sh` always produces this shape; hand-rolling
 one is only useful for testing `piko-update` itself.
+
+The `SYMLINK` line exists for the X11/Matchbox payload's shared-library
+SONAME aliases (e.g. `libX11.so.6 -> libX11.so.6.3.0`) — a symlink has no
+content to hash, so its archive entry (tar typeflag `2`, no data blocks)
+is matched by path and its `linkname` is cross-checked against the
+`MANIFEST`-recorded target instead, same "trust nothing, verify
+everything" spirit as the MD5 check on regular files.

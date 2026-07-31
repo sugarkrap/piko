@@ -67,11 +67,20 @@
  *   PIKO-UPDATE-PACKAGE 1              (required first line, exact match)
  *   # free-text lines starting with '#' are printed and otherwise ignored
  *   <32-hex-char md5>  <path relative to />
+ *   SYMLINK <path relative to /> -> <target>
  *   ...
  *
  * Every non-MANIFEST, non-directory entry in the archive must have a
  * matching MANIFEST line, and vice versa -- a file missing from either
- * side fails the whole update before anything is touched.
+ * side fails the whole update before anything is touched. A SYMLINK line
+ * has no content to hash (the tar entry carries no data blocks); its
+ * archive typeflag '2' entry is matched by path, and the archive's own
+ * linkname is cross-checked against the MANIFEST-recorded target before
+ * the symlink is staged, same "trust nothing, verify everything" spirit
+ * as the md5 check on regular files. Added for the X11/Matchbox desktop
+ * payload, which relies on symlinks for shared-library SONAMEs (e.g.
+ * libX11.so.6 -> libX11.so.6.3.0) -- until then this format shipped no
+ * symlinks at all.
  *
  * Safety model (this is the last spare board, no serial/USB recovery --
  * see AGENTS.md):
@@ -123,7 +132,11 @@
 #include "md5.h"
 
 #define BLOCK_SIZE      512
-#define MAX_ENTRIES     512
+/* Raised from 512 when the X11/Matchbox desktop payload (~450 regular
+ * files + symlinks) started shipping through this format -- the old cap
+ * left almost no headroom once the existing kernel-modules + rootfs
+ * overlay entries were added in too. */
+#define MAX_ENTRIES     1024
 #define MAX_PATH        300
 #define STAGING_DIR     "/tmp/piko-update.staging"
 #define LOCK_PATH       "/tmp/piko-update.lock"
@@ -176,6 +189,8 @@ struct tar_header {
 struct manifest_entry {
     char path[MAX_PATH];
     char md5hex[33];
+    int is_symlink;
+    char target[MAX_PATH];   /* only meaningful when is_symlink */
     int seen;
 };
 
@@ -410,6 +425,43 @@ static int parse_manifest(char *buf)
             continue;
         }
 
+        if (strncmp(line, "SYMLINK ", 8) == 0) {
+            char *path = line + 8;
+            char *arrow = strstr(path, " -> ");
+
+            if (!arrow || arrow == path) {
+                fprintf(stderr, "piko-update: malformed SYMLINK line: %s\n", line);
+                return -1;
+            }
+            *arrow = '\0';
+            {
+                const char *target = arrow + 4;
+
+                if (*target == '\0') {
+                    fprintf(stderr, "piko-update: malformed SYMLINK line: %s\n", line);
+                    return -1;
+                }
+                if (manifest_count >= MAX_ENTRIES) {
+                    fprintf(stderr, "piko-update: too many files in archive (max %d)\n", MAX_ENTRIES);
+                    return -1;
+                }
+                if (!path_is_safe(path)) {
+                    fprintf(stderr, "piko-update: unsafe path in MANIFEST: %s\n", path);
+                    return -1;
+                }
+
+                {
+                    struct manifest_entry *e = &manifest[manifest_count++];
+                    e->md5hex[0] = '\0';
+                    e->is_symlink = 1;
+                    snprintf(e->path, sizeof(e->path), "%s", path);
+                    snprintf(e->target, sizeof(e->target), "%s", target);
+                    e->seen = 0;
+                }
+            }
+            continue;
+        }
+
         if (strlen(line) < 34 || line[32] != ' ' || !is_hex32(line)) {
             fprintf(stderr, "piko-update: malformed MANIFEST line: %s\n", line);
             return -1;
@@ -427,6 +479,7 @@ static int parse_manifest(char *buf)
             struct manifest_entry *e = &manifest[manifest_count++];
             memcpy(e->md5hex, line, 32);
             e->md5hex[32] = '\0';
+            e->is_symlink = 0;
             snprintf(e->path, sizeof(e->path), "%s", line + 33);
             e->seen = 0;
         }
@@ -604,6 +657,8 @@ static void verify_archive(const char *archive_path)
 
             if (!want)
                 die("archive contains %s, which is not listed in MANIFEST", full_name);
+            if (want->is_symlink)
+                die("archive has %s as a regular file, but MANIFEST lists it as a symlink", full_name);
             if (want->seen)
                 die("archive contains %s twice", full_name);
 
@@ -614,7 +669,47 @@ static void verify_archive(const char *archive_path)
             continue;
         }
 
-        die("unsupported entry type '%c' for %s (only files and directories are supported)",
+        if (typeflag == '2') { /* symlink */
+            struct manifest_entry *want = find_manifest(full_name);
+            char stage_path[MAX_PATH + 32];
+            char stage_dir[MAX_PATH + 16];
+            char linkname[101];
+
+            if (!want)
+                die("archive contains %s, which is not listed in MANIFEST", full_name);
+            if (!want->is_symlink)
+                die("archive has %s as a symlink, but MANIFEST lists it as a regular file", full_name);
+            if (want->seen)
+                die("archive contains %s twice", full_name);
+
+            memcpy(linkname, hdr.linkname, 100);
+            linkname[100] = '\0';
+            if (strcmp(linkname, want->target) != 0)
+                die("symlink target mismatch for %s: archive says -> %s, MANIFEST says -> %s",
+                    full_name, linkname, want->target);
+
+            snprintf(stage_path, sizeof(stage_path), "%s/%s", STAGING_DIR, full_name);
+            path_dirname(stage_path, stage_dir, sizeof(stage_dir));
+            if (mkdir_p(stage_dir) < 0)
+                die("could not create staging directory %s: %s", stage_dir, strerror(errno));
+            unlink(stage_path); /* symlink() fails if stage_path already exists */
+            if (symlink(want->target, stage_path) < 0)
+                die("could not create symlink %s -> %s: %s", stage_path, want->target, strerror(errno));
+
+            /* ustar symlinks carry no data blocks (size 0), but consume
+             * whatever is there defensively rather than assume it. */
+            for (b = 0; b < nblocks; b++) {
+                unsigned char block[BLOCK_SIZE];
+                if (read_full(fd, block, BLOCK_SIZE) < 0)
+                    die("archive truncated after symlink entry %s", full_name);
+            }
+
+            printf("piko-update: verify OK  %-40s (symlink -> %s)\n", want->path, want->target);
+            want->seen = 1;
+            continue;
+        }
+
+        die("unsupported entry type '%c' for %s (only files, directories and symlinks are supported)",
             typeflag, full_name);
     }
 
@@ -636,14 +731,14 @@ static void verify_archive(const char *archive_path)
     printf("piko-update: all %d file(s) verified OK\n", manifest_count);
 }
 
-static void install_file(const char *rel_path)
+static void install_file(const struct manifest_entry *e)
 {
     char staged[MAX_PATH + 32];
     char dest[MAX_PATH + 8];
     char dest_dir[MAX_PATH + 16];
 
-    snprintf(staged, sizeof(staged), "%s/%s", STAGING_DIR, rel_path);
-    snprintf(dest, sizeof(dest), "/%s", rel_path);
+    snprintf(staged, sizeof(staged), "%s/%s", STAGING_DIR, e->path);
+    snprintf(dest, sizeof(dest), "/%s", e->path);
     path_dirname(dest, dest_dir, sizeof(dest_dir));
 
     if (mkdir_p(dest_dir) < 0)
@@ -652,7 +747,7 @@ static void install_file(const char *rel_path)
     /* The one file with a documented recovery story (see
      * docs/HOWTO-BUILD-DEPLOY-KERNEL.md): back it up before replacing so
      * a panicking new kernel can be undone by hand at the console. */
-    if (strcmp(rel_path, ZIMAGE_PATH) == 0 && access(dest, F_OK) == 0) {
+    if (strcmp(e->path, ZIMAGE_PATH) == 0 && access(dest, F_OK) == 0) {
         char bak[MAX_PATH + 16];
         snprintf(bak, sizeof(bak), "%s.bak", dest);
         if (rename(dest, bak) < 0)
@@ -665,25 +760,35 @@ static void install_file(const char *rel_path)
 
         /* Staging and the destination ended up on different filesystems
          * (not expected on this rootfs today, but don't brick over it) --
-         * fall back to a plain copy. */
-        int in = open(staged, O_RDONLY);
-        int out;
-        struct stat st;
-        char buf[BLOCK_SIZE * 4];
-        ssize_t n;
+         * fall back to a plain copy (or, for a symlink, a fresh
+         * readlink+symlink -- rename() across filesystems can't move a
+         * symlink object itself, and opening it directly would follow it
+         * to whatever it points at instead of copying the link). */
+        if (e->is_symlink) {
+            unlink(dest);
+            if (symlink(e->target, dest) < 0)
+                die("could not create symlink %s -> %s: %s", dest, e->target, strerror(errno));
+            unlink(staged);
+        } else {
+            int in = open(staged, O_RDONLY);
+            int out;
+            struct stat st;
+            char buf[BLOCK_SIZE * 4];
+            ssize_t n;
 
-        if (in < 0 || fstat(in, &st) < 0)
-            die("could not read staged %s: %s", staged, strerror(errno));
-        out = open(dest, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 07777);
-        if (out < 0)
-            die("could not create %s: %s", dest, strerror(errno));
-        while ((n = read(in, buf, sizeof(buf))) > 0) {
-            if (write_full(out, buf, (size_t)n) < 0)
-                die("write failed installing %s: %s", dest, strerror(errno));
+            if (in < 0 || fstat(in, &st) < 0)
+                die("could not read staged %s: %s", staged, strerror(errno));
+            out = open(dest, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 07777);
+            if (out < 0)
+                die("could not create %s: %s", dest, strerror(errno));
+            while ((n = read(in, buf, sizeof(buf))) > 0) {
+                if (write_full(out, buf, (size_t)n) < 0)
+                    die("write failed installing %s: %s", dest, strerror(errno));
+            }
+            close(in);
+            close(out);
+            unlink(staged);
         }
-        close(in);
-        close(out);
-        unlink(staged);
     }
 
     printf("piko-update: install %s\n", dest);
@@ -694,7 +799,7 @@ static void apply_update(void)
     int i;
 
     for (i = 0; i < manifest_count; i++)
-        install_file(manifest[i].path);
+        install_file(&manifest[i]);
 
     sync();
     printf("piko-update: %d file(s) installed.\n", manifest_count);
