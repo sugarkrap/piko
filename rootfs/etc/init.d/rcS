@@ -88,47 +88,59 @@ modprobe pxa2xx_base 2>/dev/null
 modprobe pxa2xx_sharpsl 2>/dev/null
 
 # --- SPI bus (MAX1111 main-battery ADC, ads7846 touchscreen, corgi-lcd) ---
-# corgi.c registers spi_board_info for these unconditionally at boot, but
-# they only actually probe once the SPI_PXA2XX master driver loads and
-# registers the bus. Without it, /sys/bus/spi/devices stays empty and
-# sharpsl-pm logs "Warning: Cannot read main battery!" forever. These
-# modules were never part of the original mtd3 rootfs build, so modules.dep
-# has no entry for them -- modprobe-by-name would fail with "not found".
-# insmod with the explicit path works regardless of modules.dep.
-# ssp.ko MUST load first: spi-pxa2xx-platform.ko needs its exported
-# pxa_ssp_request()/pxa_ssp_free() symbols (insmod fails with "unknown
-# symbol" otherwise -- discovered 2026-07-26, battery ADC silently never
-# came up even though the SPI modules themselves loaded without error).
+# corgi.c registers spi_board_info for these unconditionally at boot. The
+# SSP port driver, the SPI_PXA2XX master driver, the ads7846 touchscreen
+# driver, and the evdev/mousedev input-core handlers that turn its events
+# into /dev/input/eventN + /dev/input/mice are all built into the kernel
+# now (CONFIG_PXA_SSP/CONFIG_SPI_PXA2XX/CONFIG_TOUCHSCREEN_ADS7846/
+# CONFIG_INPUT_EVDEV/CONFIG_INPUT_MOUSEDEV=y), so the SPI bus is already
+# registered and the touchscreen already probed by the time this script
+# runs -- no insmod needed, and no window where /sys/bus/spi/devices is
+# empty (previously: sharpsl-pm logging "Warning: Cannot read main
+# battery!" until these were manually loaded, in dependency order --
+# ssp before spi-pxa2xx-platform -- since insmod does not resolve that
+# automatically the way built-in link order does).
 KVER="$(uname -r)"
-insmod "/lib/modules/$KVER/kernel/drivers/soc/pxa/ssp.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-core.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-platform.ko" 2>/dev/null
-# ads7846 (touchscreen) is a module (CONFIG_TOUCHSCREEN_ADS7846=m) in the
-# current kernel config -- unlike max1111/corgi-lcd it is NOT built-in, so
-# it must be insmod'd explicitly once the SPI bus above is registered, or
-# the touchscreen silently has no driver at all (found 2026-07-27).
-insmod "/lib/modules/$KVER/kernel/drivers/input/touchscreen/ads7846.ko" 2>/dev/null
-# evdev/mousedev are the input-core handlers that create /dev/input/eventN
-# and /dev/input/mice respectively. Both are modules too
-# (CONFIG_INPUT_EVDEV=m, CONFIG_INPUT_MOUSEDEV=m) -- without evdev.ko in
-# particular, ads7846 registers its input device but no eventN node ever
-# appears, so the touchscreen is invisible to anything reading raw evdev.
-insmod "/lib/modules/$KVER/kernel/drivers/input/evdev.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/input/mousedev.ko" 2>/dev/null
 
 # --- MMC/SD + VFAT ---
-# MMC_PXA/MMC_BLOCK are modules. Without these explicit loads the board's
-# pxa2xx-mci.0 platform device remains unbound, so no host exists to detect an
-# already-inserted card or generate insertion hotplug events. FAT/VFAT and the
-# common Cacko-era codepages are modular too; ext4 is built into the kernel.
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_core.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_block.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/host/pxamci.ko" 2>/dev/null
+# MMC core/block and the pxamci host driver are built into the kernel
+# (CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA=y), so the board's
+# pxa2xx-mci.0 platform device is already bound and probing by the time
+# this script runs -- no insmod needed, and no window where the host
+# doesn't exist yet. FAT/VFAT and the common Cacko-era codepages are still
+# modular, so those still need loading; ext4 is built into the kernel.
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp850.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_iso8859-15.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/fat/fat.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
+
+# --- mdev coldplug: catch devices that were already present before the
+# netlink daemon above was ready to hear about them ---
+#
+# `mdev -d &` (started near the top of this script) is a NETLINK listener:
+# a uevent broadcast while nothing is bound yet is simply lost, not queued.
+# On this board's slow single-core PXA255, forking mdev and having the
+# child actually reach socket()/bind() can genuinely take longer than the
+# handful of insmod lines above -- and now that MMC core/block/pxamci are
+# built into the kernel rather than modules, an already-inserted card's
+# add-uevent chain (mmc0 -> mmcblk0 -> mmcblk0p1) fires during kernel init,
+# before rcS -- let alone the mdev daemon -- has even started, so this is
+# no longer a narrow race for MMC, it's a certainty every boot. The kernel
+# side works fine either way (confirmed via dmesg: "mmc0: new SD card",
+# "mmcblk0: p1", the device node exists) -- what's lost is purely the
+# userspace hotplug event, so /etc/mdev.conf's mmcblk0p1 rule (which mounts
+# it) never runs, and a manual `mount /mnt/card` afterwards always works
+# instantly. This is the exact race `mdev -s` (coldplug scan) exists to
+# close: it re-walks /sys and re-fires every matching rule for whatever is
+# ALREADY there, so a card already in the slot at boot gets mounted
+# regardless of whether its hotplug event made it to the daemon in time.
+# Placed after every module load above so /sys actually has something to
+# find (PCMCIA/hostap's own MODALIAS rule benefits from this too -- a card
+# already seated at boot was likely hitting the identical race, just
+# unnoticed because WiFi cards here are normally inserted after boot,
+# well past this window).
+mdev -s 2>/dev/null
 
 # --- audio stack (WM8731 codec via I2S, ALSA OSS emulation) ---
 # Loads the same modules as the manual /usr/sbin/audioon helper (see
@@ -147,7 +159,18 @@ ifconfig lo 127.0.0.1 up 2>/dev/null
 # once a Prism2/hostap PCMCIA card is inserted.
 
 # --- w100 display stability profile ---
-# Keep conservative clocking defaults that eliminated 1px horizontal jitter.
+# fastpllclk drives the W100 PLL from Corgi's .pll_freq (75MHz) up to its
+# .fast_pll_freq (100MHz) -- see corgi_fb_modes[] in mach-pxa/corgi.c.
+# It is the mainline equivalent of Cacko's /proc/driver/w100/fastsysclk,
+# except mainline made it a boolean: Cacko took a target MHz, and the
+# "echo 75" everyone passed around is already our *default*, so the only
+# way up from here is 100MHz.
+#
+# Kept at 0. Tested against the LCD vertical-crosstalk artifact on
+# 2026-07-31 with `fbtest blocks`: toggling 75 <-> 100MHz made NO visible
+# difference, so there is nothing to gain here, while an earlier session
+# found 0 eliminated a 1px horizontal jitter. Don't raise it again
+# expecting a display-quality win -- see docs/DEADLETTER-LCD-CROSSTALK.md.
 if test -w /sys/devices/platform/w100fb/fastpllclk; then
 	echo 0 > /sys/devices/platform/w100fb/fastpllclk
 fi

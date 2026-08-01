@@ -1,7 +1,7 @@
 # Dead Letter — WiFi + SSH deliverable (service stack, users, wpa_supplicant)
 
 *Written 2026-07-22. Builds on the working two-stage boot
-(`DEADLETTER-KEXEC-SYSCALL.md`, `DEADLETTER-KEXEC-ATAGS.md`,
+(`../DEADLETTER-KEXEC-SYSCALL.md`, `DEADLETTER-KEXEC-ATAGS.md`,
 `DEADLETTER-STAGE2-INIT.md`).*
 
 ---
@@ -16,7 +16,7 @@
   this uClibc has no `syscall()` at all (busybox's `insmod`/`rmmod` need
   it), and separately, `__NR_*` macros here can resolve OABI-numbered —
   the same root cause as the kexec_load SIGILL
-  (`docs/DEADLETTER-KEXEC-SYSCALL.md`). The shim provides `syscall()` and
+  (`../DEADLETTER-KEXEC-SYSCALL.md`). The shim provides `syscall()` and
   masks the number back to a bare EABI value (`n & 0x000fffff`) before
   `svc 0`. Verified in the disassembly.
 - **Service stack: BusyBox init, not systemd.** `/init` → `exec

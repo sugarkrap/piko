@@ -69,12 +69,14 @@ set -eu
 #                                   later needs it on the same include/lib
 #                                   path as libX11.
 #
-# NOT BUILT HERE: the X11/matchbox stack itself (userspace/src/libX11,
-# xserver, matchbox-window-manager, pixman, ...). Those are git submodules
-# that were cross-built and staged into userspace/stage-target by hand;
-# there is no scripted build for them yet, and inventing one blindly here
-# would be worse than saying so. tools/deploy-x11.sh deploys whatever is
-# already staged. If you add a build-x11.sh, wire it in here.
+# NOT BUILT HERE: the X11/matchbox stack (userspace/src/libX11, xserver,
+# matchbox-window-manager, pixman, ...). tools/build-x11-stack.sh now
+# cross-builds it from the tracked submodules, and
+# tools/build-matchbox-payload.sh collects the result into a deployable
+# tar (see tools/build-and-deploy.sh's --skip-x11 for how this hooks into
+# the routine deploy path). tools/deploy-x11.sh predated both of those and
+# shipped a smaller, differently-pathed subset that would now actively
+# conflict with this pipeline -- retired.
 #
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,

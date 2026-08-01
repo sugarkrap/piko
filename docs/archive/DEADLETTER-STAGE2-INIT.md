@@ -1,7 +1,7 @@
 # Dead Letter — stage 2 booted but ran the wrong init (busybox respawn loop)
 
 *Written 2026-07-22. The two prior fixes in this chain got us here: the
-kexec_load syscall number (`DEADLETTER-KEXEC-SYSCALL.md`) let kexec jump
+kexec_load syscall number (`../DEADLETTER-KEXEC-SYSCALL.md`) let kexec jump
 into stage 2, and `--atags` (`DEADLETTER-KEXEC-ATAGS.md`) let stage 2 get
 past early setup to a console.*
 

@@ -8,7 +8,7 @@
 > and WiFi/SSH existed. **For the current stage-2 kernel, use
 > `flash/build-and-deploy.sh` instead — see
 > `docs/HOWTO-BUILD-DEPLOY-KERNEL.md`.** The SD-card/NAND flash procedure
-> (`flash/FLASH-MTD1-MTD3-SAFE.md`) is now reserved for recovery
+> (`../FLASH-MTD1-MTD3-SAFE.md`) is now reserved for recovery
 > (device unreachable/unbootable) or bootstrap-partition (`mtd1`/`smf`)
 > changes only.
 

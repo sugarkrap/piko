@@ -63,8 +63,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$REPO/update.tar}"
 
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
-TOOLCHAIN="${TOOLCHAIN:-/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin}"
-CROSS_COMPILE="${CROSS_COMPILE:-arm-buildroot-linux-uclibcgnueabi-}"
+TOOLCHAIN="${TOOLCHAIN:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
+CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 
 STAGE="$(mktemp -d /tmp/piko-update-package.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
@@ -235,16 +235,15 @@ if [ -d "$KERNEL_DIR" ]; then
     done
 
     # These keep the "kernel/" depmod-tree prefix exactly as
-    # tools/kernel-modules.sh's WIFI_MODULES/SPI_MODULES/SD_MODULES lists do
-    # (stripped to find the source file under KERNEL_DIR, kept as-is for
-    # the /lib/modules/$KVER/... destination) -- some of these live
-    # directly under drivers/, others (net/wireless, lib/crypto, fs/nls,
-    # fs/fat) don't, so the prefix has to travel with each entry rather
-    # than being reconstructed from a shorter name.
-    WIFI_PCMCIA_SPI_SD_MODULES="$WIFI_MODULES
-$SPI_MODULES
+    # tools/kernel-modules.sh's WIFI_MODULES/SD_MODULES lists do (stripped
+    # to find the source file under KERNEL_DIR, kept as-is for the
+    # /lib/modules/$KVER/... destination) -- some of these live directly
+    # under drivers/, others (net/wireless, lib/crypto, fs/nls, fs/fat)
+    # don't, so the prefix has to travel with each entry rather than being
+    # reconstructed from a shorter name.
+    WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
 $SD_MODULES"
-    for relpath in $WIFI_PCMCIA_SPI_SD_MODULES; do
+    for relpath in $WIFI_PCMCIA_SD_MODULES; do
         src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
         manifest_add "$KERNEL_DIR/$src_rel" "lib/modules/$KVER/$relpath"
     done

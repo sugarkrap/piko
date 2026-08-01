@@ -400,21 +400,7 @@ for relpath in $WIFI_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-# 4. SPI stack modules -- needed for the MAX1111 ADC and the touchscreen's
-# SPI1 bus. ORDER MATTERS (ssp.ko before spi-pxa2xx-platform.ko). List +
-# full rationale now lives in tools/kernel-modules.sh.
-for relpath in $SPI_MODULES; do
-    local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
-    if [ ! -f "$local_path" ]; then
-        echo "missing module: $local_path" >&2
-        exit 1
-    fi
-    remote_path="/lib/modules/$KVER_LOCAL/$relpath"
-    ssh_do "mkdir -p '$(dirname "$remote_path")'"
-    send_file "$local_path" "$remote_path"
-done
-
-# 5. MMC/SD + VFAT stack. List + full rationale now lives in
+# 4. MMC/SD + VFAT stack. List + full rationale now lives in
 # tools/kernel-modules.sh.
 for relpath in $SD_MODULES; do
     local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
@@ -427,13 +413,14 @@ for relpath in $SD_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-# 6. rcS itself -- carries the insmod calls for the SPI/MMC modules above (and
-# is just a plain file on the live, writable jffs2 root, so it can be
-# pushed the same way as everything else here; no NAND reflash needed).
+# 5. rcS itself -- carries the insmod calls for the VFAT/NLS modules above
+# (SPI and MMC are built into the kernel now, no insmod needed for either),
+# and is just a plain file on the live, writable jffs2 root, so it can be
+# pushed the same way as everything else here; no NAND reflash needed.
 send_file "$REPO/rootfs/etc/init.d/rcS" "/etc/init.d/rcS"
 ssh_do "chmod 0755 /etc/init.d/rcS"
 
-# 6a. Graphical session: xsession brings up Xfbdev -> Zaurus keymap ->
+# 5a. Graphical session: xsession brings up Xfbdev -> Zaurus keymap ->
 # Matchbox, and inittab runs it on tty1 in place of the getty, so the
 # device boots to a desktop rather than an ash prompt. xsession falls
 # back to a getty itself on every failure path, so shipping these cannot
@@ -447,20 +434,20 @@ send_file "$REPO/rootfs/etc/init.d/xsession" "/etc/init.d/xsession"
 ssh_do "chmod 0755 /etc/init.d/xsession"
 send_file "$REPO/rootfs/etc/inittab" "/etc/inittab"
 
-# 6b. hostap.conf -- sets iw_mode=2 on the correct module (hostap_cs, not
+# 5b. hostap.conf -- sets iw_mode=2 on the correct module (hostap_cs, not
 # hostap; iw_mode is declared in hostap_hw.c which hostap_cs.c #includes
 # directly). Was previously only ever deployed by hand, never tracked by
 # this script -- add it now so future redeploys don't silently regress it.
 send_file "$REPO/rootfs/etc/modprobe.d/hostap.conf" "/etc/modprobe.d/hostap.conf"
 
-# 6c. wifi-up.sh -- mdev's $wlan0 rule runs this on card bring-up. Also
+# 5c. wifi-up.sh -- mdev's $wlan0 rule runs this on card bring-up. Also
 # previously only ever deployed by hand; now DHCP-first with a static
 # fallback (see the file itself for why). Track it here so it can't
 # silently drift from the repo copy.
 send_file "$REPO/rootfs/etc/wifi-up.sh" "/etc/wifi-up.sh"
 ssh_do "chmod 0755 /etc/wifi-up.sh"
 
-# 7. audioon / audinfo helper scripts (single-word, per AGENTS.md typing
+# 6. audioon / audinfo helper scripts (single-word, per AGENTS.md typing
 # constraint). These are TRACKED FILES under rootfs/usr/sbin/ -- send them
 # verbatim rather than regenerating them from heredocs here.
 #
@@ -474,7 +461,7 @@ send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
 
-# 7a. Backlight: the "bright" helper (single-word, per the AGENTS.md typing
+# 6a. Backlight: the "bright" helper (single-word, per the AGENTS.md typing
 # constraint -- no '/' or ':' to type) plus the brightd policy daemon that
 # owns Fn+3/Fn+4, idle dimming and lid blanking.
 #
@@ -504,7 +491,7 @@ if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
     fi
 fi
 
-# 7b. SD-card software overlay. /etc/zaurus-card.sh puts
+# 6b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
 # and a shell started before insertion still finds card software after).
@@ -517,7 +504,7 @@ send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
-# 7c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
+# 6c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
 #
 # Built by tools/build-ssh.sh into userspace/stage-ssh; skipped silently
 # when that tree doesn't exist, like every other staged payload here.
@@ -580,7 +567,7 @@ elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/build-ssh.sh)"
 fi
 
-# 7d. Package manager (opkg) + its wrappers.
+# 6d. Package manager (opkg) + its wrappers.
 #
 # opkg itself is staged by tools/build-opkg.sh, not built here. It is a
 # single ~520KB static binary -- no libopkg.so, no libarchive.so -- so
@@ -614,7 +601,7 @@ if [ -x "$REPO/userspace/src/kill" ]; then
     ssh_do "chmod 0755 /usr/local/bin/kill"
 fi
 
-# 8. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
+# 7. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
 # e.g. a clean checkout that has not run tools/build-userspace.sh yet).
@@ -793,7 +780,7 @@ fi
 
 ssh_do "rm -rf '$REMOTE_STAGE'"
 
-# 9. X11 + Matchbox desktop payload.
+# 8. X11 + Matchbox desktop payload.
 #
 # Shipped as ONE tar and unpacked on the device with our own untar
 # (userspace/src/untar.c): the stack is ~400 files, and that many
