@@ -26,14 +26,69 @@ sees instead. See "The big one" below for why that was needed and how
 it works.
 
 Defaults: dim to level 5 after 60s idle, blank after 300s, restore on any
-key or touch. Closing the lid blanks immediately. Change them by editing
-the `brightd` line in `rootfs/etc/init.d/rcS` (`-d`, `-b`, `-l`, `-v`).
+key or touch. Closing the lid blanks immediately.
 
 **Watching a video?** `touch /tmp/brightd.inhibit` suspends dimming and
 blanking (hotkeys and the lid still work); delete it afterwards. MPlayer
 produces no input events, so without this the screen dims mid-film.
 
 To stop the daemon: `pkillx brightd`. There is no `kill` on this rootfs.
+
+## Configuration
+
+`/etc/zaurus/power-management.cfg`, if present, overrides the compiled
+defaults with plain `key=value` lines (same format as matchbox's
+`kbdconfig` — `#` for comments, no quoting):
+
+```
+dim_secs=60
+blank_secs=300
+dim_level=5
+suspend_on_lid=yes
+```
+
+A commented-out copy with the defaults spelled out ships at
+`rootfs/etc/zaurus/power-management.cfg`. `tools/chunked-deploy.sh` sends
+it **only if the device doesn't already have one** — same rule as
+`/etc/piko/touchscreen.cfg` — so a redeploy never clobbers something
+you've edited on the device.
+
+**No restart needed.** `brightd` stat()s the file every time through its
+main loop and reloads whenever the mtime changes — there is no reload
+signal, because this device's BusyBox has no `kill`/`killall`/`pkill` to
+send one with (see "No signal protocol" above). Save the file, wait a
+couple of seconds, done.
+
+`-d`/`-b`/`-l` passed on `brightd`'s command line (the line in
+`rootfs/etc/init.d/rcS`) always win over the config file, even across a
+reload — a manual `brightd -d 5` for testing is never silently
+overridden by whatever the file says. `suspend_on_lid` has no
+command-line equivalent; it's config-only.
+
+### `suspend_on_lid` — real system suspend, off by default
+
+Setting `suspend_on_lid=yes` makes closing the lid do an actual
+`echo mem > /sys/power/state`, not just blank the backlight. This board's
+`cpu_pm_fns.valid` is `suspend_valid_only_mem`
+(`modules/mach-pxa/pxa25x_patched.c`), so `mem` is the only state the
+kernel will accept — this isn't a guess.
+
+**The default is off, and that's deliberate, not caution theatre.** Per
+`AGENTS.md`, this project's board is the *last spare one*, with no serial
+console and no USB — the only way in is WiFi → SSH. A suspend that goes
+to sleep but doesn't come back is not a "power-cycle and try again"
+situation the way it would be on ordinary hardware: it's the one
+remote-access path gone, indefinitely, with nobody local to press
+anything.
+
+**Before setting this to `yes`**, confirm resume actually works, by hand,
+repeatedly, over SSH:
+
+```
+echo mem > /sys/power/state
+```
+
+Only flip it on once that has come back reliably every time.
 
 ## The two traps
 

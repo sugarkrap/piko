@@ -491,6 +491,18 @@ if [ -f "$REPO/userspace/src/brightd" ]; then
 else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
+# power-management.cfg holds USER-CHOSEN POLICY (dim/blank timers, and the
+# opt-in suspend_on_lid) once anyone has edited it on the device --  same
+# reasoning as /etc/piko/touchscreen.cfg below, so it is likewise sent
+# ONLY if the device doesn't already have one.
+if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
+    if [ "$(ssh_do "test -f /etc/zaurus/power-management.cfg && echo yes || echo no")" = "no" ]; then
+        ssh_do "mkdir -p /etc/zaurus"
+        send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
+    else
+        echo "==> /etc/zaurus/power-management.cfg already exists on device, leaving it alone"
+    fi
+fi
 
 # 7b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
