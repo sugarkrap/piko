@@ -46,6 +46,30 @@ name: Build piko.zip (SD-card recovery-flash package)
 # the bootstrap kernel.config-corgi-7.1.4-minimal build happens
 # out-of-tree via `make O=...` into its own build directory, so it never
 # touches the stage-2 build's in-tree .config or object files.
+#
+# A THIRD toolchain, entirely separate from the two above: the X11/
+# Matchbox desktop (userspace/src/* submodules) needs binaries that
+# dynamically link against uClibc-ng -- neither the apt EABI glibc-gcc
+# (wrong libc) nor the OABI-flavoured toolchain above (freestanding, built
+# from a different crosstool-NG config -- tools/oabi-toolchain.config --
+# that is not known to produce working shared libraries at all) can be
+# reused for this. It is built by tools/build-uclibc-toolchain.sh, same
+# tool a fresh dev machine runs per docs/HANDOFF-2026-07-31-BUILD-FROM-SCRATCH.md,
+# into its OWN directory (PIKO_TOOLCHAIN_DIR) -- deliberately NOT the
+# default toolchain/, which is where the OABI toolchain above already
+# lives, to guarantee the two builds cannot collide or silently overwrite
+# one another regardless of which one runs or restores from cache first.
+#
+# The X11/Matchbox stack itself is NOT separately cached across runs: it
+# builds in place inside the checked-out submodules under userspace/src/,
+# and restoring a cache there would silently overwrite whatever commit
+# actions/checkout --recursive just correctly checked out with stale
+# content from a previous run -- wrong source code shipped as if it were
+# current. Only the toolchain (self-contained, keyed on its own
+# crosstool-NG config) and the third-party download cache (raw tarballs,
+# keyed on the version pins in tools/build-thirdparty-deps.sh) are safe to
+# persist. Expect this job to be genuinely slow on a cold cache -- that is
+# the real cost of the from-scratch reproducibility this buys.
 
 on:
   workflow_dispatch: {}
@@ -75,18 +99,27 @@ on:
       - "tools/build-uclibc-toolchain.sh"
       - "tools/uclibc-toolchain.config"
       - "rootfs/**"
+      - "tools/build-uclibc-toolchain.sh"
+      - "tools/uclibc-toolchain.config"
+      - "tools/build-thirdparty-deps.sh"
+      - "tools/setup-x11-src.sh"
+      - "tools/build-x11-stack.sh"
+      - "tools/build-matchbox-payload.sh"
+      - "modules/x11/**"
+      - ".gitmodules"
       - ".github/workflows/build-piko-zip.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo (with LFS -- flash/mtd3.jffs2 base image)
+      - name: Check out repo (with LFS -- flash/mtd3.jffs2 base image; submodules -- X11/Matchbox stack)
         uses: actions/checkout@v4
         with:
           lfs: true
+          submodules: recursive
 
-      - name: Install ARM cross-compiler, kernel build deps, mtd-utils, and crosstool-NG build deps
+      - name: Install ARM cross-compiler, kernel build deps, mtd-utils, crosstool-NG build deps, and X11 build deps
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
@@ -95,7 +128,15 @@ jobs:
               mtd-utils file \
               build-essential git autoconf automake bison flex texinfo \
               gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
-              patch gawk python3-dev rsync
+              patch gawk python3-dev rsync \
+              pkg-config python3 x11proto-dev
+          # x11proto-dev is the Debian/Ubuntu package for the merged
+          # xorgproto headers (xproto, kbproto, randrproto, ...) -- every
+          # X.Org submodule build reads these from the HOST's
+          # /usr/share/pkgconfig (see tools/build-x11-stack.sh's
+          # PKG_CONFIG_LIBDIR). If this package is ever renamed upstream,
+          # this is the step that will fail, with a clear "Package
+          # 'xproto' ... not found" from some submodule's configure.
 
       # Slow-but-cacheable: reproduces this project's own OABI-capable
       # crosstool-NG toolchain from source, ONLY if no already-available
@@ -200,40 +241,36 @@ jobs:
           fi
           echo "BOOT_ZIMAGE=$BOOT_ZIMAGE" >> "$GITHUB_ENV"
 
-      # scp + sftp-server (+ dbclient/dropbearkey) for the mtd3 image, so a
-      # freshly recovery-flashed board can receive files at all. Must run
-      # BEFORE the mtd3 step below, which overlays whatever is in
-      # userspace/stage-ssh.
-      #
-      # A THIRD toolchain, and it genuinely cannot be either of the two
-      # above. Not the apt gcc-arm-linux-gnueabi: glibc implements
-      # getpwnam/getpwuid through NSS, which dlopen()s libnss_files.so.2 at
-      # runtime even out of a fully static binary, and that file does not
-      # exist on this rootfs -- sftp-server would link, pass every ELF
-      # check, and then die with "No user found for uid 0" on the device
-      # (tools/build-ssh.sh's header, and its NSS check enforces this).
-      # Not the OABI toolchain either: tools/build-oabi-toolchain.sh
-      # installs a SAME-NAMED triplet into toolchain/, so these get their
-      # own PIKO_TOOLCHAIN_DIR and their own cache -- one silently
-      # overwriting the other is exactly the failure this avoids.
+      # Slow-but-cacheable, and entirely separate from the OABI toolchain
+      # cached above -- see the workflow header comment for why the two
+      # cannot share a directory. This is the SAME script and tracked
+      # config (tools/uclibc-toolchain.config) a fresh dev machine runs;
+      # nothing CI-specific about it. Shared by two independent downstream
+      # needs -- the X11/Matchbox desktop payload and the scp/sftp-server
+      # payload both dynamically link against this same uClibc-ng
+      # toolchain and cannot use either the apt EABI glibc-gcc (wrong libc:
+      # glibc's getpwnam/getpwuid go through NSS/dlopen(), which this
+      # rootfs has no modules for) or the OABI toolchain above (freestanding,
+      # not known to produce working shared libraries at all).
       #
       # Cache path AND key deliberately match build-update-package.yml's
       # "X11/Matchbox toolchain" steps: it is the same toolchain from the
       # same tracked config, so sharing one cache entry means only one of
-      # the two workflows ever pays the crosstool-NG build. The name over
-      # there is about what first needed it, not a different toolchain.
-      - name: Cache uClibc toolchain (crosstool-NG build)
+      # the two workflows ever pays the crosstool-NG build.
+      - name: Cache X11/Matchbox + SSH toolchain (crosstool-NG build, shared arm-unknown-linux-uclibcgnueabi)
+        id: x11-toolchain-cache
         uses: actions/cache@v4
         with:
           path: toolchain-x11
           key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
           save-always: true
 
-      - name: Provision uClibc toolchain
+      - name: Provision X11/Matchbox + SSH toolchain
         env:
           PIKO_TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain-x11
         run: |
           ./tools/build-uclibc-toolchain.sh
+          echo "TOOLCHAIN_BIN_DIR=${PIKO_TOOLCHAIN_DIR}/x-tools/arm-unknown-linux-uclibcgnueabi/bin" >> "$GITHUB_ENV"
 
       # Upstream release tarballs, sha256-verified by the script itself --
       # cached so a rerun doesn't re-fetch from matt.ucc.asn.au/openbsd.org.
@@ -245,6 +282,11 @@ jobs:
             userspace/src/openssh-*.tar.gz
           key: ssh-tarballs-${{ hashFiles('tools/build-ssh.sh') }}
 
+      # scp + sftp-server (+ dbclient/dropbearkey) for the mtd3 image, so a
+      # freshly recovery-flashed board can receive files at all. Must run
+      # BEFORE the mtd3 step below, which overlays whatever is in
+      # userspace/stage-ssh. tools/build-ssh.sh's NSS check enforces the
+      # uClibc requirement explained above.
       - name: Build scp + sftp-server (+ a reproducible dropbear)
         run: |
           TOOLCHAIN_BIN_DIR="$GITHUB_WORKSPACE/toolchain-x11/x-tools/arm-unknown-linux-uclibcgnueabi/bin" \
@@ -256,11 +298,32 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build mtd3.jffs2 (incremental onto the git-LFS-tracked base image)
+      # Only the raw downloaded tarballs -- keyed on the version pins
+      # inside the script itself, so a version bump invalidates it
+      # automatically. NOT userspace/stage-target (the built output): that
+      # gets rebuilt fresh every run, same as the X11 submodules -- see
+      # the workflow header comment for why in-place build output is not
+      # safe to cache here.
+      - name: Cache third-party source downloads (zlib/expat/libpng/freetype/fontconfig/xkeyboard-config/dejavu)
+        uses: actions/cache@v4
+        with:
+          path: userspace/.thirdparty-cache
+          key: thirdparty-src-v1-${{ hashFiles('tools/build-thirdparty-deps.sh') }}
+          save-always: true
+
+      - name: Build third-party X11 dependencies
+        run: |
+          ./tools/build-thirdparty-deps.sh
+
+      - name: Build mtd3.jffs2 (incremental onto the git-LFS-tracked base image; includes both the SSH payload and the X11/Matchbox desktop)
         run: |
           test -f flash/mtd3.jffs2 || { echo "::error::flash/mtd3.jffs2 (LFS-tracked base image) not present after checkout -- was lfs: true honored?" >&2; exit 1; }
           file flash/mtd3.jffs2
           mkdir -p "$GITHUB_WORKSPACE/piko-package"
+          # TOOLCHAIN_BIN_DIR (set above) and the build-x11-stack.sh /
+          # build-matchbox-payload.sh calls this makes are what put the
+          # desktop INTO the flashed image, not just build it as a
+          # separate artifact -- see flash/build-mtd3-jffs2.sh.
           ./flash/build-mtd3-jffs2.sh flash/mtd3.jffs2 "$GITHUB_WORKSPACE/piko-package/mtd3.jffs2"
 
       - name: Assemble piko.zip

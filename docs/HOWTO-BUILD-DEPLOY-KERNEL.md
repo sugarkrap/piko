@@ -42,10 +42,13 @@ tools/build-and-deploy.sh --build-only
 tools/chunked-deploy.sh root@<ip>          # ship it later, separately
 ```
 
-Toolchain selection is automatic: the script uses the first compiler it
-finds in `PATH` among `arm-buildroot-linux-uclibcgnueabi-gcc`,
-`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-linux-gnueabi-gcc`, and
-`arm-unknown-linux-gnueabi-gcc`. You can override this explicitly with:
+Toolchain selection is automatic: the script first prepends
+`toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin` (this repo's own
+toolchain, built by `tools/build-uclibc-toolchain.sh`) to `PATH` if it
+exists, then uses the first compiler it finds among
+`arm-unknown-linux-uclibcgnueabi-gcc`, `arm-buildroot-linux-uclibcgnueabi-gcc`,
+`arm-linux-gnueabi-gcc`, and `arm-unknown-linux-gnueabi-gcc`. You can
+override this explicitly with:
 
 ```sh
 CROSS_COMPILE=arm-linux-gnueabi- tools/build-and-deploy.sh [user@host]
@@ -142,8 +145,8 @@ this script.
 ```sh
 tools/setup-kernel-src.sh   # only needed once per fresh clone / patch change
 cd kernel-src/linux-7.1.4
-export PATH="/home/makaron/Code/dosbox-armv5-zaurus/buildroot/output/host/bin:$PATH"
-export ARCH=arm CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-
+export PATH="$PWD/../../toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin:$PATH"
+export ARCH=arm CROSS_COMPILE=arm-unknown-linux-uclibcgnueabi-
 make -j"$(nproc)" zImage modules > /tmp/kbuild.log 2>&1
 echo "exit: $?"
 ```
@@ -161,6 +164,31 @@ echo "exit: $?"
 - Once built, deploy with `tools/chunked-deploy.sh [user@host]` directly
   (this is exactly what `build-and-deploy.sh` calls after a successful
   build).
+
+## `.config` traps — re-check these after any config change
+
+Each of these produces a build that **succeeds with no error** and is
+silently wrong. Check them before trusting a kernel you are about to flash.
+
+- **`ARCH_MULTI_V7` defaults to `y`** and will quietly build an ARMv7
+  kernel — the wrong CPU family entirely — unless `ARCH_MULTI_V5` /
+  `CPU_XSCALE` are explicitly forced. Verify after every build:
+
+  ```sh
+  nm vmlinux | grep -c corgi_init    # must be 1; 0 means the wrong config won
+  ```
+
+- **Toggling `CONFIG_MODULES` off and back on permanently collapses
+  previously-`=m` symbols to `=y`** on the next `oldconfig` — it does not
+  re-ask about already-answered symbols. Never disable `MODULES` as an
+  intermediate step when trimming a config; adjust individual symbols.
+- **`ATAGS` gates the entire "Legacy board files" section.**
+  `MACH_CORGI` / `MACH_HUSKY` / etc. live inside `if ATAGS`, so starting
+  from `allnoconfig` leaves the whole board-file section invisible until
+  `ATAGS` is enabled.
+- **Check the kernel's size against the NAND slot it is headed for
+  *before* flashing.** See `docs/DEADLETTER-MTD2-MTD3.md` for what happens
+  when that budget is exceeded even though the partition looks big enough.
 
 ## After reboot: verify
 

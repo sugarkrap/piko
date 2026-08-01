@@ -483,6 +483,24 @@ send_file "$REPO/rootfs/usr/sbin/suspend" "/usr/sbin/suspend"
 send_file "$REPO/rootfs/usr/sbin/gototty" "/usr/sbin/gototty"
 ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty"
 
+# 7a2. Backlight: the "bright" helper (single-word, per the AGENTS.md typing
+# constraint -- no '/' or ':' to type) plus the brightd policy daemon that
+# owns Fn+3/Fn+4, idle dimming and lid blanking.
+#
+# brightd is deployed with the rename-aside dance send_file already does,
+# which matters here specifically: it is normally running (rcS starts it),
+# and overwriting a running binary in place fails with ETXTBSY on this
+# kernel. It keeps running from the unlinked inode until the next reboot,
+# so a deploy does not disturb the current session's backlight.
+send_file "$REPO/rootfs/usr/sbin/bright" "/usr/sbin/bright"
+ssh_do "chmod 0755 /usr/sbin/bright"
+if [ -f "$REPO/userspace/src/brightd" ]; then
+    send_file "$REPO/userspace/src/brightd" "/usr/sbin/brightd"
+    ssh_do "chmod 0755 /usr/sbin/brightd"
+else
+    echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
+fi
+
 # 7b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
@@ -825,6 +843,7 @@ fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 echo "  /usr/sbin/suspend, /usr/sbin/gototty"
+echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then

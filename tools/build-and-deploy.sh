@@ -25,7 +25,7 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--build-only] [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--skip-x11] [--build-only] [user@host]
 # Example:
 #   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -40,6 +40,11 @@ set -eu
 # /boot/zImage-full and skips every module/script/helper deploy step.
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
+# --skip-x11 skips tools/build-x11-stack.sh + tools/build-matchbox-payload.sh
+# entirely (a from-scratch X11 build needs the toolchain from
+# tools/build-uclibc-toolchain.sh plus tools/build-thirdparty-deps.sh already
+# staged; skip this if either isn't set up yet, or you just don't want the
+# X11/Matchbox payload rebuilt/redeployed this run).
 # --skip-userspace skips building the cross-compiled userspace
 # (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
 # + st + FLTK) and forwards
@@ -143,7 +148,7 @@ if [ -n "${TOOLCHAIN_BIN_DIR}" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
 fi
 
 if [ -z "${CROSS_COMPILE:-}" ]; then
-    for prefix in arm-buildroot-linux-uclibcgnueabi- arm-unknown-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
+    for prefix in arm-unknown-linux-uclibcgnueabi- arm-buildroot-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
         if command -v "${prefix}gcc" >/dev/null 2>&1; then
             CROSS_COMPILE="$prefix"
             break
@@ -215,23 +220,33 @@ else
 fi
 
 # --- X11 + Matchbox desktop -------------------------------------------
-# Repackages the already-built X stack into the single tar that
-# chunked-deploy ships (see section 9 there). This only *collects*: the
-# X submodules and Matchbox components are built separately, because a
-# from-scratch X build is long and almost never what you want on a
-# routine kernel redeploy. See docs/HOWTO-MATCHBOX-DESKTOP.md.
+# tools/build-x11-stack.sh cross-builds every X.Org/Matchbox submodule
+# (idempotent -- skips anything already built, so this is cheap on every
+# subsequent run, same as tools/setup-kernel-src.sh/build-userspace.sh
+# above), then tools/build-matchbox-payload.sh collects the result into
+# the single tar chunked-deploy ships (see section 9 there).
+# See docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# Missing pieces are not fatal here -- the payload script fails loudly if
-# a component is absent, and a kernel-only or X-less deploy is a
-# perfectly normal thing to want.
+# Neither failure is fatal here -- both scripts fail loudly on their own
+# output, but a machine without the X11 toolchain/third-party-deps set up
+# yet (tools/build-thirdparty-deps.sh) should still be able to get a
+# kernel-only or X-less deploy out, which is a perfectly normal thing to
+# want. Use --skip-x11 to silence the attempt entirely.
 if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
-    echo "==> repacking the X11/Matchbox payload..."
-    if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
-        echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    echo "==> building the X11/Matchbox stack (tools/build-x11-stack.sh)..."
+    if ! sh "$REPO/tools/build-x11-stack.sh" > /tmp/x11-stack-build.log 2>&1; then
+        echo "==> X11 stack build FAILED -- deploying without an X11 payload" >&2
+        echo "    (see /tmp/x11-stack-build.log; pass --skip-x11 to silence)" >&2
+        tail -3 /tmp/x11-stack-build.log >&2
     else
-        echo "==> X11 payload NOT built -- deploying without it" >&2
-        echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
-        tail -3 /tmp/x11-payload-build.log >&2
+        echo "==> repacking the X11/Matchbox payload..."
+        if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
+            echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+        else
+            echo "==> X11 payload NOT built -- deploying without it" >&2
+            echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
+            tail -3 /tmp/x11-payload-build.log >&2
+        fi
     fi
 fi
 

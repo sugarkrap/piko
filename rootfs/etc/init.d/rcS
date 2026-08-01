@@ -147,7 +147,18 @@ ifconfig lo 127.0.0.1 up 2>/dev/null
 # once a Prism2/hostap PCMCIA card is inserted.
 
 # --- w100 display stability profile ---
-# Keep conservative clocking defaults that eliminated 1px horizontal jitter.
+# fastpllclk drives the W100 PLL from Corgi's .pll_freq (75MHz) up to its
+# .fast_pll_freq (100MHz) -- see corgi_fb_modes[] in mach-pxa/corgi.c.
+# It is the mainline equivalent of Cacko's /proc/driver/w100/fastsysclk,
+# except mainline made it a boolean: Cacko took a target MHz, and the
+# "echo 75" everyone passed around is already our *default*, so the only
+# way up from here is 100MHz.
+#
+# Kept at 0. Tested against the LCD vertical-crosstalk artifact on
+# 2026-07-31 with `fbtest blocks`: toggling 75 <-> 100MHz made NO visible
+# difference, so there is nothing to gain here, while an earlier session
+# found 0 eliminated a 1px horizontal jitter. Don't raise it again
+# expecting a display-quality win -- see docs/DEADLETTER-LCD-CROSSTALK.md.
 if test -w /sys/devices/platform/w100fb/fastpllclk; then
 	echo 0 > /sys/devices/platform/w100fb/fastpllclk
 fi
@@ -159,6 +170,29 @@ if test -w /sys/module/w100fb/parameters/vsync_mode; then
 fi
 if test -w /sys/module/w100fb/parameters/vsync_debug; then
 	echo N > /sys/module/w100fb/parameters/vsync_debug
+fi
+
+# --- backlight level ---
+# Re-apply the level saved by "bright save". Must run AFTER the SPI master
+# modules above: corgi-lcd sits on spi1.1, so /sys/class/backlight/corgi_bl
+# does not exist until spi-pxa2xx-platform.ko has registered the bus. With
+# nothing saved this is a no-op and the driver's own default_intensity
+# (0x1f = 31 of 47) stands.
+if test -x /usr/sbin/bright; then
+	/usr/sbin/bright restore 2>/dev/null
+fi
+
+# --- idle dimming / lid blanking ---
+# Watches the evdev nodes directly rather than X: there is no xset on this
+# rootfs, and this way the dimmer also works on the console and before the
+# graphical session starts. Backgrounded with HUP ignored because this
+# BusyBox has no nohup. Stop it with "pkillx brightd" (there is no plain
+# kill on this rootfs); suppress dimming for video with
+# "touch /tmp/brightd.inhibit" rather than stopping the daemon.
+if test -x /usr/sbin/brightd; then
+	trap "" HUP
+	/usr/sbin/brightd 2>/dev/null &
+	trap - HUP
 fi
 
 # --- ssh ---

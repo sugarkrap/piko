@@ -47,6 +47,9 @@ set -eu
 #   ERASEBLOCK   NAND eraseblock size (default 0x4000 = 16KiB, matches this
 #                device's Samsung 128MiB part -- see docs/DEADLETTER-NAND-RECOVERY.md
 #                and piko-install.c's ERASE_SIZE)
+#   SKIP_X11     set to 1 to skip building/staging the X11/Matchbox
+#                desktop (tools/build-x11-stack.sh +
+#                tools/build-matchbox-payload.sh) into the image
 #
 # Needs root for the unpack step (tools/jffs2-mount-extract.sh) -- either
 # run this whole script with sudo, or ensure passwordless sudo is set up
@@ -120,6 +123,30 @@ done
     mode="$(stat -c '%a' "$REPO/rootfs/$rel")"
     chmod "$mode" "$dst"
 done
+
+# X11/Matchbox desktop. Until 2026-07-31 this was NEVER part of a flashed
+# image at all -- only tools/chunked-deploy.sh (section 9) pushed it, live
+# over SSH, onto an already-running device. A device flashed from scratch
+# got a console prompt (rootfs/etc/init.d/xsession falls back to getty
+# when it finds no Xfbdev -- safe, but no desktop) until someone separately
+# remembered to redeploy the desktop afterward. tools/build-x11-stack.sh +
+# tools/build-matchbox-payload.sh are both idempotent (skip anything
+# already built/staged), so calling them unconditionally here is cheap
+# once the stack exists and is what finally makes "flash it" and "it has a
+# desktop" the same event. SKIP_X11=1 opts back out (e.g. a kernel-only
+# respin where the X11 payload hasn't changed and you don't want the
+# idempotency checks' overhead either).
+if [ "${SKIP_X11:-0}" -ne 1 ]; then
+    echo "==> building the X11/Matchbox stack (tools/build-x11-stack.sh)"
+    "$REPO/tools/build-x11-stack.sh"
+
+    echo "==> staging the X11/Matchbox payload into the image"
+    PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/mb-payload}"
+    "$REPO/tools/build-matchbox-payload.sh"
+    cp -a "$PAYLOAD_DIR/." "$OVERLAY/"
+else
+    echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"
+fi
 
 # SSH file transfer (scp + sftp-server + dbclient/dropbearkey), built by
 # tools/build-ssh.sh. Not part of rootfs/ because they are cross-compiled
