@@ -36,6 +36,10 @@
 # the applet wide, because its requested width is the rendered width of
 # "99999" in that font. Tune this number, not the panel size.
 APPLETS="mb-applet-clock -s 16"
+# Right-to-left list order (see above) puts mb-volume just left of the
+# clock and system-monitor just left of that -- i.e. reading the panel
+# left-to-right: ...system-monitor, volume, clock.
+APPLETS="$APPLETS,mb-volume"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
 APPLETS="$APPLETS,mb-applet-wireless"
