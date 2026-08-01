@@ -322,6 +322,44 @@ What matters for *building*:
 
 ---
 
+## System actions in the menu: Suspend, Reboot, Go to TTY
+
+Three entries in the panel menu's **System** folder that *do* something
+rather than open a window. Each is an ordinary `.desktop` file in
+`userspace/desktop/`, and each `Exec=`s a plain script in `/usr/sbin`:
+
+| Menu entry | Exec | What it does |
+|---|---|---|
+| Suspend   | `/usr/sbin/suspend`    | `deep` to `mem_sleep`, then `mem` to `/sys/power/state` |
+| Reboot    | `/usr/sbin/softreboot` | kexec warm reboot (pre-existing script) |
+| Go to TTY | `/usr/sbin/gototty`    | `pkillx Xfbdev`, which cascades the session down to a getty |
+
+Two things about them are easy to get wrong:
+
+**They have no `Type=` line, and that is deliberate.**
+matchbox-desktop-classic's `dotdesktop.c` only draws a desktop icon when
+`Type` is exactly `Application`, so omitting the key keeps these *out* of
+the desktop icon view while `mb-applet-menu-launcher` -- which gates only
+on `Icon`+`Name`+`Exec`, never on `Type` -- still lists them normally. Do
+not reach for `Type=PanelApp` to get the same exclusion: the
+menu-launcher special-cases that exact string and redirects the entry
+into its "Utilities/Panel" applet submenu, which is the wrong folder.
+
+**Go to TTY depends on `pkillx`.** `gototty` is a one-line script and this
+busybox has no `kill`, `killall` or `pkill` applet of its own, so without
+`/usr/sbin/pkillx` (built from `userspace/src/pkillx.c` by
+`tools/build-userspace.sh`) the entry silently does nothing. Both halves
+ship on a normal `tools/build-and-deploy.sh` run: the launchers and icons
+ride in the X11 payload from `build-matchbox-payload.sh`, and the scripts
+plus `pkillx` are sent by `chunked-deploy.sh` section 6e.
+
+The physical on/off button is **not** wired to Suspend, and cannot
+currently be -- see `docs/DEADLETTER-XKB-LIVE-SETMAP.md`. Suspend itself
+has not been watched resume cleanly on real hardware; if the screen stays
+black after a wake, SSH in and read `dmesg | tail` before assuming a hang.
+
+---
+
 ## Wallpaper: modes, formats, and why it's cached raw
 
 `matchbox-desktop` already had a background system (`--bg`, XSettings,
