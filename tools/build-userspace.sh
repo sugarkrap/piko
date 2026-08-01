@@ -19,6 +19,16 @@ set -eu
 #                                   just inline in build-and-deploy.sh) so a
 #                                   plain `tools/build-userspace.sh` produces
 #                                   a complete, deployable set.
+#  1b. userspace/src/brightd        the backlight policy daemon (Fn+3/Fn+4,
+#                                   idle dim, lid blank). Static, libc only:
+#                                   it reads evdev and sysfs directly and
+#                                   deliberately links nothing X. Ordered
+#                                   next to md5sum because it has no
+#                                   dependencies on anything below.
+#  1c. userspace/src/kill           the only way to signal a process on this
+#                                   device (this busybox has no kill/killall/
+#                                   pkill applet at all). Same reasoning as
+#                                   brightd: no dependencies, so it goes early.
 #   2. tools/build-ssh.sh           scp + OpenSSH's sftp-server + a
 #                                   reproducible dropbear. The device's only
 #                                   remote path is WiFi->SSH (AGENTS.md), and
@@ -168,7 +178,26 @@ else
     echo "==> skipping md5sum (no $MD5SUM_SRC)"
 fi
 
-# --- 1b. kill (the only way to signal a process on this device) -------------
+# --- 1b. brightd (backlight policy daemon) ----------------------------------
+# -static for the same reason as md5sum above: no dynamic linker on the
+# rootfs. Links nothing but libc -- it reads evdev and sysfs directly and
+# deliberately avoids X (see the header comment in brightd.c).
+BRIGHTD_SRC="$REPO/userspace/src/brightd.c"
+BRIGHTD_BIN="$REPO/userspace/src/brightd"
+if [ -f "$BRIGHTD_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$BRIGHTD_BIN" ] || [ "$BRIGHTD_SRC" -nt "$BRIGHTD_BIN" ]; then
+        echo "==> building userspace/src/brightd"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$BRIGHTD_BIN" "$BRIGHTD_SRC"
+        "${CROSS_COMPILE}strip" "$BRIGHTD_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/brightd already up to date"
+    fi
+else
+    echo "==> skipping brightd (no $BRIGHTD_SRC)"
+fi
+
+# --- 1c. kill (the only way to signal a process on this device) -------------
 # This busybox has no kill, killall or pkill applet at all, so without this
 # binary there is no way to send a signal to anything. tools/chunked-deploy.sh
 # already RELIES on /usr/local/bin/kill existing (it stops the running X
@@ -259,6 +288,12 @@ echo "==> userspace build complete"
 # perfectly successful build into a reported failure.
 if [ -f "$MD5SUM_BIN" ]; then
     echo "    md5sum:  $MD5SUM_BIN"
+fi
+if [ -f "$BRIGHTD_BIN" ]; then
+    echo "    brightd: $BRIGHTD_BIN"
+fi
+if [ -f "$KILL_BIN" ]; then
+    echo "    kill:    $KILL_BIN"
 fi
 if [ -d "$REPO/userspace/stage-ssh" ]; then
     echo "    ssh:     $REPO/userspace/stage-ssh ($(du -sh "$REPO/userspace/stage-ssh" 2>/dev/null | cut -f1))"

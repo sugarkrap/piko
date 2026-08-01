@@ -115,6 +115,7 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/ver
 !rootfs/usr/sbin/cardinfo
 !rootfs/usr/sbin/sdapps
+!rootfs/usr/sbin/bright
 !rootfs/usr/sbin/smfcommit
 !rootfs/usr/sbin/pkgadd
 !rootfs/usr/sbin/pkgdel
@@ -179,6 +180,9 @@ userspace/stage-target/
 userspace/stage-host/
 # compiled host tools (built from the tracked .c next to them)
 userspace/src/md5sum
+# brightd is an ARM target binary, not a host tool, but same rule: the
+# tracked source is brightd.c and tools/build-userspace.sh rebuilds it.
+userspace/src/brightd
 userspace/src/kill
 # xsha1-compat: sha1.c/sha1.h are tracked source, libmd.* + sha1.o are
 # build output from compiling them
