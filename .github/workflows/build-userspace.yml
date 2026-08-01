@@ -33,6 +33,12 @@ on:
       - "tools/build-userspace.sh"
       - "tools/build-alsa.sh"
       - "tools/build-sdl.sh"
+      # build-userspace.sh calls build-fltk.sh, which also builds
+      # matchbox-fbrun. Note this job skips FLTK when the X11 stack is not
+      # staged, so the binary is actually compiled by build-update-package
+      # and build-piko-zip -- this trigger is here so a change is not
+      # silently untested by the job that owns build-userspace.sh.
+      - "tools/build-fltk.sh"
       - "tools/build-uclibc-toolchain.sh"
       - "tools/uclibc-toolchain.config"
       - ".github/workflows/build-userspace.yml"
