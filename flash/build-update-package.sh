@@ -49,9 +49,10 @@ set -eu
 # which mode it ran in.
 #
 # X11/Matchbox desktop: folded in via tools/build-x11-stack.sh +
-# tools/build-st.sh + tools/build-toasters.sh + tools/build-matchbox-
-# payload.sh (same idempotent build tools tools/build-and-deploy.sh uses
-# for the live path), then every
+# tools/build-matchbox-payload.sh (same idempotent build tools
+# tools/build-and-deploy.sh uses for the live path -- build-x11-stack.sh
+# is what runs build-st.sh, build-fltk.sh and build-toasters.sh now, so
+# they are not separate calls here), then every
 # file in the resulting payload is added to MANIFEST individually --
 # regular files via manifest_add, symlinks (shared-library SONAME aliases)
 # via manifest_add_symlink, matching the SYMLINK line format
