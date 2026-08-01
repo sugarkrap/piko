@@ -205,6 +205,25 @@ cp "$STAGE"/usr/share/fonts/truetype/dejavu/*.ttf \
    "$PAYLOAD/usr/share/fonts/truetype/dejavu/"
 cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 
+# Wallpaper. /usr/share/backgrounds is one of the two directories
+# mb-wallpaper-picker scans (the other is $HOME/.matchbox/backgrounds), so
+# an image here is what makes the picker show anything at all -- until now
+# it opened on an empty grid, because the whole wallpaper system shipped
+# without a single image to point it at.
+#
+# PNG, not JPEG, and that is not a preference: this build's libmb.so.1 is
+# linked against libpng16 only -- no libjpeg -- so a .jpg here would be
+# listed by the picker and then fail to decode. See "Wallpaper: modes,
+# formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
+#
+# Pre-scaled to exactly 480x640, the panel's own size, so the device never
+# pays for a resize: mbdesktop_view_init_bg() caches the composited result
+# either way, but the first boot after a flash would otherwise spend it
+# scaling a larger image on a 400MHz part.
+mkdir -p "$PAYLOAD/usr/share/backgrounds"
+cp "$REPO/userspace/backgrounds/piko-default.png" \
+   "$PAYLOAD/usr/share/backgrounds/piko-default.png"
+
 # The session file decides which panel applets actually run. Without it
 # matchbox-session falls through to its built-in default, which starts
 # matchbox-panel with no arguments -- and the panel's compiled-in default

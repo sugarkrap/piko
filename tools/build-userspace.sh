@@ -235,6 +235,29 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1d. opkg (package manager) ---------------------------------------------
+# Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
+# in before they were added here: tools/build-opkg.sh existed and worked,
+# tools/chunked-deploy.sh section 6d already deployed its output -- but
+# nothing ever CALLED it, so userspace/stage-target/usr/bin/opkg never
+# appeared, the deploy's `if [ -x ... ]` gate never fired, and every run
+# printed "no staged opkg -- skipping" as though that were a setting. The
+# package manager has simply never been on the device.
+#
+# Not gated behind a --skip flag: the build is a single static ~520KB
+# binary and the script skips itself once staged, so it costs nothing on
+# any subsequent run. Not fatal either -- it needs libarchive from
+# tools/build-thirdparty-deps.sh, and a machine without that staged should
+# still get the rest of userspace built rather than stopping here.
+if [ -x "$REPO/tools/build-opkg.sh" ]; then
+    echo "==> building opkg (tools/build-opkg.sh)"
+    if ! sh "$REPO/tools/build-opkg.sh" $FORCE_ARG; then
+        echo "==> opkg build FAILED -- continuing without a package manager" >&2
+        echo "    (it needs libarchive staged by tools/build-thirdparty-deps.sh;" >&2
+        echo "     re-run tools/build-opkg.sh directly to see the full output)" >&2
+    fi
+fi
+
 # --- 2. SSH file transfer (scp + sftp-server, and a reproducible dropbear) --
 # Deliberately early and unconditional: this is the transport everything
 # else in this list is delivered over (AGENTS.md -- no USB, no serial), so

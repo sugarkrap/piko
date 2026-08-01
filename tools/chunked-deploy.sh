@@ -491,6 +491,31 @@ if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
     fi
 fi
 
+# 6a-bis. Seed the default wallpaper CHOICE, once.
+#
+# The image itself rides in the X11 payload (section 8) into
+# /usr/share/backgrounds. That makes it available in the picker but not
+# selected: matchbox-desktop's precedence is --bg, then the
+# _MB_WALLPAPER_SPEC root property, then $HOME/.matchbox/wallpaper, then
+# the theme's DesktopBgSpec -- so with no choice recorded, a fresh device
+# comes up on the theme's flat colour and the wallpaper we just shipped
+# sits there unused until somebody opens the picker and taps it.
+#
+# $HOME/.matchbox/wallpaper is USER-CHOSEN STATE though -- it is the exact
+# file mb-wallpaper-picker writes. So seed it only when the device has
+# none: same rule as power-management.cfg above and touchscreen.cfg below.
+# A default on a fresh device, never an override of a choice made since.
+# Delete the file on the device to get the default back next deploy.
+#
+# HOME is /root for the session (rootfs/etc/init.d/xsession sets it
+# explicitly, precisely so this lookup resolves to anything at all).
+if [ "$(ssh_do "test -f /root/.matchbox/wallpaper && echo yes || echo no")" = "no" ]; then
+    ssh_do "mkdir -p /root/.matchbox && echo img-filled:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
+    echo "==> seeded /root/.matchbox/wallpaper (first deploy; the picker owns it from now on)"
+else
+    echo "==> /root/.matchbox/wallpaper already set, leaving the user's choice alone"
+fi
+
 # 6b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
