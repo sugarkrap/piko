@@ -110,6 +110,10 @@ FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 # because it is an FLTK client: it needs the libfltk and libstdc++ that this
 # payload carries, and would be a dangling binary without them.
 FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
+# pikostore ("Software Center") is the first real GUI app in the ROM, as
+# opposed to a smoke test. Same staging location as fltktest -- put there
+# by tools/build-pikostore.sh, which must run after tools/build-fltk.sh.
+PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -169,6 +173,7 @@ $XKBCOMP_BIN:usr/bin/xkbcomp \
 $XEV_BIN:usr/local/bin/xev \
 $TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
+$PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -280,50 +285,45 @@ for a in $applets; do
     echo "    applet: $a"
 done
 
-# st's menu launcher + icon. Categories=Development matches the vfolder
-# whose displayed Name is "Programming" (data/vfolders-desktop/Development.directory
-# in matchbox-common), which is how it lands in that app-folder on the desktop.
-# Both are skipped along with the binary under --skip-st: a .desktop whose
-# Exec is not in the image is a menu entry that does nothing when tapped,
-# which is worse than no entry.
-mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-if [ "$SKIP_ST" -eq 0 ]; then
-    cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
-    cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
-fi
-
-# pikalibrate's menu launcher + icon (Categories=System, alongside the
-# vfolder named "System Tools"). The binary itself ships separately, via
-# tools/chunked-deploy.sh's SDL section (tools/build-sdl.sh builds it
-# against libSDL, not against anything in this X11 payload) -- only the
-# desktop entry and icon belong here, since matchbox-desktop only reads
-# /usr/share/applications from what this payload deploys.
-cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
-cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
-
-# xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
-# the binary does ship from this payload (see XEV_BIN above) -- it is part
-# of the X11 stack proper.
+# Menu launchers + icons. The Categories= line picks which app-folder each
+# lands in: Development matches the vfolder displayed as "Programming",
+# System matches "System Tools" (see matchbox-common's
+# data/vfolders-desktop/*.directory).
 #
-# Its Exec is "st -e xev" (xev writes to stdout and is useless without a
-# terminal -- see the .desktop's own comments), so under --skip-st this
-# entry is just as dead as st's own and goes with it. The xev BINARY still
-# ships: it is perfectly usable from a shell over SSH, which is the other
-# way anyone runs it.
+# Menu launchers + icons. Shipping an entry here is what puts an app on the
+# desktop at all -- matchbox-desktop only reads the /usr/share/applications
+# this payload deploys. That is independent of where the BINARY comes from:
+# pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
+# libSDL, not this X11 stack), while st, xev, toasters and pikostore ship
+# from this payload. Only the launcher and icon belong here either way.
+#
+# The Categories= line in each file picks which app-folder it lands in:
+# Development matches the vfolder displayed as "Programming", System
+# matches "System Tools" (see matchbox-common's data/vfolders-desktop).
+#
+# pikostore needs a launcher more than most: it is the GUI for updating the
+# ROM, and expecting the user to open a terminal and type its name to reach
+# it would defeat the point (this keyboard cannot even produce a slash).
+#
+# st and xev are the conditional pair. Under --skip-st there is no st
+# binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
+# stdout and is useless without a terminal), so both entries would be menu
+# items that do nothing when tapped -- worse than no entry. The xev BINARY
+# still ships either way: it is perfectly usable from a shell over SSH.
+mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
+LAUNCHERS="pikalibrate pikostore toasters"
 if [ "$SKIP_ST" -eq 0 ]; then
-    cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
-    cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
+    LAUNCHERS="st xev $LAUNCHERS"
 else
-    echo "    --skip-st: leaving out xev.desktop too (its Exec runs st)"
+    echo "    --skip-st: leaving out the st and xev launchers (both exec st)"
 fi
-
-# toasters' menu launcher + icon, also Categories=System. Like xev the
-# binary ships from this payload (see TOASTERS_BIN above); the launcher is
-# a manual preview -- brightd is what normally runs it, on the idle timer
-# described in its "SCREENSAVER CONTENT" header comment.
-cp "$REPO/userspace/desktop/toasters.desktop" "$PAYLOAD/usr/share/applications/toasters.desktop"
-cp "$REPO/userspace/desktop/toasters.png" "$PAYLOAD/usr/share/pixmaps/toasters.png"
-
+for app in $LAUNCHERS; do
+    cp "$REPO/userspace/desktop/$app.desktop" \
+       "$PAYLOAD/usr/share/applications/$app.desktop"
+    cp "$REPO/userspace/desktop/$app.png" \
+       "$PAYLOAD/usr/share/pixmaps/$app.png"
+    echo "    launcher: $app"
+done
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.

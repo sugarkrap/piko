@@ -81,6 +81,9 @@
 [submodule "mb-applet-card"]
 	path = userspace/src/mb-applet-card
 	url = https://github.com/sugarkrap/mb-applet-card
+[submodule "pikostore"]
+	path = userspace/src/pikostore
+	url = https://github.com/sugarkrap/pikostore
 	branch = main
 [submodule "userspace/src/flying-toasters"]
 	path = userspace/src/flying-toasters
