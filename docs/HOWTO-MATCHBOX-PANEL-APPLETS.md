@@ -32,7 +32,7 @@ Plus one of our own, in its own repo rather than in matchbox-panel:
 
 | Applet | Notes |
 |---|---|
-| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built with its own `Makefile` into `D_CARD`. See that repo's README. |
+| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Raises a tray bubble when a card turns up and when an eject fails -- see "Urgent tray messages" below. Built by `tools/build-x11-stack.sh` like every other Matchbox app, into `D_CARD` (`/tmp/mb-stage-card`) -- but with plain `make`, not autotools: it is one source file against one `pkg-config` module and ships a hand-written `Makefile`, so it is the one package in that script with no `configure` step. See that repo's README. |
 | `mb-volume` | Volume slider + mute checkbox, in a self-drawn popup themed off the panel's own message-bubble colours (the panel's real tray bubble is text-only and panel-drawn, so a widget can't live in it). Submodule `userspace/src/mb-volume`, from `github.com/sugarkrap/mb-volume`. Controls ALSA's `Master` element on `hw:0` directly, statically linked against libasound. Built into `D_VOLUME`. See that repo's README. |
 | `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built by `tools/build-x11-stack.sh` like every other Matchbox app, into `D_CARD` (`/tmp/mb-stage-card`) -- but with plain `make`, not autotools: it is one source file against one `pkg-config` module and ships a hand-written `Makefile`, so it is the one package in that script with no `configure` step. See that repo's README. |
 
@@ -257,6 +257,44 @@ The popup also shows the interface's IPv4 address, read with `SIOCGIFADDR`,
 and `None` when there is no address yet. That is a genuinely useful state to
 be able to see: an afternoon went into hunting this device's IP after its
 hotspot re-addressed its subnet.
+
+---
+
+## Urgent tray messages
+
+Applets raise a bubble with `mb_tray_app_tray_send_message()`; the panel
+draws it next to the sending applet's icon. Stock 0.9.3 draws every one of
+them in the same colour, even though `MBPanel` has carried a second colour
+for the purpose -- `msg_urgent_col`, themeable as `PanelMsgBgUrgentCol`,
+default `orange` -- since forever. It is initialised, it is re-read on every
+theme change, and **nothing has ever read it**. There was no way for an
+applet to ask for it.
+
+Our fork adds one. An applet sets a `_MB_SYSTEM_TRAY_MESSAGE_URGENT`
+CARDINAL (non-zero = urgent) on its own tray window immediately before
+sending, and the panel reads it as `SYSTEM_TRAY_BEGIN_MESSAGE` arrives. The
+default was retuned from `orange` to a washed-out red, `#f2a0a0`.
+
+Three things about the shape of this that are not arbitrary:
+
+- **It is a window property, not a field of the client message.** All five
+  `data.l` slots of `SYSTEM_TRAY_BEGIN_MESSAGE` are already spoken for
+  (timestamp, opcode, timeout, length, id). `_MB_SYSTEM_TRAY_CONTEXT`
+  already solved the same problem the same way.
+- **Read at `BEGIN_MESSAGE`, not at draw time.** A bubble is drawn only
+  once all of its data has arrived, which can be several client messages
+  later; by then the sender may have moved on. Reading as the message
+  *starts* is the only point at which the property is guaranteed to still
+  describe that message -- requests from one client are processed in order,
+  so setting it just before sending is enough.
+- **Only the fill changes.** Border and text stay black, so an error bubble
+  reads as the same bubble with a warning colour behind it. Black on
+  saturated red is genuinely hard to read on a transflective panel
+  outdoors, which is also why the default is washed out.
+
+An applet that never sets the property, or a stock panel that never reads
+it, both behave exactly as before. `mb-applet-card` is the first user; see
+its README.
 
 ---
 
