@@ -941,7 +941,6 @@ else
 fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
-echo "  /usr/sbin/suspend, /usr/sbin/gototty"
 echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
 echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
 if [ -x "$REPO/userspace/src/pkillx" ]; then
