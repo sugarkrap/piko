@@ -9,15 +9,14 @@
 #   flip off          the normal way up (clamshell posture)
 #   flip status       show which way it is
 #
-# This is the same register the swivel switch drives through flipd, so
-# the two agree by construction -- there is no separate state to get out
-# of step. What it does NOT do is stop flipd: swivel the lid after
-# running this and flipd will set the flip to match the posture again.
-# To keep a hand-set orientation, put enabled=0 in
-# /etc/piko/rotation.cfg (flipd re-reads it on the next switch event).
+# THIS IS NOT THE SWIVEL ROTATION. The tablet-mode switch drives
+# LANDSCAPE <-> PORTRAIT (a real 480x640 desktop) through flipd; this
+# turns whichever orientation you are already in upside down, and flipd
+# never touches it. The two are orthogonal: you can be in portrait,
+# flipped, both or neither.
 #
-# The rotation itself is free -- the w100 CRTC rotates during scanout, so
-# nothing re-renders. See docs/HOWTO-SCREEN-ROTATION.md.
+# Both are free -- the w100 CRTC does them during scanout, so nothing
+# re-renders either way. See docs/HOWTO-SCREEN-ROTATION.md.
 #
 # Device shell notes: this rootfs's BusyBox ash has NO printf, NO working
 # 'echo -n', and NO kill/killall/awk. Plain echo, test and case only.

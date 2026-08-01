@@ -1,18 +1,14 @@
 # Screen rotation on the swivel hinge
 
-*Written 2026-08-01, when the tablet-mode switch was first wired to the
-display.*
+*Written 2026-08-01. Rewritten the same day, when it turned out the first
+version solved the wrong problem — see "The 180° detour" at the bottom.*
 
-The C7x0 lid swivels 180 degrees and folds flat over the keyboard. In that
-posture the panel is the same landscape rectangle in the same place, upside
-down — so the desktop has to be turned around to stay readable, and the
-touchscreen has to be turned around with it.
+The C7x0 lid swivels and folds flat over the keyboard. That posture is
+**portrait**: a real 480x640 desktop, which is what the tablet-mode switch
+means on this machine.
 
-**The rotation is free.** It is a register field in the w100's display
-controller, applied during scanout. Nothing re-renders, no pixel moves, and
-the cost does not depend on what is on screen. Everything below exists to
-decide *when* to write that register, and to keep the touchscreen pointing
-at the same place the user is looking.
+**Portrait is the cheap direction.** That is the one thing to understand
+here, because every instinct says otherwise.
 
 ---
 
@@ -21,251 +17,208 @@ at the same place the user is looking.
 | | |
 |---|---|
 | Automatic | `flipd` watches the switch and does it. Started from `rcS`. |
-| By hand | `flip` (toggle), `flip on`, `flip off`, `flip status` |
-| Config | `/etc/piko/rotation.cfg` — `enabled`, `switch_invert` |
-| The register | `/sys/devices/platform/w100fb/flip` |
-| Turn it off | `enabled=0` in the config, or `pkillx flipd` |
+| Config | `/etc/piko/rotation.cfg` — `enabled`, `switch_invert`, `portrait_invert` |
+| Turn it off | `enabled=0`, or `pkillx flipd` |
+| Separately | `flip` turns whichever orientation you are in **upside down** (180°). Orthogonal; `flipd` never touches it. |
 
-If the screen comes out upside down in the **clamshell** posture and
-correct when swivelled, the switch reads the other way round on this board
-than assumed: set `switch_invert=1`. That is a one-line config change, no
-rebuild. See *Polarity* below — it is the one thing here that could not be
-verified on hardware when this was written.
+If the screen goes portrait when you *open* the clamshell and landscape
+when you swivel it flat, set `switch_invert=1`. No rebuild.
 
 ---
 
-## Why this is free, and why the obvious alternative is not
+## Why portrait costs nothing
 
-The w100 rotates during scanout. `w100_set_dispregs()` (in
-`modules/w100/w100fb_patched.c`) programs `graphic_ctrl.portrait_mode` with
-one of four rotations, and **this board already depends on it**: the panel
-is physically 480x640 portrait, and the 640x480 landscape framebuffer
-everything draws into is landscape *only because* the platform data asks
-for `INIT_MODE_ROTATED`, i.e. `portrait_mode = 1` (90 degrees).
+The panel is **physically 480x640 portrait**. The 640x480 landscape
+desktop this machine normally runs is itself produced by the w100's CRTC
+rotating during scanout — `graphic_ctrl.portrait_mode = 1`, from
+`INIT_MODE_ROTATED` in the board file, programmed by
+`w100_set_dispregs()` (`modules/w100/w100fb_patched.c`).
 
-So rotation here is not a feature to add. It is a field already in use,
-with the other half of it exposed as a sysfs file:
+So portrait is not "landscape plus a rotation". It is **one transform
+fewer**:
 
-```sh
-cat /sys/devices/platform/w100fb/flip        # 0 or 1
+| | framebuffer | CRTC `portrait_mode` | pixel clock divider |
+|---|---|---|---|
+| landscape | 640x480 | 1 — 90° | `pixclk_divider_rotated` = 6 |
+| portrait | 480x640 | 0 — none | `pixclk_divider` = 2 |
+
+Switching orientation is a framebuffer mode change; the CRTC picks up or
+puts down its rotation for free. **No pixel is moved by the CPU in either
+orientation.**
+
+Note the divider. Portrait clocks the panel three times faster, because
+unrotated scanout reads memory linearly. The ~39ms frame (~26Hz) measured
+in `DEADLETTER-W100-VSYNC.md` was in the *rotated* mode — so portrait may
+well refresh faster than landscape. Nobody has measured it; that is worth
+doing before assuming portrait is the expensive posture.
+
+### Why not `xrandr`
+
+Xfbdev *can* rotate. `xrandr -o left` sets `scrpriv->randr`, and
+`fbdevSetShadow()` then swaps `shadowUpdatePacked` for
+`shadowUpdateRotate16_90` — turning every damage flush from a per-row
+`memcpy` into a reversed per-pixel copy, on a 400MHz PXA255, forever, to
+reproduce what the CRTC gives away. (There is no `xrandr` on this rootfs
+anyway, and no libXrandr.) Do not "simplify" `flipd` into an `xrandr`
+call.
+
+---
+
+## How the live resize works
+
+Nothing here is new machinery. Every piece already existed; the patch
+routes them.
+
+`fbdevSetOrientation()` in the xserver fork runs
+`fbdevRandRSetConfig()`'s sequence, with a hardware mode change swapped in
+for the rotation and `scrpriv->randr` deliberately left at `RR_Rotate_0`
+so the shadow stays a plain packed copy:
+
+```
+KdDisableScreen        tear down the root clip
+fbdevUnmapFramebuffer  release the shadow
+fbdevSetHwGeometry     FBIOPUT_VSCREENINFO; re-read var AND fix
+                       (line_length changes -- 1280 <-> 960 bytes)
+fbdevMapFramebuffer    re-does page flipping at the new size
+fbdevSetShadow         plain shadowUpdatePacked, not a rotator
+fbdevSetScreenSizes    pScreen->width/height from the new var
+KdEnableScreen         KdSetRootClip resizes the ROOT WINDOW and
+                       ResizeChildrenWinSize()s everything under it
+RRScreenSizeNotify     ConfigureNotify on root -> the clients
 ```
 
-With the framebuffer in its rotated (landscape) geometry:
+That last event is the one the desktop cares about, and **Matchbox has
+handled it since 2005**: the `ConfigureNotify` case in
+`matchbox-window-manager/src/wm.c` is commented `/* screen rotation */`
+and walks the client stack adjusting apps, dialogs and each panel's docked
+edge by the size delta. We are not teaching it a new trick.
 
-| `flip` | `portrait_mode` | What you see |
-|---|---|---|
-| 0 | 1 — 90° | Clamshell: normal |
-| 1 | 2 — 270° | Tablet: turned around |
+On any failure the old geometry is restored and the screen re-enabled —
+the alternative on this board is a black display with no serial console
+and no USB to recover through.
 
-90 and 270 are 180 apart, which is exactly the correction the swivel needs.
-Writing the file costs one register write plus a mode-register refresh.
+### Who drives it
 
-**The alternative is much worse, and it is the one you will reach for.**
-Xfbdev *can* rotate: `xrandr -o inverted` sets `scrpriv->randr`, and
-`fbdevSetShadow()` (`hw/kdrive/fbdev/fbdev.c`) then swaps
-`shadowUpdatePacked` for `shadowUpdateRotate16_180`. That turns every
-damage flush from a per-row `memcpy` into a reversed per-pixel copy — on a
-400MHz PXA255 driving a panel that already only manages ~26Hz — in exchange
-for a result the CRTC gives away for nothing. Do not "simplify" `flipd`
-into an `xrandr` call.
+`flipd` writes `PORTRAIT` or `LANDSCAPE` to the server's control FIFO
+(`/tmp/.pikalibrate-ctl`, the channel `pikalibrate` already uses).
 
-(That server already runs with a shadow buffer, because the fork's
-double-buffered page flipping needs one. So software rotation would not
-even be paying for a *new* buffer — it would be paying, forever, to make
-the copy that already happens several times slower.)
+**X does the mode change whenever X is running.** Setting the mode behind
+its back would leave the whole desktop drawing at the wrong size. With no
+X — before the session starts, or a console boot — `flipd` sets the mode
+itself and the console rotates with it.
 
 ---
 
-## Why 180 and not true portrait
+## The touchscreen
 
-180 is the whole correction for this hinge: the swivel does not change
-which edge is long.
+The digitiser does not resize. It is bonded to the panel and keeps
+reporting in the panel's own axes, so when the CRTC stops rotating, the
+raw-to-screen mapping has to pick up the 90° it put down: **the axes
+swap**. Raw X was measured running along the landscape screen's width —
+i.e. along the panel's 640-pixel axis — so in portrait raw X drives screen
+Y and raw Y drives screen X.
 
-A true 480x640 portrait desktop is a **different operation**, and a much
-more expensive one. It means `FBIOPUT_VSCREENINFO` with `xres`/`yres`
-swapped, which changes the screen's dimensions — and kdrive cannot resize a
-live screen, so it would mean restarting X and losing the session.
+A 90° rotation is a swap plus exactly **one** reversal. Which one depends
+on the direction the CRTC was rotating, and that has not been checked on
+hardware, so it is a config key:
 
-The driver side of that is already there: `w100fb_get_mode()` deliberately
-matches a requested geometry against `corgi_fb_modes[]` **with the axes
-swapped as well as straight**, and `w100fb_set_par()` picks `portrait_mode`
-by comparing `par->xres` against the matched mode's — which is exactly how
-the current landscape geometry ends up rotated in the first place. So
-asking for 480x640 would give an unrotated portrait screen (with a
-different pixel clock divider: `pixclk_divider` 2 rather than
-`pixclk_divider_rotated` 6), still for free in the CRTC. The whole cost is
-on the X side. Not implemented. If it ever is, it belongs behind an
-explicit user action, not on a hinge switch.
-
-One thing worth knowing before anyone tries: that divider difference means
-the *rotated* mode we run in today is clocking the panel a third as fast,
-which is consistent with the ~39ms frame (~26Hz) measured in
-`DEADLETTER-W100-VSYNC.md` rather than the ~60Hz the panel is nominally
-capable of. Whether a portrait desktop would actually refresh faster is an
-inference from the divider, not something anyone has measured — but it is
-the reason to measure rather than assume portrait is only a cost.
-
----
-
-## The parts
-
-### The signal — already in the kernel
-
-`CORGI_GPIO_SWB` is declared as an `EV_SW` / `SW_TABLET_MODE` button in
-`corgi_gpio_keys[]` (`modules/mach-pxa/corgi_patched.c`), driven by
-`gpio-keys-polled` at a 250ms poll interval. `CONFIG_KEYBOARD_GPIO_POLLED=y`
-and `CONFIG_INPUT_EVDEV=y` are already set. It lands on the same node
-`brightd` reads for `SW_LID` — today `/dev/input/event0`.
-
-Check it directly:
-
-```sh
-grep -A5 gpio-keys /proc/bus/input/devices     # want SW= with bit 1 set
+```
+portrait_invert=x     reverse screen X   (default)
+portrait_invert=y     reverse screen Y
 ```
 
-`flipd` does **not** hardcode `event0`. It scans the event nodes and picks
-the one whose `EV_SW` bits include `SW_TABLET_MODE`, because the node
-number is a property of driver probe order, and guessing wrong fails
-silently — it would just sit on a device that never reports the switch.
+Read that key when taps in portrait land **mirrored** along one axis (tap
+top-left, get bottom-left). If they land **transposed** instead (tap
+top-right, get bottom-left), the swap itself is wrong and that is a code
+change in `EvdevPtrAbsolute()`, not a config line.
 
-### The daemon — `flipd`
+Each raw axis is scaled against the screen extent it now *drives*, not the
+one it used to — scaling first and swapping afterwards would squash the
+taller axis into the shorter one's range.
 
-`userspace/src/flipd.c`. Static, libc only, same shape as `brightd`:
+**Calibrate in landscape.** `pikalibrate`'s corner taps assume the
+unswapped mapping.
 
-- Reads the switch's **current state** at startup with `EVIOCGSW`, not just
-  edges — a machine booted with the lid already swivelled comes up the
-  right way round instead of waiting to be swivelled twice.
-- Blocks in `read()` the rest of the time. An idle machine pays nothing.
-- Never writes a value that is already set (see *One stale frame* below).
-- Re-reads its config on every switch event, so an edit takes effect on the
-  next swivel — no restart, no signal (this rootfs's BusyBox has no `kill`).
+---
 
-It is a separate process from `brightd`, which reads the same evdev node,
-deliberately: the two share no state, and rotation has to keep working
-while `brightd` is stopped or inhibited. Two readers of one evdev node is
-not a conflict — every open gets its own queue, and only `EVIOCGRAB` is
-exclusive.
+## The 180° flip is a separate thing
 
-### The touchscreen — inside the X server
+`/usr/sbin/flip` (`flip`, `flip on|off|status`) writes
+`/sys/devices/platform/w100fb/flip`, which moves the CRTC between
+`portrait_mode` 1 and 2 in landscape — 180° apart. It turns whichever
+orientation you are in upside down. `flipd` never touches it. You can be
+in portrait, flipped, both or neither.
 
-This is the half that is *not* free, and the half that will bite you if it
-is missing. The panel and digitiser are physically bonded, so turning the
-picture around turns the digitiser's axes around relative to what the user
-now sees. A display that looks right and taps 180 degrees away is worse
-than one that is upside down — at least an upside-down screen is obviously
-wrong.
+X follows it via the `ROTATE` command on the same FIFO, re-reading the
+sysfs file rather than being told a value.
 
-Xfbdev holds an `EVIOCGRAB` on the touchscreen, so nothing outside the
-server can correct this. Our fork inverts both axes in
-`EvdevPtrAbsolute()` (`hw/kdrive/linux/evdev.c`), after calibration
-scaling, when the panel is flipped.
+---
 
-**The state lives in sysfs, not in X.** The server reads
-`/sys/devices/platform/w100fb/flip` back rather than being told a value, so
-there is no second copy to drift out of step. It reads it:
+## Control FIFO summary
 
-- at device-enable time (so a server started while swivelled is correct
-  from the first tap),
-- on `RESUME`,
-- and whenever it is sent `ROTATE` on its control FIFO.
-
-`flipd` and `flip` both send `ROTATE` after writing the register. If X is
-not running there is nothing to notify and the write is skipped.
-
-### The control FIFO
-
-`/tmp/.pikalibrate-ctl` (`hw/kdrive/linux/linux.c`). Named for
-`pikalibrate`, which has the path compiled in, but it is now the server's
-general control channel. Commands are matched as substrings:
+`/tmp/.pikalibrate-ctl` — named for `pikalibrate`, which has the path
+compiled in, but now the server's general control channel. Commands match
+as substrings:
 
 | Command | Effect |
 |---|---|
 | `SUSPEND` | Let go of the input devices |
-| `RESUME` | Take them back; re-read calibration **and** orientation |
-| `ROTATE` | Re-read orientation from sysfs; aim the touchscreen to match |
+| `RESUME` | Take them back; re-read calibration and flip state |
+| `ROTATE` | Re-read the 180° flip state from sysfs |
+| `PORTRAIT` / `LANDSCAPE` | Live orientation change (this document) |
 
 **Opening a FIFO for writing blocks until a reader appears.** `flipd` uses
-`O_NONBLOCK` (no reader is `ENXIO`, no FIFO is `ENOENT`, both normal on a
-console-only boot). The `flip` shell script cannot, so it checks that the X
-socket exists and the FIFO is really a FIFO before writing — without those
-guards it would hang forever on a machine with no X, and there is no
-timeout, no job control and no `kill` on this device to escape with.
+`O_NONBLOCK`; the `flip` shell script checks the X socket exists first.
+Without those guards either would hang forever on a console-only machine,
+and there is no timeout, job control or `kill` on this device to escape
+with.
 
 ---
 
-## Polarity
+## ⚠️ Not verified on hardware
 
-`SW_TABLET_MODE` comes from `CORGI_GPIO_SWB` with no `.active_low`, so the
-reported value follows the raw GPIO level. **Whether that level is high in
-the swivelled posture or in the clamshell one was not verified on hardware
-when this was written** — the board was not reachable from the session that
-built it.
+None of this has run on the board. Three things are unknown:
 
-`switch_invert` exists for exactly that reason, and is a config line rather
-than a rebuild because it is the one unknown here. If the screen is upside
-down in the clamshell and correct when swivelled:
+1. **Switch polarity.** `CORGI_GPIO_SWB` has no `.active_low`; nobody has
+   checked which posture reads high. → `switch_invert`.
+2. **Which portrait axis reverses.** → `portrait_invert`.
+3. **Whether the live resize is clean in practice.** The X-side rollback
+   covers a failed mode set, but not, say, Matchbox mis-placing the panel.
 
-```sh
-# on the device
-flip status                       # which way does it think it is?
-```
-
-then set `switch_invert=1` in `/etc/piko/rotation.cfg` — and **commit it**
-in `rootfs/etc/piko/rotation.cfg`, because that file is appliance policy
-and is overwritten on every deploy (same treatment as
-`power-management.cfg`, deliberately unlike `touchscreen.cfg`, which holds
-measured user calibration and is left alone).
-
-To watch what it is deciding:
-
-```sh
-pkillx flipd
-flipd -v                          # runs in the foreground, logs each decision
-```
+What *was* verified: the whole X patch cross-compiles clean for ARM;
+`flipd` was tested on the host against a synthetic `SW_TABLET_MODE` uinput
+device (startup state via `EVIOCGSW`, both polarities, `enabled=0`, the
+X-present path sending `PORTRAIT` on the FIFO, and the no-X path setting
+the mode directly); and every register/geometry claim above is read out of
+the driver source and cross-checked against `DEADLETTER-W100-VSYNC.md`,
+which confirmed `portrait_mode=1` on this board by sampling registers
+through `/dev/mem`.
 
 ---
 
-## One stale frame
+## The 180° detour
 
-Writing `flip` makes w100fb reprogram the graphics controller, and
-`w100_set_dispregs()` ends by writing `mmGRAPHIC_OFFSET` — which resets the
-scanout base to the front buffer. With the fork's double-buffered page
-flipping running, X may briefly believe a different buffer is on screen
-than actually is, costing up to one frame of stale or torn image until X's
-next paint pans the scanout back where it belongs.
+The first implementation of this feature rotated the landscape desktop by
+180° and called it done, on the reasoning that the swivel puts the panel
+upside down in the same rectangle. That is a real transform the hardware
+supports, and it is what `/usr/sbin/flip` still does — but it is **not
+what the tablet switch is for**. The switch means portrait.
 
-It is self-correcting (X's pan is the authority, and it re-pans on the next
-damage flush), and it is why both `flipd` and `flip` read the current value
-first and skip the write when it already matches. Do not "helpfully" write
-the register unconditionally.
-
----
-
-## What was NOT done
-
-- **True portrait (480x640).** Needs an X restart. See above.
-- **Rotating the console.** `fbcon` is unaffected by the flip in the sense
-  that it does not need to know: the CRTC rotates whatever is in the
-  framebuffer, so the console turns around with everything else. There is
-  no separate console handling and none is needed.
-- **Anything with `xrandr`.** There is no `xrandr` on this rootfs, and the
-  RandR path is the slow one anyway.
-- **Verification on real hardware.** Every claim about the w100 registers
-  here is read out of the driver and cross-checked against the vsync work
-  in `docs/DEADLETTER-W100-VSYNC.md` (which confirmed `portrait_mode=1` on
-  this board by sampling registers through `/dev/mem`); the daemon's logic
-  was tested on the host against a synthetic `SW_TABLET_MODE` device via
-  uinput. What has not been observed is the panel actually turning around,
-  and the switch's polarity.
+The mistake worth not repeating: that version's own documentation listed
+"true portrait" under *What was NOT done*, with the reasoning "kdrive
+cannot resize a live screen, so it would mean restarting X". That was
+wrong on the facts. `fbdevRandRSetConfig()` resizes a live screen today,
+`KdSetRootClip()` resizes the root window, and Matchbox has handled the
+resulting event for twenty years. The capability was three functions away
+the whole time and got written off in a sentence.
 
 ---
 
 ## Related
 
 - [`HOWTO-X11-TOUCHSCREEN.md`](HOWTO-X11-TOUCHSCREEN.md) — the calibration
-  the inversion composes with. **Calibrate in the clamshell posture**, or
-  `pikalibrate`'s corner taps will be fighting the inversion.
+  the portrait transform composes with.
 - [`HOWTO-BRIGHTNESS.md`](HOWTO-BRIGHTNESS.md) — `brightd`, the other
   daemon reading this evdev node.
-- [`DEADLETTER-W100-VSYNC.md`](DEADLETTER-W100-VSYNC.md) — where the
-  `portrait_mode=1` / scanout-offset behaviour was measured.
+- [`DEADLETTER-W100-VSYNC.md`](DEADLETTER-W100-VSYNC.md) — where
+  `portrait_mode` and the scanout offset were measured on hardware.
