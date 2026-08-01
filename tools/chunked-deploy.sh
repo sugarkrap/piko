@@ -509,6 +509,33 @@ if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
     send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
 fi
 
+# 6a2. Screen rotation: the "flip" helper (single-word, same typing
+# constraint as "bright") plus the flipd daemon that drives it off the
+# swivel hinge's tablet-mode switch. Rotation is done by the w100 CRTC
+# during scanout, so this moves no pixels -- see userspace/src/flipd.c.
+#
+# flipd, like brightd, is normally running (rcS starts it), so it relies
+# on send_file's rename-aside dance: overwriting a running binary in place
+# fails with ETXTBSY on this kernel. The old one keeps running from the
+# unlinked inode until the next reboot.
+send_file "$REPO/rootfs/usr/sbin/flip" "/usr/sbin/flip"
+ssh_do "chmod 0755 /usr/sbin/flip"
+if [ -f "$REPO/userspace/src/flipd" ]; then
+    send_file "$REPO/userspace/src/flipd" "/usr/sbin/flipd"
+    ssh_do "chmod 0755 /usr/sbin/flipd"
+else
+    echo "==> skipping flipd (not built -- run tools/build-userspace.sh)"
+fi
+# rotation.cfg is APPLIANCE POLICY, not user state, so it is overwritten
+# every deploy -- same call and same reasoning as power-management.cfg
+# above, and deliberately NOT the "leave it alone if it exists" treatment
+# touchscreen.cfg gets (that file holds measured calibration; this one
+# holds a policy decision that belongs in tracked source).
+if [ -f "$REPO/rootfs/etc/piko/rotation.cfg" ]; then
+    ssh_do "mkdir -p /etc/piko"
+    send_file "$REPO/rootfs/etc/piko/rotation.cfg" "/etc/piko/rotation.cfg"
+fi
+
 # 6a-bis. Seed the default wallpaper CHOICE, once.
 #
 # The image itself rides in the X11 payload (section 8) into
@@ -953,6 +980,7 @@ fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
+echo "  /usr/sbin/flip, /usr/sbin/flipd     (screen rotation; flipd starts from rcS)"
 echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
 if [ -x "$REPO/userspace/src/pkillx" ]; then
     echo "  /usr/sbin/pkillx         (gototty needs it)"

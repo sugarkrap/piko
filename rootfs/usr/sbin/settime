@@ -1,0 +1,104 @@
+#!/bin/sh
+# settime -- one-word clock control for the Sharp Zaurus.
+#
+# Typable on the device keyboard: no '/' and no ':' anywhere in the
+# commands you have to enter (same reason bright/wifiup/audioon exist --
+# see AGENTS.md). The date is taken as plain space-separated integers
+# precisely so that no colon is ever typed.
+#
+#   settime                       show the system clock and the RTC
+#   settime 2026 8 1 14 30        set to 2026-08-01 14:30:00
+#   settime 2026 8 1 14 30 15     ... with seconds
+#   settime ntp                   set from the network, then save
+#   settime save                  system clock -> RTC   (persist)
+#   settime load                  RTC -> system clock
+#   settime help                  this text
+#
+# SETTING WRITES BOTH CLOCKS. Writing only the RTC changes nothing until
+# the next boot; writing only the system clock is forgotten at the next
+# boot. Neither is ever what anyone wants, so a set is always
+# "hwclock --setfields ..." (RTC) followed by "hwclock -s" (RTC -> system),
+# which also means the system clock ends up derived from what the chip
+# actually stored rather than from what we asked for.
+#
+# The RTC and the system clock both keep UTC. /etc/TZ only decides how a
+# time is *printed* -- see docs/HOWTO-RTC-TIME.md.
+#
+# Device shell notes: this rootfs's BusyBox ash has NO printf, NO working
+# 'echo -n', and no awk. That is also why the date is six unpadded
+# integers passed straight to the binary: the shell here cannot zero-pad
+# 8 into 08 to build a "YYYY-MM-DD HH:MM:SS" string. Plain echo, test and
+# case only -- do not "clean this up" with printf.
+#
+# Absolute paths on purpose: this is run from shells with no PATH as well
+# as from login shells.
+
+HWCLOCK=/usr/sbin/hwclock
+NTPSYNC=/usr/sbin/ntpsync
+
+usage() {
+	echo "usage: settime                    show both clocks"
+	echo "       settime YEAR MON DAY HOUR MIN [SEC]"
+	echo "       settime ntp                set from the network, then save"
+	echo "       settime save               system clock -> RTC"
+	echo "       settime load               RTC -> system clock"
+}
+
+if ! test -x "$HWCLOCK"; then
+	echo "settime: no $HWCLOCK"
+	echo "settime: run tools/build-userspace.sh and redeploy"
+	exit 1
+fi
+
+case "$1" in
+	"")
+		echo "system: $(date)"
+		echo "rtc:    $($HWCLOCK)"
+		exit 0
+		;;
+	help|-h|--help)
+		usage
+		exit 0
+		;;
+	save)
+		# System clock -> RTC. What makes a hand-set time survive a boot.
+		exec "$HWCLOCK" -w
+		;;
+	load)
+		# RTC -> system clock. The kernel already does this at boot
+		# (CONFIG_RTC_HCTOSYS); this is for after a manual RTC change.
+		exec "$HWCLOCK" -s
+		;;
+	ntp)
+		if ! test -x "$NTPSYNC"; then
+			echo "settime: no $NTPSYNC"
+			exit 1
+		fi
+		# ntpsync writes the RTC as well as the system clock unless told
+		# '-n', so there is no separate save step here.
+		exec "$NTPSYNC"
+		;;
+esac
+
+# Anything else is a date: five or six integers. hwclock validates the
+# values themselves (and rejects impossible dates and anything before
+# 1970, which the PXA's 32-bit second counter cannot store), so this only
+# has to get the count right and default the seconds.
+case "$#" in
+	5) set -- "$1" "$2" "$3" "$4" "$5" 0 ;;
+	6) ;;
+	*)
+		echo "settime: want 5 or 6 numbers (YEAR MON DAY HOUR MIN [SEC]),"
+		echo "settime: or one of: ntp, save, load, help"
+		usage
+		exit 2
+		;;
+esac
+
+"$HWCLOCK" --setfields "$1" "$2" "$3" "$4" "$5" "$6" || exit 1
+
+# Now make the running system agree with the chip we just wrote.
+"$HWCLOCK" -s || exit 1
+
+echo "system: $(date)"
+echo "rtc:    $($HWCLOCK)"
