@@ -53,8 +53,9 @@ As of 2026-07-31 this is automated end to end:
 `tools/build-x11-stack.sh` runs `tools/setup-x11-src.sh`'s verification
 itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox,
 the four Matchbox apps and `mb-applet-card`, and finally `st` and FLTK --
-idempotently (skips anything already built -- safe to re-run, and cheap
-once everything exists). It is wired into `tools/build-and-deploy.sh` (the
+idempotently (skips anything already built **from the sources currently
+checked out** -- safe to re-run, and cheap once everything exists). It is
+wired into `tools/build-and-deploy.sh` (the
 live-SSH redeploy path) and `flash/build-mtd3-jffs2.sh` (the SD-card
 flash-image path), so under normal use nothing below needs to be run by
 hand at all.
@@ -68,6 +69,41 @@ caller forgot a different one, so packaging failed for all of them. `st`
 and FLTK are also built by `tools/build-userspace.sh`, which skips both
 when this stage is not populated yet; whichever of the two runs second
 finds them current and does nothing.
+
+### "I changed an applet, deployed, and got the old one"
+
+Two independent staleness traps, both fixed 2026-08-01, both worth
+knowing about because both failed *silently* -- a clean build, a clean
+deploy, and the old binary on the device.
+
+**The marker only proved a component had ever been built.** `build_one`
+skipped anything whose install marker existed, so a submodule bumped to
+a new commit was repackaged from the old staged copy for as long as its
+`DESTDIR` survived. `/tmp` outliving a `git submodule update` is all it
+took. Each component now also records the source state it was built from
+(`$STAGE/.piko-build-stamps/<pkg>`: the submodule's `HEAD` plus a hash of
+its tracked diff) and rebuilds when that no longer matches. Untracked
+files are deliberately excluded -- these packages build in-tree and leave
+dozens of un-gitignored artefacts, which would otherwise make every
+component look dirty forever.
+
+**The fast path configured differently than the slow one.** When
+`./configure` already existed, `build_one` ran it directly -- without the
+`--enable-maintainer-mode` that these packages' own `autogen.sh`
+hardcodes. That flag is what installs the `Makefile.in: Makefile.am`
+rebuild rules, so without it `automake` never re-runs and a component
+that *gains a source file* keeps building from the old file list.
+`matchbox-desktop-classic` hit exactly this: `mbdesktop_watch.c` is in
+`src/Makefile.am`, its generated `Makefile` says `MAINT = #` and lists no
+such object, and it fails to link with `undefined reference to
+mbdesktop_watch_init`. The fast path now passes the flag for any package
+whose `autogen.sh` does -- read out of that file rather than hardcoded,
+so the two paths cannot drift apart again.
+
+If you hit a tree that was configured before this fix, one forced rebuild
+of that component regenerates everything:
+
+    tools/build-x11-stack.sh --force matchbox-desktop-classic
 
 **What follows is the reference this script was built from and is
 verified against** -- read it when a single component needs debugging,

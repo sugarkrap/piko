@@ -35,8 +35,10 @@ set -eu
 #
 # With no PKG arguments it builds everything, in the one dependency order
 # that matters (do not reorder the default list). Each component is
-# idempotent -- skipped if its install marker is already present -- so this
-# is cheap to call unconditionally, e.g. from tools/build-and-deploy.sh.
+# idempotent -- skipped if its install marker is present AND was built from
+# the sources currently checked out (see stamp_for/source_state) -- so this
+# is cheap to call unconditionally, e.g. from tools/build-and-deploy.sh,
+# without that cheapness costing you a stale component.
 # --force rebuilds everything (re-runs autogen too). Pass one or more PKG
 # names to build/rebuild only those (dependencies are NOT built for you in
 # that case -- this is for iterating on one component you know is ready).
@@ -306,6 +308,43 @@ uses_autotools() {
     esac
 }
 
+# stamp_for NAME -- where the source state that produced this component's
+# marker is recorded. Kept beside the staging tree, NOT beside the marker:
+# a marker in a DESTDIR gets copied wholesale into the payload, and a
+# build-system dotfile has no business landing in /usr/bin on the device.
+# $STAGE persists in-repo, so a stamp outlives the /tmp DESTDIRs -- which
+# is right, because a vanished DESTDIR already forces a rebuild by itself.
+stamp_for() {
+    echo "$STAGE/.piko-build-stamps/$1"
+}
+
+# source_state DIR -- what the sources currently ARE, as a string to
+# compare against the recorded stamp.
+#
+# HEAD plus a hash of the tracked diff, and deliberately NOT the untracked
+# file list: every one of these packages builds in-tree and leaves dozens
+# of untracked, un-gitignored artefacts behind (65 in matchbox-panel, 83 in
+# matchbox-window-manager), so folding those in would change the state on
+# every build and rebuild the world forever. The tracked diff is clean
+# after a build in every submodule here, which is what makes it usable.
+#
+# The cost of that choice: a brand-new UNTRACKED source file does not
+# trigger a rebuild. --force covers it, and it is the rarer case by far
+# than "the submodule moved to a new commit", which is exactly what this
+# is here to catch.
+source_state() {
+    dir="$1"
+    if [ -e "$dir/.git" ]; then
+        head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+        # Content, not filenames: `git status --porcelain` would call two
+        # different edits of one file identical.
+        diff="$(git -C "$dir" diff HEAD 2>/dev/null | md5sum | cut -d' ' -f1)"
+        echo "$head $diff"
+    else
+        echo "not-a-git-checkout"
+    fi
+}
+
 # configure_args_for NAME -- the FULL configure argument list. Not just
 # used for the direct ./configure call: every autogen.sh in this tree
 # forwards "$@" to its own internal configure invocation, and the two
@@ -338,6 +377,33 @@ configure_args_for() {
     fi
 }
 
+# maintainer_mode_args NAME -- --enable-maintainer-mode, but only for the
+# packages whose own autogen.sh passes it.
+#
+# The fast path below runs ./configure directly when one has already been
+# generated, and that quietly produced a DIFFERENTLY configured tree than
+# the from-scratch path for the second family above: autogen.sh hardcodes
+# --enable-maintainer-mode, ./configure on its own does not, and
+# maintainer mode is what installs the `Makefile.in: Makefile.am` rebuild
+# rules. Without them automake never re-runs, so a component that gains a
+# source file keeps building from the old file list -- silently, with a
+# link error naming a function nobody can find any reference to.
+#
+# That is not hypothetical: matchbox-desktop-classic gained
+# mbdesktop_watch.c in Makefile.am, its generated Makefile still says
+# MAINT = # (maintainer mode off) and lists no such object, and it now
+# fails to link with "undefined reference to mbdesktop_watch_init".
+#
+# Detected by reading each package's autogen.sh rather than hardcoding the
+# list in the comment above, so a submodule that changes its mind about
+# this cannot leave the two paths disagreeing again.
+maintainer_mode_args() {
+    d="$(submodule_dir_for "$1")"
+    if [ -f "$d/autogen.sh" ] && grep -q -- '--enable-maintainer-mode' "$d/autogen.sh"; then
+        echo "--enable-maintainer-mode"
+    fi
+}
+
 build_one() {
     name="$1"
     dir="$(submodule_dir_for "$name")"
@@ -360,9 +426,28 @@ build_one() {
         exit 1
     fi
 
+    # "The marker exists" answers "was this ever built", not "is what was
+    # built still what the sources say" -- and the second question is the
+    # one that matters, because the staged output is what gets packaged and
+    # deployed. Until 2026-08-01 only the first was asked, so a submodule
+    # bumped to a new commit was silently repackaged from the old staged
+    # copy for as long as its DESTDIR survived: updated applets went out as
+    # their old selves, with nothing anywhere reporting a problem.
+    stamp="$(stamp_for "$name")"
+    state="$(source_state "$dir")"
     if [ "$FORCE" -eq 0 ] && [ -e "$marker" ]; then
-        echo "==> $name: already built, skipping ($marker)"
-        return 0
+        if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$state" ]; then
+            echo "==> $name: already built and current, skipping ($marker)"
+            return 0
+        fi
+        if [ -f "$stamp" ]; then
+            echo "==> $name: sources changed since the staged copy -- rebuilding"
+        else
+            # One-time, on the first run after this check was added: there
+            # is no record of what the existing staged copy was built from,
+            # and assuming it is current is the exact bug above.
+            echo "==> $name: staged but unstamped -- rebuilding once to record one"
+        fi
     fi
 
     echo "==> $name"
@@ -382,7 +467,7 @@ build_one() {
           echo "    plain make, nothing to configure"
       elif [ -f ./configure ]; then
           echo "    configure already generated, running it directly"
-          ./configure $(configure_args_for "$name")
+          ./configure $(maintainer_mode_args "$name") $(configure_args_for "$name")
       else
           echo "    generating + running configure (autogen.sh)"
           ./autogen.sh $(configure_args_for "$name")
@@ -442,6 +527,11 @@ build_one() {
         echo "FAILED: $name built but marker is missing: $marker" >&2
         exit 1
     fi
+    # Only now, after the marker is confirmed: a stamp written for a build
+    # that did not finish would make the next run skip a component that
+    # never got staged.
+    mkdir -p "$(dirname "$stamp")"
+    printf '%s\n' "$state" > "$stamp"
     echo "    built: $name"
 }
 
