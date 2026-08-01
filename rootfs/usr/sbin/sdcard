@@ -18,40 +18,60 @@
 # binary and not four lines of shell here (this busybox has no mkswap,
 # swapon or swapoff applet at all).
 #
-# BOTH cardswap calls are backgrounded, and that is not an optimisation:
+# THE WHOLE BODY RUNS IN THE BACKGROUND, as one sequence. Two separate
+# facts force that shape, and the obvious alternatives were both tried and
+# are both wrong.
 #
-#   * `on` writes 64 MiB to the card the first time a given card is used,
-#     which takes the better part of a minute. mdev processes events one
-#     at a time, so blocking here would stall every other hotplug event --
-#     including the PCMCIA/wifi ones -- for that long.
-#   * `off` calls swapoff(2), which pages everything still in swap back
-#     into RAM. On a card that has just been physically pulled that I/O
-#     cannot complete, and a synchronous call would wedge mdev itself in
-#     exactly the D-state the umount comment above is about.
+# It cannot run synchronously. `cardswap on` writes 64 MiB to the card the
+# first time a given card is used, which takes the better part of a minute
+# (measured: 52s), and `cardswap off` calls swapoff(2), which pages
+# everything still in swap back into RAM -- on a card that has just been
+# physically pulled, I/O that cannot complete. mdev processes events one
+# at a time, so blocking here stalls every other hotplug event, PCMCIA and
+# wifi included, and in the swapoff case wedges mdev itself in exactly the
+# D-state the umount comment above is about.
 #
-# Backgrounding them lets the two overlap on a fast remove/insert, so
-# cardswap takes an flock internally to serialise itself. Nothing here
-# needs to wait for either: the panel's system-monitor applet notices the
-# swap area appear and disappear on its own, by polling /proc/swaps.
+# But backgrounding only the cardswap calls, and leaving the umount in the
+# foreground, is a race that loses -- found live on 2026-08-02. swapoff(2)
+# takes a PATH, and `umount -l` had already detached the mount by the time
+# the backgrounded `cardswap off` got to resolve it: /proc/swaps was left
+# reporting the area as "/.zaurus/swap", a path that resolves to nothing,
+# so the swap area survived a removal with no way left to address it. The
+# ordering between the two is not incidental, so they belong in one
+# process, in order.
+#
+# The cost is that the mount is no longer synchronous with the event.
+# That is fine: mb-applet-card already polls for a card acquiring a mount
+# and allows a grace period, precisely because mounting happens behind its
+# back; and with no swap enabled -- the normal case for an insertion --
+# `cardswap off` is a no-op that returns immediately.
+#
+# Poweroff is unaffected. /etc/inittab's `::shutdown:` lines lazy-unmount
+# /mnt/card themselves before `umount -a -r`, so a teardown still in
+# progress here cannot hang a shutdown.
 #
 # The orderly way to remove a card is still mb-applet-card's Eject, which
-# turns swap off while the card is still present and can therefore
-# finish. This hook is the fallback for a card pulled without asking,
-# where some loss is unavoidable whatever we do.
+# turns swap off while the card is present and can therefore finish. This
+# hook is the fallback for a card pulled without asking, where some loss
+# is unavoidable whatever we do.
 CARDSWAP=/usr/sbin/cardswap
 
-# Before the umount, always: an enabled swapfile pins the filesystem it
-# lives on, so a card left with swap on would not unmount at all.
-[ -x "$CARDSWAP" ] && "$CARDSWAP" off >/dev/null 2>&1 &
+{
+	# Swap first, always, and before the umount: an enabled swapfile
+	# pins the filesystem it lives on, and once the mount is gone the
+	# swap area can no longer be named at all (see above).
+	[ -x "$CARDSWAP" ] && "$CARDSWAP" off >/dev/null 2>&1
 
-umount -l /mnt/card 2>/dev/null
+	umount -l /mnt/card 2>/dev/null
 
-if [ "$ACTION" != "remove" ]; then
-	mount /mnt/card 2>/dev/null
-	# Truncating rather than appending: /tmp is on the root jffs2, so
-	# this log is flash wear. One insertion's worth is enough to see
-	# why swap did not come up, and it never grows.
-	[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1 &
-fi
+	if [ "$ACTION" != "remove" ]; then
+		mount /mnt/card 2>/dev/null
+		# Truncating rather than appending: /tmp is on the root
+		# jffs2, so this log is flash wear. One insertion's worth
+		# is enough to see why swap did not come up, and it never
+		# grows.
+		[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1
+	fi
+} &
 
 exit 0

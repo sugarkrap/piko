@@ -67,10 +67,11 @@
 
 #define PROC_SWAPS	"/proc/swaps"
 
-/* Serialises `on` against `off`. Both are launched in the background from
- * /usr/sbin/sdcard -- they have to be, because neither may block mdev --
- * and an insert immediately after a remove would otherwise have one
- * process signing the file while the other is tearing the swap area down.
+/* Serialises `on` against `off`. /usr/sbin/sdcard runs its whole body in
+ * the background -- it has to, because neither call may block mdev -- so
+ * an insert arriving while a remove is still being processed would
+ * otherwise have one process signing the file while the other is tearing
+ * the swap area down.
  * flock(2) rather than a lockfile-with-a-pid: the lock dies with the
  * process, so a killed or crashed run cannot leave a stale one behind on a
  * filesystem that persists across reboots. */
@@ -428,6 +429,12 @@ do_on (const char *path, unsigned long mib)
 	  close (fd);
 	  return 1;
 	}
+      /* Only ever shrinks: the full length has just been written, so this
+       * cannot punch a hole. It matters when an older, larger swapfile is
+       * being replaced by a smaller one -- without it the leftover tail
+       * would sit on the card forever, doing nothing. */
+      if (ftruncate (fd, size) != 0)
+	fprintf (stderr, "%s: ftruncate: %s\n", Prog, strerror (errno));
     }
 
   if (write_signature (fd, pagesize, pages) != 0)
@@ -460,13 +467,21 @@ do_off (const char *path)
 {
   take_lock ();
 
-  if (!is_swapped_on (path))
-    return 0;			/* nothing to do, not a failure */
-
+  /* Deliberately NOT gated on is_swapped_on(): the kernel decides what a
+   * swap area is by INODE, but /proc/swaps prints the path the area had
+   * when it was enabled, and those two can drift apart. A lazily
+   * unmounted card leaves the entry reading "/.zaurus/swap" -- the mount
+   * point stripped off -- and a version of this that checked the listing
+   * first then declined to act would refuse to turn off the very swap
+   * area it was asked about (found live on 2026-08-02). Just make the
+   * call: swapoff(2) on something that is not a swap area is a cheap
+   * EINVAL, and the only honest test of "can this be turned off" is
+   * trying. */
   if (swapoff (path) != 0)
     {
-      /* EINVAL here means "not a swap area we know about", i.e. someone
-       * else already turned it off between the check and now. */
+      /* Neither of these is a failure to report: EINVAL is "that is not a
+       * swap area" (already off, or never was) and ENOENT is "no such
+       * file" (the card is gone). Both mean there is nothing to do. */
       if (errno == EINVAL || errno == ENOENT)
 	return 0;
       fprintf (stderr, "%s: swapoff %s: %s\n", Prog, path, strerror (errno));
