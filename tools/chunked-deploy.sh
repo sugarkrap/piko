@@ -12,7 +12,7 @@ set -eu
 # before (bad `mv`-in-place race on /boot/zImage-full).
 #
 # Usage:
-#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [user@host]
+#   tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [--replace-dropbear] [user@host]
 # Example:
 #   tools/chunked-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -21,14 +21,26 @@ set -eu
 # adapters and the Zaurus is only reachable via one of them.
 # --target user@host sets the SSH destination explicitly. A positional
 # user@host is also accepted for backwards compatibility.
-# --no-userspace skips the MPlayer + ALSA-runtime payload (section 8). That
-# payload is also skipped automatically when the staged trees do not exist
-# or when the device lacks free space -- see section 8 for why the space
-# check refuses rather than half-deploying.
+# --no-userspace skips the MPlayer + ALSA-runtime + SDL payload (section 8).
+# That payload is also skipped automatically when the staged trees do not
+# exist or when the device lacks free space -- see section 8 for why the
+# space check refuses rather than half-deploying.
+# --replace-dropbear also ships the rebuilt SSH SERVER (section 7c), not
+# just scp/sftp-server/dbclient. Off by default because this board has no
+# serial console and no USB: a dropbear that does not come back after the
+# next softreboot is only recoverable via the SD-card recovery flash. The
+# old binary is kept as /usr/sbin/dropbear.prev either way.
 # --kernel-only skips every module/script/helper deployment step below and
 # only ships /boot/zImage-full (still preceded by the md5sum bootstrap).
 # Useful when iterating on a kernel-only change where redeploying modules
 # that haven't changed just adds time and extra risk on the flaky link.
+# --create-backup-files makes send_file() keep a "$remote_path.bak" copy of
+# whatever it overwrites. OFF by default: every file this script touches
+# ends up duplicated on the ~68 MiB root jffs2 if it's on, and routine
+# resyncs (this script is meant to be re-run often) were quietly eating the
+# device's free flash one .bak at a time. Turn it on for a single risky
+# change (e.g. a kernel-only redeploy you might need to roll back by hand)
+# where having *a* known-good previous copy on-device is worth the space.
 #
 # Device shell is a stripped-down busybox ash: no md5sum/sha1sum/cksum/cmp,
 # no `command` builtin, no printf. Per-chunk/per-file integrity is verified
@@ -46,6 +58,8 @@ ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
 NO_USERSPACE=0
+CREATE_BACKUP_FILES=0
+REPLACE_DROPBEAR=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -72,8 +86,16 @@ while [ $# -gt 0 ]; do
             NO_USERSPACE=1
             shift
             ;;
+        --create-backup-files)
+            CREATE_BACKUP_FILES=1
+            shift
+            ;;
+        --replace-dropbear)
+            REPLACE_DROPBEAR=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [--replace-dropbear] [user@host]"
             exit 0
             ;;
         --*)
@@ -103,6 +125,12 @@ REPO="${REPO:-$DEFAULT_REPO}"
 # a clean checkout that has not built them yet -- section 8 skips silently).
 MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
 ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
+SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
+# Toolchain sysroot copy of the uClibc dynamic linker -- only needed for
+# SDL (see tools/build-sdl.sh's header for why it alone, unlike the rest
+# of this static userland, is a shared library).
+HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
+TCROOT="${TCROOT:-$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot}"
 # Heavy software lives on the SD card, not on the ~68 MiB root jffs2.
 # /mnt/card/.zaurus is the hidden overlay described in
 # rootfs/etc/zaurus-card.sh; its usr/bin is already on PATH (unconditionally,
@@ -190,7 +218,9 @@ remote_md5() {
 # Splits LOCAL_PATH into CHUNK_SIZE pieces, transfers each into a scratch
 # dir under REMOTE_STAGE, retrying only the pieces that fail/mismatch, then
 # concatenates remotely and verifies total size before replacing the
-# destination (with a .bak of whatever was there before).
+# destination (with a .bak of whatever was there before, if
+# --create-backup-files was passed -- off by default, see the flag's doc
+# above).
 send_file() {
     local_path="$1"
     remote_path="$2"
@@ -283,15 +313,24 @@ send_file() {
         break
     done
 
-    ssh_do "
-        set -e
-        if [ -f '$remote_path' ]; then
-            cp '$remote_path' '$remote_path.bak'
-        fi
-        mv '$remote_new' '$remote_path'
-        rm -rf '$remote_chunk_dir'
-    "
-    echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+        ssh_do "
+            set -e
+            if [ -f '$remote_path' ]; then
+                cp '$remote_path' '$remote_path.bak'
+            fi
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
+    else
+        ssh_do "
+            set -e
+            mv '$remote_new' '$remote_path'
+            rm -rf '$remote_chunk_dir'
+        "
+        echo "==> $name: deployed to $remote_path"
+    fi
 }
 
 echo "Target: $TARGET"
@@ -435,6 +474,24 @@ send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
 
+# 7a. Backlight: the "bright" helper (single-word, per the AGENTS.md typing
+# constraint -- no '/' or ':' to type) plus the brightd policy daemon that
+# owns Fn+3/Fn+4, idle dimming and lid blanking.
+#
+# brightd is deployed with the rename-aside dance send_file already does,
+# which matters here specifically: it is normally running (rcS starts it),
+# and overwriting a running binary in place fails with ETXTBSY on this
+# kernel. It keeps running from the unlinked inode until the next reboot,
+# so a deploy does not disturb the current session's backlight.
+send_file "$REPO/rootfs/usr/sbin/bright" "/usr/sbin/bright"
+ssh_do "chmod 0755 /usr/sbin/bright"
+if [ -f "$REPO/userspace/src/brightd" ]; then
+    send_file "$REPO/userspace/src/brightd" "/usr/sbin/brightd"
+    ssh_do "chmod 0755 /usr/sbin/brightd"
+else
+    echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
+fi
+
 # 7b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
@@ -448,7 +505,104 @@ send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
-# 8. Userspace media payload: MPlayer + the ALSA runtime config tree.
+# 7c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
+#
+# Built by tools/build-ssh.sh into userspace/stage-ssh; skipped silently
+# when that tree doesn't exist, like every other staged payload here.
+# Deployed BEFORE the multi-megabyte payloads below on purpose: they are
+# ~850 KiB total and they are what makes every *future* transfer to this
+# device a one-liner instead of a chunked shell pipeline.
+#
+# sftp-server MUST land at exactly /usr/libexec/sftp-server: that path is
+# compiled into dropbear (SFTPSERVER_PATH), not looked up on $PATH, so a
+# copy anywhere else is invisible to the server. /usr/libexec does not
+# exist on this rootfs yet, hence the mkdir.
+#
+# The dropbear server binary itself is NOT deployed unless
+# --replace-dropbear is given -- see that option's block below.
+SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
+    echo "==> SSH file transfer payload (scp + sftp-server)"
+    # File list shared with the mtd3 image and update-package builders --
+    # see tools/ssh-payload.sh for why it is not spelled out three times.
+    . "$REPO/tools/ssh-payload.sh"
+    for entry in $SSH_PAYLOAD_FILES; do
+        src="$SSH_STAGE/${entry%%:*}"
+        rest="${entry#*:}"
+        dest="/${rest%%:*}"
+        mode="${rest#*:}"
+        ssh_do "mkdir -p '$(dirname "$dest")'"
+        send_file "$src" "$dest"
+        ssh_do "chmod 0$mode '$dest'"
+    done
+
+    # Replacing the live SSH server is the one deploy on this board that
+    # can strand it: there is no serial console and no USB (AGENTS.md), so
+    # a dropbear that fails to start is unrecoverable without an SD-card
+    # recovery flash. Hence opt-in, and hence the explicit rename-aside
+    # first:
+    #   - it leaves /usr/sbin/dropbear.prev as the thing to rename back
+    #     from the device console if the new server misbehaves. send_file's
+    #     own .bak is NOT that safety net -- it is off unless
+    #     --create-backup-files is passed, and this rollback copy has to
+    #     exist whether or not the caller asked for backups generally;
+    #   - the running dropbear keeps executing from the old inode, so the
+    #     swap cannot disturb the session doing the deploying. (This
+    #     device's busybox has no kill/killall, so stopping it first is not
+    #     an option in any case.)
+    # The new server does not take effect until the next softreboot.
+    if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
+        srv_src="$SSH_STAGE/${SSH_PAYLOAD_SERVER%%:*}"
+        srv_rest="${SSH_PAYLOAD_SERVER#*:}"
+        srv_dest="/${srv_rest%%:*}"
+        echo "==> replacing $srv_dest (rename-aside, effective next boot)"
+        ssh_do "if [ -f '$srv_dest' ]; then mv -f '$srv_dest' '$srv_dest.prev'; fi"
+        send_file "$srv_src" "$srv_dest"
+        ssh_do "chmod 0${srv_rest#*:} '$srv_dest'"
+        echo "    previous server kept at /usr/sbin/dropbear.prev"
+        echo "    takes effect on the next softreboot -- if SSH does not come"
+        echo "    back, log in on the device console and run:"
+        echo "      mv /usr/sbin/dropbear.prev /usr/sbin/dropbear"
+    fi
+elif [ "$KERNEL_ONLY" -eq 0 ]; then
+    echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/build-ssh.sh)"
+fi
+
+# 7d. Package manager (opkg) + its wrappers.
+#
+# opkg itself is staged by tools/build-opkg.sh, not built here. It is a
+# single ~520KB static binary -- no libopkg.so, no libarchive.so -- so
+# there is nothing else to ship alongside it and it keeps working even if
+# a package it installed broke a shared library.
+#
+# /etc/opkg/opkg.conf is NOT optional and NOT cosmetic: it carries the
+# `arch` lines that refuse Sharp-era packages. Without the file opkg falls
+# back to a built-in architecture list containing "arm" and accepts them
+# silently. See the file's own header, and tools/test-opkg-gate.sh.
+#
+# kill is deployed because /usr/sbin/deskscan needs it (this busybox has
+# no kill/killall/pkill applet), and because the X11 payload step further
+# down already assumes /usr/local/bin/kill exists to stop the session.
+if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
+    send_file "$REPO/userspace/stage-target/usr/bin/opkg" "/usr/bin/opkg"
+    send_file "$REPO/rootfs/etc/opkg/opkg.conf" "/etc/opkg/opkg.conf"
+    send_file "$REPO/rootfs/usr/sbin/pkgadd"   "/usr/sbin/pkgadd"
+    send_file "$REPO/rootfs/usr/sbin/pkgdel"   "/usr/sbin/pkgdel"
+    send_file "$REPO/rootfs/usr/sbin/pkglist"  "/usr/sbin/pkglist"
+    send_file "$REPO/rootfs/usr/sbin/deskscan" "/usr/sbin/deskscan"
+    ssh_do "chmod 0755 /usr/bin/opkg /usr/sbin/pkgadd /usr/sbin/pkgdel /usr/sbin/pkglist /usr/sbin/deskscan"
+    ssh_do "chmod 0644 /etc/opkg/opkg.conf"
+    ssh_do "mkdir -p /var/lib/opkg/info /var/cache/opkg"
+else
+    echo "==> no staged opkg -- skipping (build it with tools/build-opkg.sh)"
+fi
+
+if [ -x "$REPO/userspace/src/kill" ]; then
+    send_file "$REPO/userspace/src/kill" "/usr/local/bin/kill"
+    ssh_do "chmod 0755 /usr/local/bin/kill"
+fi
+
+# 8. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
 # e.g. a clean checkout that has not run tools/build-userspace.sh yet).
@@ -463,10 +617,22 @@ ssh_do "chmod 0755 /usr/sbin/sdapps"
 #                         "Unknown PCM cards.pcm.default".
 #   * aplay/amixer/alsactl -- also static; small, and the only way to test
 #                         or adjust the audio path on the device.
+#   * libSDL-1.2.so.0 + sdltest + pikalibrate -- SDL is dynamically linked
+#                         (the one exception to this section's static
+#                         convention -- see tools/build-sdl.sh's header for
+#                         why), so shipping it also bootstraps
+#                         /lib/ld-uClibc*.so + /lib/libc.so onto the device
+#                         if not already there (see the SDL block below for
+#                         the executable-bit gotcha that bootstrap has to
+#                         get right, found on real hardware). pikalibrate
+#                         also gets /etc/piko/touchscreen.cfg pushed, but
+#                         ONLY if the device doesn't already have one --
+#                         it holds real calibration state once run, not a
+#                         file this script should ever clobber.
 # Only the config files this board can actually use are sent (the upstream
 # tree also carries ~70 cards/*.conf for hardware that does not exist here);
 # each send_file is several SSH round trips over a slow, flaky link.
-if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; then
+if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d "$SDL_STAGE" ]; then
     # Preflight: JFFS2 needs free space to garbage-collect. Filling the root
     # filesystem on this board is not a recoverable mistake over SSH, so
     # refuse up front instead of half-deploying and wedging it.
@@ -477,7 +643,13 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
     case "$MPLAYER_DEST" in /mnt/*) MPLAYER_ON_ROOT=0 ;; esac
     MPLAYER_SIZED=""
     [ "$MPLAYER_ON_ROOT" -eq 1 ] && MPLAYER_SIZED="$MPLAYER_STAGE/usr/bin/mplayer"
-    for f in $MPLAYER_SIZED \
+    SDL_SO_REAL=""
+    if [ -d "$SDL_STAGE/usr/lib" ]; then
+        SDL_SO_REAL="$(cd "$SDL_STAGE/usr/lib" && ls libSDL-1.2.so.0.* 2>/dev/null | head -1 || true)"
+    fi
+    SDL_SIZED=""
+    [ -n "$SDL_SO_REAL" ] && SDL_SIZED="$SDL_STAGE/usr/lib/$SDL_SO_REAL"
+    for f in $MPLAYER_SIZED $SDL_SIZED "$SDL_STAGE/usr/bin/sdltest" "$SDL_STAGE/usr/bin/pikalibrate" \
              "$ALSA_STAGE/usr/bin/aplay" "$ALSA_STAGE/usr/bin/amixer" \
              "$ALSA_STAGE/usr/sbin/alsactl"; do
         # Explicit if, not `[ -f ] && ...`: under `set -e` a false test at
@@ -519,6 +691,61 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" ]; the
                 send_file "$ALSA_STAGE/usr/$b" "/usr/$b"
                 ssh_do "chmod 0755 /usr/$b"
             done
+        fi
+        # SDL: small (a few hundred KiB), always goes to the root
+        # filesystem like ALSA above, never card-gated like MPlayer.
+        if [ -n "$SDL_SO_REAL" ]; then
+            if [ -f "$TCROOT/lib/ld-uClibc-1.0.54.so" ] && [ -f "$TCROOT/lib/libuClibc-1.0.54.so" ]; then
+                send_file "$TCROOT/lib/ld-uClibc-1.0.54.so" "/lib/ld-uClibc-1.0.54.so"
+                send_file "$TCROOT/lib/libuClibc-1.0.54.so" "/lib/libuClibc-1.0.54.so"
+                # `cat > file` (send_file's transfer mechanism) creates the
+                # remote file with the default umask, NOT the source's
+                # executable bit -- confirmed on real hardware to land as
+                # 644. That's silently fatal for ld-uClibc-1.0.54.so
+                # specifically: the kernel's ELF loader opens the
+                # PT_INTERP target via the same open_exec() path (and
+                # therefore the same MAY_EXEC permission check) it uses
+                # for the top-level binary, so a non-executable dynamic
+                # linker makes EVERY dynamically-linked binary on the
+                # device fail execve() with EACCES ("Permission denied"),
+                # not just SDL's -- this silently broke
+                # matchbox-remote/Xfbdev too until caught here.
+                ssh_do "chmod 0755 /lib/ld-uClibc-1.0.54.so /lib/libuClibc-1.0.54.so"
+                ssh_do "
+                    set -e
+                    ln -sf ld-uClibc-1.0.54.so /lib/ld-uClibc.so.1
+                    ln -sf ld-uClibc.so.1 /lib/ld-uClibc.so.0
+                    ln -sf libuClibc-1.0.54.so /lib/libc.so.0
+                    ln -sf libuClibc-1.0.54.so /lib/libc.so.1
+                "
+            else
+                echo "==> WARNING: toolchain sysroot runtime libs missing under $TCROOT/lib" >&2
+                echo "    -- cannot bootstrap dynamic linking; SDL will only run if a" >&2
+                echo "    previous deploy already put ld-uClibc/libc.so on the device." >&2
+            fi
+            send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/usr/lib/$SDL_SO_REAL"
+            ssh_do "ln -sf '$SDL_SO_REAL' /usr/lib/libSDL-1.2.so.0"
+            if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
+                send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
+                ssh_do "chmod 0755 /usr/bin/sdltest"
+            fi
+            if [ -f "$SDL_STAGE/usr/bin/pikalibrate" ]; then
+                send_file "$SDL_STAGE/usr/bin/pikalibrate" "/usr/bin/pikalibrate"
+                ssh_do "chmod 0755 /usr/bin/pikalibrate"
+            fi
+            # touchscreen.cfg holds USER-CALIBRATED STATE once pikalibrate has
+            # been run -- unlike every other rootfs/etc/* file in this script,
+            # it must NOT be unconditionally overwritten on a routine
+            # redeploy, or a real calibration would get silently reset back
+            # to the tracked defaults.
+            if [ -f "$REPO/rootfs/etc/piko/touchscreen.cfg" ]; then
+                if [ "$(ssh_do "test -f /etc/piko/touchscreen.cfg && echo yes || echo no")" = "no" ]; then
+                    ssh_do "mkdir -p /etc/piko"
+                    send_file "$REPO/rootfs/etc/piko/touchscreen.cfg" "/etc/piko/touchscreen.cfg"
+                else
+                    echo "==> /etc/piko/touchscreen.cfg already exists on device, leaving it alone"
+                fi
+            fi
         fi
         # Heavy apps: card-only. If there is no card, skip them rather than
         # falling back to flash -- that is the whole point of the split.
@@ -599,11 +826,25 @@ fi
 echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
-echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+    echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+else
+    echo "  /boot/zImage-full        (no .bak kept -- pass --create-backup-files for one)"
+fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
+    echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
+    if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
+        echo "  /usr/sbin/dropbear       (old copy at /usr/sbin/dropbear.prev; new one runs after the next boot)"
+    fi
+fi
 if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
+fi
+if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$SDL_STAGE/usr/lib" ]; then
+    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest + /usr/bin/pikalibrate (if staged)"
 fi
 echo ""
 echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"

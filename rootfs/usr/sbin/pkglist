@@ -1,0 +1,67 @@
+#!/bin/sh
+# pkglist: show what is installed, on the NAND and on the SD card.
+#
+# Single word, no arguments needed, per AGENTS.md.
+#
+#   pkglist         everything installed, grouped by where it lives
+#   pkglist NAME    details for one package
+#
+# See also: pkgadd (install), pkgdel (remove), sdapps (what the card
+# provides on PATH).
+
+OPKG=/usr/bin/opkg
+CONF=/etc/opkg/opkg.conf
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT=/mnt/card
+
+if [ ! -x "$OPKG" ]; then
+    echo "pkglist: $OPKG is missing -- opkg is not installed on this device."
+    exit 1
+fi
+
+card_mounted() {
+    grep -q " $CARD_MNT " /proc/mounts 2>/dev/null
+}
+
+# The card destination is only ever added when a card is really mounted --
+# see the long note in /usr/sbin/pkgadd. Naming it otherwise would make
+# opkg create the tree on the NAND just by parsing its arguments.
+if card_mounted; then
+    DEST_OPTS="--add-dest card:$CARD_ROOT"
+else
+    DEST_OPTS=""
+fi
+
+if [ $# -gt 0 ]; then
+    "$OPKG" --conf "$CONF" $DEST_OPTS info "$1"
+    exit $?
+fi
+
+echo "=== installed on the NAND root ==="
+# opkg reports every destination in one list, so the card entries are
+# filtered out below rather than asked for separately.
+"$OPKG" --conf "$CONF" list-installed 2>/dev/null | sed 's/^/  /'
+
+echo
+if card_mounted; then
+    echo "=== installed on the SD card ($CARD_ROOT) ==="
+    if [ -f "$CARD_ROOT/var/lib/opkg/status" ]; then
+        # Read the card's own status file directly. Each destination keeps
+        # a separate database under its own root (pkg_dest_init() in
+        # libopkg/pkg_dest.c), which is what makes a card carry its
+        # package list with it to another machine.
+        grep '^Package:' "$CARD_ROOT/var/lib/opkg/status" 2>/dev/null \
+            | sed 's/^Package: /  /'
+        if ! grep -q '^Package:' "$CARD_ROOT/var/lib/opkg/status" 2>/dev/null; then
+            echo "  (none)"
+        fi
+    else
+        echo "  (none -- nothing has been installed to this card)"
+    fi
+else
+    echo "=== SD card ==="
+    echo "  (no card mounted)"
+fi
+
+echo
+echo "Install: pkgadd     Remove: pkgdel     Refresh desktop: deskscan"

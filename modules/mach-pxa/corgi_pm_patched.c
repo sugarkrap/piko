@@ -48,7 +48,10 @@ static void corgi_charger_init(void)
 	 * automatically based on whether an adapter is actually plugged in.
 	 * Hold it open permanently from boot so the LED always tracks real
 	 * charging state -- see corgi_charge() below, which no longer
-	 * touches this line.
+	 * touches this line. GPIO13 itself is the other half of the same
+	 * enable and is driven high once at boot and never again; no
+	 * software AC check is involved on either line (corgi.c, "Corgi
+	 * LEDs").
 	 */
 	gpio_direction_output(CORGI_GPIO_CHRG_ON, 1);
 	gpio_request(CORGI_GPIO_CHRG_UKN, "Charger Unknown");

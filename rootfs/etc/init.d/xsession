@@ -45,6 +45,31 @@ fallback_to_console() {
 [ -x "$XSERVER" ] || fallback_to_console "$XSERVER missing"
 [ -x "$SESSION" ] || fallback_to_console "$SESSION missing (matchbox-common not installed?)"
 
+# X refuses to start if /tmp/.X<n>-lock exists: "Server is already active for
+# display 0". On a desktop that file is in a tmpfs and vanishes on reboot,
+# but /tmp here is on the root jffs2, so a server that died without cleaning
+# up -- a crash, or a power cut, or a reboot mid-write -- leaves the lock
+# behind FOREVER. Every subsequent boot then comes up to a console with no
+# X at all, and the cause is four lines down a log nobody reads.
+#
+# So sweep stale locks, but never one that something is genuinely holding:
+# the file contains the server's pid, so /proc/<pid> answers that. There is
+# no kill, pgrep or fuser on this device to ask any other way.
+for lock in /tmp/.X*-lock; do
+	[ -e "$lock" ] || continue		# no glob match
+	lockpid=$(cat "$lock" 2>/dev/null | tr -dc '0-9')
+	if [ -n "$lockpid" ] && [ -d "/proc/$lockpid" ]; then
+		echo "xsession: $lock held by live pid $lockpid, leaving it alone"
+		continue
+	fi
+	echo "xsession: removing stale $lock (pid ${lockpid:-unknown} is gone)"
+	rm -f "$lock"
+	# A dead socket alongside it confuses clients that get as far as
+	# connecting, so clear that too -- but only now that the lock is gone.
+	display=$(basename "$lock" | sed -e 's/^\.X//' -e 's/-lock$//')
+	rm -f "/tmp/.X11-unix/X$display"
+done
+
 "$XSERVER" -retro \
 	-keybd "evdev,,device=$KBD_DEV" \
 	-mouse "evdev,,device=$PTR_DEV" \
@@ -63,6 +88,39 @@ done
 
 DISPLAY=:0
 export DISPLAY
+
+# init runs this with essentially no environment, so HOME is unset --
+# every matchbox tool that looks under $HOME (themes, the wallpaper
+# picker's persisted choice, ...) silently falls back to mb_util_get_
+# homedir()'s /tmp default instead of finding anything here. This
+# session runs as root (see the file header), so give it root's real
+# home rather than leave HOME unset.
+HOME=/root
+export HOME
+
+# PATH has to be set here, and cannot be inherited. init runs this script
+# with essentially no environment, and nothing in a graphical session ever
+# reads /etc/profile -- that is a login-shell file and this is not a login
+# shell. So the SD card's binary directory, which /etc/zaurus-card.sh puts
+# on PATH for shells, is NOT on PATH for anything launched by tapping an
+# icon unless it is added right here.
+#
+# Without it, an application installed onto a card (pkgadd ... card) gets
+# an icon -- matchbox-desktop scans the card's applications directory --
+# and then silently does nothing when tapped, because matchbox-desktop
+# runs the .desktop file's Exec= line through the shell and the shell
+# cannot find the binary. The icon appearing but not working is a
+# considerably more confusing failure than no icon at all.
+#
+# /usr/local/bin is included because the X server and this project's own
+# small tools live there. zaurus-card.sh is sourced rather than the card
+# path being written out again, so ZAURUS_CARD_ROOT stays defined in
+# exactly one file.
+PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH
+if [ -r /etc/zaurus-card.sh ]; then
+	. /etc/zaurus-card.sh
+fi
 
 # Zaurus keyboard layout: redefines the physical Fn key (which the kernel
 # reports as plain KEY_F3) as ISO_Level3_Shift and maps the Fn symbol

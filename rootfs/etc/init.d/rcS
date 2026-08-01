@@ -172,6 +172,29 @@ if test -w /sys/module/w100fb/parameters/vsync_debug; then
 	echo N > /sys/module/w100fb/parameters/vsync_debug
 fi
 
+# --- backlight level ---
+# Re-apply the level saved by "bright save". Must run AFTER the SPI master
+# modules above: corgi-lcd sits on spi1.1, so /sys/class/backlight/corgi_bl
+# does not exist until spi-pxa2xx-platform.ko has registered the bus. With
+# nothing saved this is a no-op and the driver's own default_intensity
+# (0x1f = 31 of 47) stands.
+if test -x /usr/sbin/bright; then
+	/usr/sbin/bright restore 2>/dev/null
+fi
+
+# --- idle dimming / lid blanking ---
+# Watches the evdev nodes directly rather than X: there is no xset on this
+# rootfs, and this way the dimmer also works on the console and before the
+# graphical session starts. Backgrounded with HUP ignored because this
+# BusyBox has no nohup. Stop it with "pkillx brightd" (there is no plain
+# kill on this rootfs); suppress dimming for video with
+# "touch /tmp/brightd.inhibit" rather than stopping the daemon.
+if test -x /usr/sbin/brightd; then
+	trap "" HUP
+	/usr/sbin/brightd 2>/dev/null &
+	trap - HUP
+fi
+
 # --- ssh ---
 mkdir -p /etc/dropbear
 # Generate host keys on first boot (persisted to the jffs2 root).
@@ -190,3 +213,14 @@ echo ""
 
 # --- console keymap: Zaurus C7x0 Fn=AltGr symbol layer (/ : [ ] | { } etc.) ---
 /bin/busybox loadkmap < /etc/zaurus.bmap 2>/dev/null
+
+# --- pending bootstrap (smf) update ---
+# Only ever a notice. The smf write is deliberately NOT automatic: getting
+# here at all is the proof that the newly installed stage-2 boots, and that
+# proof is worthless if this script flashes NAND before anyone sees it.
+# The user decides, with AC connected, by typing smfcommit.
+if test -f /boot/smf-pending; then
+	echo ""
+	echo "  *** bootstrap update pending -- plug in AC and type: smfcommit ***"
+	echo ""
+fi

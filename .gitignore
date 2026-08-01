@@ -67,7 +67,7 @@ flash/zImage
 flash/zImage-*
 flash/zImage.*
 # compiled flash helpers -- the matching *.c sources are tracked
-flash/pico-smf-write
+flash/piko-smf-write
 flash/piko-backup
 # tools/build-piko-install.sh's actual output location (flat in flash/,
 # matching where piko.cfg/updater.sh expect it on the SD card) -- distinct
@@ -115,6 +115,12 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/ver
 !rootfs/usr/sbin/cardinfo
 !rootfs/usr/sbin/sdapps
+!rootfs/usr/sbin/bright
+!rootfs/usr/sbin/smfcommit
+!rootfs/usr/sbin/pkgadd
+!rootfs/usr/sbin/pkgdel
+!rootfs/usr/sbin/pkglist
+!rootfs/usr/sbin/deskscan
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
@@ -132,7 +138,12 @@ userspace/wpa_supplicant-2.11/
 userspace/wireless_tools.29/
 userspace/bin/
 # upstream source trees vendored under userspace/src/
-userspace/src/dropbear-2025.88/
+# dropbear + openssh: fetched, sha256-verified and built by
+# tools/build-ssh.sh (scp + sftp-server + a reproducible dropbear); the
+# version-globbed patterns mean bumping DROPBEAR_VERSION/OPENSSH_VERSION in
+# that script does not also need a .gitignore edit.
+userspace/src/dropbear-*/
+userspace/src/openssh-*/
 userspace/src/kexec-tools-2.0.30/
 userspace/src/mtd-utils-2.2.0/
 userspace/src/microwindows/
@@ -146,11 +157,20 @@ userspace/src/alsa-utils-*/
 # regenerated from tools/build-alsa.sh, not source.
 userspace/stage-alsa/
 userspace/stage-alsa-runtime/
+# tools/build-ssh.sh output: the device payload (scp, sftp-server,
+# dbclient, dropbearkey, dropbear), already usr/... rooted.
+userspace/stage-ssh/
 # tools/build-mplayer.sh: vendored MPlayer-1.5 release tarball + source tree
 # (bundles its own ffmpeg/ snapshot -- ~130MB extracted), and its staged
 # device payload (a single statically-linked mplayer binary).
 userspace/src/MPlayer-*/
 userspace/stage-mplayer/
+# tools/build-sdl.sh: vendored SDL-1.2.15 release tarball + source tree,
+# and its staged dev install / device-payload runtime tree (shared
+# libSDL-1.2.so.0 + the sdltest smoke-test binary).
+userspace/src/SDL-*/
+userspace/stage-sdl/
+userspace/stage-sdl-runtime/
 # X11 cross-build staging trees: stage-target is the ARM sysroot every X
 # package is configured/installed against (~58MB of headers, .so, .pc);
 # stage-host holds the host-side helpers an earlier bring-up session used.
@@ -160,6 +180,10 @@ userspace/stage-target/
 userspace/stage-host/
 # compiled host tools (built from the tracked .c next to them)
 userspace/src/md5sum
+# brightd is an ARM target binary, not a host tool, but same rule: the
+# tracked source is brightd.c and tools/build-userspace.sh rebuilds it.
+userspace/src/brightd
+userspace/src/kill
 # xsha1-compat: sha1.c/sha1.h are tracked source, libmd.* + sha1.o are
 # build output from compiling them
 userspace/src/xsha1-compat/*.o

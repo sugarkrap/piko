@@ -50,9 +50,13 @@ presence. Consequences:
 - AC must be connected for it to be visible at all — but note that AC
   alone does *not* light it during a bootstrap boot (observed: dark), so
   a dark->lit transition really is the kernel's doing.
-- The stage-2 kernel separately checks `AC_IN` presence — which is
-  **redundant**, since the hardware already gates on real charger
-  presence. That logic is slated for simplification.
+- The stage-2 kernel used to separately check `AC_IN` presence (the
+  `sharpsl-charge` LED trigger, fed by ACIN polling in `sharpsl_pm.c`) —
+  which was **redundant**, since the hardware already gates on real
+  charger presence. **Simplified 2026-07-31:** GPIO13 is now driven high
+  once at boot (`LEDS_GPIO_DEFSTATE_ON` + both `retain_state` flags, no
+  trigger) and never touched again, which is what Sharp's own kernels
+  did. Nothing in the kernel derives this LED's state anymore.
 
 **Green LED (SCOOP PA11).** Driving it ON from the bootstrap kernel
 works reliably; driving it back OFF does not — the same asymmetry as the
