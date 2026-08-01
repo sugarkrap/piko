@@ -12,16 +12,25 @@ set -eu
 # Prerequisites -- this script only *collects*, it does not build:
 #   tools/build-thirdparty-deps.sh      zlib expat libpng freetype
 #                                       fontconfig + the DejaVu faces
-#   tools/setup-x11-src.sh              verify the X submodules are the forks
-#   tools/build-fltk.sh                 libfltk*.so.1.3 + fltktest, into the
-#                                       same staging tree
-#   then configure+make, per component, into the DESTDIRs listed below.
+#   tools/build-x11-stack.sh            everything else: the X.Org and
+#                                       Matchbox packages into the DESTDIRs
+#                                       listed below, and (at its end) st
+#                                       and FLTK -- libfltk*.so.1.3,
+#                                       fltktest, matchbox-fbrun -- into the
+#                                       staging tree. It also runs
+#                                       setup-x11-src.sh and build-libiw.sh,
+#                                       so those are not separate steps.
 # See docs/HOWTO-MATCHBOX-DESKTOP.md for the per-component configure
 # lines, which are NOT all obvious (matchbox-desktop in particular needs
 # --sysconfdir=/etc and a forced -DUSE_XSETTINGS).
 #
 # Usage:
-#   tools/build-matchbox-payload.sh [--deploy [user@host]] [--adapter IFACE]
+#   tools/build-matchbox-payload.sh [--skip-st] [--deploy [user@host]] [--adapter IFACE]
+#
+# --skip-st leaves st, its menu entry and its icon out of the payload
+# rather than failing on the missing binary. Pair it with the same flag to
+# tools/build-x11-stack.sh; that script's header explains when st is
+# unbuildable and why that should not cost you the rest of the desktop.
 #
 # Without --deploy it just writes the tar and stops, so you can inspect it.
 # tools/chunked-deploy.sh (section 9) also ships this same tar, chunked and
@@ -55,12 +64,14 @@ D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 DEPLOY=0
 TARGET=""
 ADAPTER=""
+SKIP_ST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --deploy)  DEPLOY=1; shift
                    case "${1:-}" in -*|"") ;; *) TARGET="$1"; shift ;; esac ;;
         --adapter) ADAPTER="${2:?--adapter needs an interface}"; shift 2 ;;
-        -h|--help) sed -n '3,30p' "$0"; exit 0 ;;
+        --skip-st) SKIP_ST=1; shift ;;
+        -h|--help) sed -n '3,40p' "$0"; exit 0 ;;
         *) echo "FAILED: unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -76,7 +87,9 @@ STRIP="$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip"
 #
 # Bare names here; the version suffix is discovered below, so a rebuilt
 # library cannot silently keep shipping the old one.
-LIBS="libX11 libXext libxcb libXau libXdmcp libz libexpat libpng16 \
+# libXpm is here for exactly one consumer, the toasters screensaver, which
+# decodes its vendored XPM sprite sheets with XpmCreateImageFromData().
+LIBS="libX11 libXext libXpm libxcb libXau libXdmcp libz libexpat libpng16 \
 libfreetype libfontconfig libXrender libXft libmb libpixman-1 libXfont \
 libfontenc libxkbfile libmd libfltk libfltk_images libfltk_forms"
 
@@ -88,6 +101,9 @@ XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
+# The flying-toasters idle screensaver brightd launches -- see brightd.c's
+# "SCREENSAVER CONTENT" header comment. Built by tools/build-toasters.sh.
+TOASTERS_BIN="${TOASTERS_BIN:-$REPO/userspace/src/toasters}"
 # fltktest is the FLTK equivalent of sdltest: proof on real hardware that
 # the shared libfltk we just shipped loads and can draw. tools/build-fltk.sh
 # puts it in the staging tree's own bindir rather than a component DESTDIR.
@@ -97,6 +113,10 @@ FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 # because it is an FLTK client: it needs the libfltk and libstdc++ that this
 # payload carries, and would be a dangling binary without them.
 FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
+# pikostore ("Software Center") is the first real GUI app in the ROM, as
+# opposed to a smoke test. Same staging location as fltktest -- put there
+# by tools/build-pikostore.sh, which must run after tools/build-fltk.sh.
+PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -151,15 +171,24 @@ mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin" "$PAYLOAD/usr/sbin"
 # matchbox-fbrun goes to /usr/sbin, not /usr/local/bin: matchbox-desktop
 # execs it by name for any .desktop marked X-Piko-Heavy, and /usr/local/bin
 # is not on this device's PATH.
-for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
-            "$XKBCOMP_BIN:usr/bin/xkbcomp" \
-            "$XEV_BIN:usr/local/bin/xev" \
-            "$ST_BIN:usr/local/bin/st" \
-            "$FLTKTEST_BIN:usr/local/bin/fltktest" \
-            "$FBRUN_BIN:usr/sbin/matchbox-fbrun"; do
+BINS="$XSERVER_BIN:usr/local/bin/Xfbdev \
+$XKBCOMP_BIN:usr/bin/xkbcomp \
+$XEV_BIN:usr/local/bin/xev \
+$TOASTERS_BIN:usr/local/bin/toasters \
+$FLTKTEST_BIN:usr/local/bin/fltktest \
+$PIKOSTORE_BIN:usr/local/bin/pikostore \
+$FBRUN_BIN:usr/sbin/matchbox-fbrun"
+if [ "$SKIP_ST" -eq 0 ]; then
+    BINS="$BINS $ST_BIN:usr/local/bin/st"
+else
+    echo "    --skip-st: leaving st out of the payload"
+fi
+for spec in $BINS; do
     src="${spec%:*}"; dst="${spec##*:}"
     if [ ! -f "$src" ]; then
         echo "FAILED: missing $src -- build that component first" >&2
+        echo "tools/build-x11-stack.sh builds every one of these; if it ran" >&2
+        echo "and this is still missing, that is the bug, not your setup." >&2
         exit 1
     fi
     cp "$src" "$PAYLOAD/$dst"
@@ -183,6 +212,47 @@ mkdir -p "$PAYLOAD/usr/share/fonts/truetype/dejavu"
 cp "$STAGE"/usr/share/fonts/truetype/dejavu/*.ttf \
    "$PAYLOAD/usr/share/fonts/truetype/dejavu/"
 cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
+
+# Wallpaper. /usr/share/backgrounds is one of the two directories
+# mb-wallpaper-picker scans (the other is $HOME/.matchbox/backgrounds), so
+# an image here is what makes the picker show anything at all -- until now
+# it opened on an empty grid, because the whole wallpaper system shipped
+# without a single image to point it at.
+#
+# PNG, not JPEG, and that is not a preference: this build's libmb.so.1 is
+# linked against libpng16 only -- no libjpeg -- so a .jpg here would be
+# listed by the picker and then fail to decode. See "Wallpaper: modes,
+# formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
+#
+# FITTED, not cropped, and pre-rendered to exactly 640x480 -- the panel's
+# size -- with black bars where the aspect ratios disagree. Fitted rather
+# than filled so the whole picture is visible; with a landscape source on
+# this landscape panel the bars are 7px a side and it covers 97.7% of the
+# screen anyway.
+#
+# 640x480 LANDSCAPE. Getting this wrong is not subtle but it IS ambiguous
+# from the outside: /sys/class/graphics/fb0/modes says U:640x480p and the
+# stride is 1280 bytes (640px x 2), while the archived hardware notes call
+# the panel "physically portrait: 480x640 fb" -- both true, describing
+# different things. A 480x640 build of this file put 480x368 of picture in
+# the middle of the screen, 57.5% of it, and read on the device as "really
+# small". The composited cache is 480*640*2 == 640*480*2, so its size
+# cannot tell the two apart either. Trust fb0/modes.
+#
+# Because the file is already exactly screen-sized, the spec that goes with
+# it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
+# all: mbdesktop_view_init_bg() caches the composited result either way,
+# but this way even the first boot after a flash does no scaling on a
+# 400MHz part -- it is a straight blit.
+#
+# Regenerate with:
+#   magick <src> -resize 640x480 -background black -gravity center \
+#          -extent 640x480 -alpha off -strip -interlace none \
+#          -define png:exclude-chunk=all -define png:compression-level=9 \
+#          PNG24:piko-default.png
+mkdir -p "$PAYLOAD/usr/share/backgrounds"
+cp "$REPO/userspace/backgrounds/piko-default.png" \
+   "$PAYLOAD/usr/share/backgrounds/piko-default.png"
 
 # The session file decides which panel applets actually run. Without it
 # matchbox-session falls through to its built-in default, which starts
@@ -218,27 +288,48 @@ for a in $applets; do
     echo "    applet: $a"
 done
 
-# st's menu launcher + icon. Categories=Development matches the vfolder
-# whose displayed Name is "Programming" (data/vfolders-desktop/Development.directory
-# in matchbox-common), which is how it lands in that app-folder on the desktop.
+# Menu launchers + icons. Shipping an entry here is what puts an app on the
+# desktop at all -- matchbox-desktop only reads the /usr/share/applications
+# this payload deploys. That is independent of where the BINARY comes from:
+# pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
+# libSDL, not this X11 stack), while st, xev, toasters and pikostore ship
+# from this payload. Only the launcher and icon belong here either way.
+#
+# The Categories= line in each file picks which app-folder it lands in:
+# Development matches the vfolder displayed as "Programming", System
+# matches "System Tools" (see matchbox-common's data/vfolders-desktop).
+#
+# pikostore needs a launcher more than most: it is the GUI for updating the
+# ROM, and expecting the user to open a terminal and type its name to reach
+# it would defeat the point (this keyboard cannot even produce a slash).
+#
+# st and xev are the conditional pair. Under --skip-st there is no st
+# binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
+# stdout and is useless without a terminal), so both entries would be menu
+# items that do nothing when tapped -- worse than no entry. The xev BINARY
+# still ships either way: it is perfectly usable from a shell over SSH.
+#
+# suspend, reboot and gototty are the three system ACTIONS rather than
+# apps: tapping one does the thing instead of opening a window. They are
+# unconditional -- what each one Exec=s is a plain shell script
+# (/usr/sbin/suspend, /usr/sbin/softreboot, /usr/sbin/gototty), none of
+# which depend on st or on anything else that --skip-st can take away.
+# Those scripts ship via tools/chunked-deploy.sh, not from here; as with
+# pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
-cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
-
-# pikalibrate's menu launcher + icon (Categories=System, alongside the
-# vfolder named "System Tools"). The binary itself ships separately, via
-# tools/chunked-deploy.sh's SDL section (tools/build-sdl.sh builds it
-# against libSDL, not against anything in this X11 payload) -- only the
-# desktop entry and icon belong here, since matchbox-desktop only reads
-# /usr/share/applications from what this payload deploys.
-cp "$REPO/userspace/desktop/pikalibrate.desktop" "$PAYLOAD/usr/share/applications/pikalibrate.desktop"
-cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalibrate.png"
-
-# xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
-# the binary does ship from this payload (see XEV_BIN above) -- it is part
-# of the X11 stack proper.
-cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
-cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
+LAUNCHERS="pikalibrate pikostore toasters suspend reboot gototty"
+if [ "$SKIP_ST" -eq 0 ]; then
+    LAUNCHERS="st xev $LAUNCHERS"
+else
+    echo "    --skip-st: leaving out the st and xev launchers (both exec st)"
+fi
+for app in $LAUNCHERS; do
+    cp "$REPO/userspace/desktop/$app.desktop" \
+       "$PAYLOAD/usr/share/applications/$app.desktop"
+    cp "$REPO/userspace/desktop/$app.png" \
+       "$PAYLOAD/usr/share/pixmaps/$app.png"
+    echo "    launcher: $app"
+done
 
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths

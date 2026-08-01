@@ -34,6 +34,16 @@ Plus one of our own, in its own repo rather than in matchbox-panel:
 |---|---|
 | `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built with its own `Makefile` into `D_CARD`. See that repo's README. |
 | `mb-volume` | Volume slider + mute checkbox, in a self-drawn popup themed off the panel's own message-bubble colours (the panel's real tray bubble is text-only and panel-drawn, so a widget can't live in it). Submodule `userspace/src/mb-volume`, from `github.com/sugarkrap/mb-volume`. Controls ALSA's `Master` element on `hw:0` directly, statically linked against libasound. Built into `D_VOLUME`. See that repo's README. |
+| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built by `tools/build-x11-stack.sh` like every other Matchbox app, into `D_CARD` (`/tmp/mb-stage-card`) -- but with plain `make`, not autotools: it is one source file against one `pkg-config` module and ships a hand-written `Makefile`, so it is the one package in that script with no `configure` step. See that repo's README. |
+
+Until 2026-08-01 `mb-applet-card` was *not* in `build-x11-stack.sh`'s
+package list, even though `tools/build-matchbox-payload.sh` requires
+`D_CARD` to exist and the session file below names the applet. Nobody's
+build had that DESTDIR unless they had built the repo by hand once, so the
+payload step failed with `missing component DESTDIR: /tmp/mb-stage-card`
+on every automated run -- and because `tools/build-and-deploy.sh` treats a
+payload failure as non-fatal, the visible symptom was a deploy that
+quietly shipped no desktop at all rather than an error.
 
 `mb-launcher-term.desktop` wires the last two together. It is installed but
 **deliberately not started**: the wrapper execs `rxvt` or `xterm` and the

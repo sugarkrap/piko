@@ -13,8 +13,8 @@ set -eu
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
 #   - the X11/Matchbox desktop (libX11/libXft/fontconfig/freetype, the
-#     four Matchbox apps, st) -- only if tools/build-x11-stack.sh's own
-#     prerequisites (a separate uclibc-for-X11 toolchain, third-party
+#     four Matchbox apps, st, toasters) -- only if tools/build-x11-stack.sh's
+#     own prerequisites (a separate uclibc-for-X11 toolchain, third-party
 #     deps) are available locally; see "X11/Matchbox desktop" below
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
 #     and usr/sbin/piko-smf-write, the NAND writer it drives
@@ -49,8 +49,10 @@ set -eu
 # which mode it ran in.
 #
 # X11/Matchbox desktop: folded in via tools/build-x11-stack.sh +
-# tools/build-st.sh + tools/build-matchbox-payload.sh (same idempotent
-# build tools tools/build-and-deploy.sh uses for the live path), then every
+# tools/build-matchbox-payload.sh (same idempotent build tools
+# tools/build-and-deploy.sh uses for the live path -- build-x11-stack.sh
+# is what runs build-st.sh, build-fltk.sh and build-toasters.sh now, so
+# they are not separate calls here), then every
 # file in the resulting payload is added to MANIFEST individually --
 # regular files via manifest_add, symlinks (shared-library SONAME aliases)
 # via manifest_add_symlink, matching the SYMLINK line format
@@ -207,6 +209,15 @@ else
     echo "==> no $SSH_STAGE -- package will have no scp/sftp-server"
     echo "    (run tools/build-ssh.sh first if that is not intended)"
 fi
+# The ROM manifest is GENERATED per build, so it cannot live in rootfs/ the
+# way every other config file does -- a tracked copy would be stale the
+# moment it was committed. It is what pikostore's System Update tab reads
+# to name the running ROM, and what piko-update records in the update
+# history after installing this package.
+echo "==> generating ROM manifest (etc/zaurus/manifest)"
+"$REPO/tools/gen-rom-manifest.sh" "$STAGE/manifest"
+manifest_add "$STAGE/manifest" "etc/zaurus/manifest" 644
+sed -n '2p' "$STAGE/manifest" | sed 's/^/    /'
 
 if [ -d "$KERNEL_DIR" ]; then
     echo "==> KERNEL_DIR present ($KERNEL_DIR) -- including kernel + modules"
@@ -259,18 +270,24 @@ fi
 # device back to a console until someone separately remembered to
 # redeploy the desktop afterward.
 #
-# tools/build-x11-stack.sh and tools/build-st.sh are both idempotent (skip
-# anything already built/staged), so calling them unconditionally is cheap
-# once the stack exists. Not fatal if they fail or their prerequisites
-# (the separate uclibc-for-X11 toolchain, third-party deps) aren't
-# provisioned -- same "still produces a valid, useful package" philosophy
-# as the kernel being optional above. SKIP_X11=1 opts out entirely (e.g. a
-# kernel-only respin where rebuilding/restaging the whole desktop would
-# just add time for no reason).
+# tools/build-x11-stack.sh is idempotent (skips anything already
+# built/staged), so calling it unconditionally is cheap once the stack
+# exists. It builds st, FLTK and toasters at its end too, which is why
+# there are no separate build-st.sh/build-toasters.sh calls here any more:
+# this script used to make one and still had no FLTK, so
+# tools/build-matchbox-payload.sh below died on the missing
+# fltktest/matchbox-fbrun. Everything the payload needs is now one
+# script's job -- see that script's header.
+#
+# Not fatal if it fails or its prerequisites (the separate uclibc-for-X11
+# toolchain, third-party deps) aren't provisioned -- same "still produces a
+# valid, useful package" philosophy as the kernel being optional above.
+# SKIP_X11=1 opts out entirely (e.g. a kernel-only respin where
+# rebuilding/restaging the whole desktop would just add time for no reason).
 if [ "${SKIP_X11:-0}" -eq 1 ]; then
     echo "==> SKIP_X11=1 -- not including the X11/Matchbox desktop"
     echo "# x11-matchbox-desktop: not included (SKIP_X11=1)" >> "$MANIFEST"
-elif sh "$REPO/tools/build-x11-stack.sh" >&2 && sh "$REPO/tools/build-st.sh" >&2; then
+elif sh "$REPO/tools/build-x11-stack.sh" >&2; then
     PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/mb-payload}"
     if sh "$REPO/tools/build-matchbox-payload.sh" >&2; then
         echo "==> packaging X11/Matchbox payload ($PAYLOAD_DIR) into the update package"

@@ -104,7 +104,12 @@ on:
       - "tools/build-thirdparty-deps.sh"
       - "tools/setup-x11-src.sh"
       - "tools/build-x11-stack.sh"
+      # build-x11-stack.sh calls all three of these at its end -- st, FLTK
+      # and toasters link against the stage it populates and are shipped in
+      # the payload.
+      - "tools/build-st.sh"
       - "tools/build-fltk.sh"
+      - "tools/build-toasters.sh"
       - "tools/build-matchbox-payload.sh"
       # matchbox-fbrun is built by build-fltk.sh and shipped in the payload.
       - "userspace/src/**"

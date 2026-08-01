@@ -17,6 +17,7 @@ STATIC_IP="10.208.47.22"        # fallback address if DHCP fails (must be free)
 STATIC_MASK="255.255.255.0"
 STATIC_GW="10.208.47.194"       # AP/router (optional; for off-subnet/internet)
 STATIC_DNS="8.8.8.8"
+NTP_SYNC="yes"                  # set the clock from the network once online
 
 ifconfig wlan0 up 2>/dev/null
 
@@ -49,4 +50,14 @@ else
 	if test -n "$STATIC_DNS"; then
 		echo "nameserver $STATIC_DNS" > /etc/resolv.conf
 	fi
+fi
+
+# --- time ---
+# Best-effort clock sync, deliberately the LAST thing here and backgrounded:
+# wlan0 is the only remote-access path to this device (see AGENTS.md), so
+# nothing in this section may delay, block or fail the addressing above.
+# ntpsync writes the RTC itself on success, so a synced time survives the
+# next reboot without any further step.
+if test "$NTP_SYNC" = "yes" -a -x /usr/sbin/ntpsync; then
+	/usr/sbin/ntpsync -q > /dev/null 2>&1 &
 fi

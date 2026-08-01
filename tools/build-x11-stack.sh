@@ -31,15 +31,53 @@ set -eu
 # host/target contamination risk the way there would be for a real lib).
 #
 # Usage:
-#   tools/build-x11-stack.sh [--force] [PKG ...]
+#   tools/build-x11-stack.sh [--force] [--skip-st] [PKG ...]
 #
 # With no PKG arguments it builds everything, in the one dependency order
 # that matters (do not reorder the default list). Each component is
-# idempotent -- skipped if its install marker is already present -- so this
-# is cheap to call unconditionally, e.g. from tools/build-and-deploy.sh.
+# idempotent -- skipped if its install marker is present AND was built from
+# the sources currently checked out (see stamp_for/source_state) -- so this
+# is cheap to call unconditionally, e.g. from tools/build-and-deploy.sh,
+# without that cheapness costing you a stale component.
 # --force rebuilds everything (re-runs autogen too). Pass one or more PKG
 # names to build/rebuild only those (dependencies are NOT built for you in
 # that case -- this is for iterating on one component you know is ready).
+#
+# WHAT "EVERYTHING" MEANS, and why it grew: the job of this script is to
+# leave behind exactly what tools/build-matchbox-payload.sh needs, because
+# that is the only thing anyone builds this stack FOR. Every caller of the
+# two together -- tools/build-and-deploy.sh, flash/build-mtd3-jffs2.sh,
+# flash/build-update-package.sh -- was independently responsible for
+# remembering the leftovers, and each of them forgot a different one, so
+# the payload step failed on all three (2026-08-01; see
+# docs/HOWTO-MATCHBOX-DESKTOP.md "Build order"). The leftovers now live
+# here:
+#
+#   mb-applet-card  a full package below, like the other Matchbox apps.
+#                   It is a separate repo (its own plain Makefile, no
+#                   autotools -- see build_one) and was simply never in
+#                   this list, so $D_CARD never existed and the payload
+#                   died on "missing component DESTDIR" every single run.
+#   st              tools/build-st.sh, at the end -- it is an X11 client
+#                   that links libX11/libXft out of the stage this script
+#                   populates, and the payload ships it.
+#   FLTK            tools/build-fltk.sh, at the end -- libfltk*.so.1.3
+#                   plus fltktest and matchbox-fbrun, likewise X11
+#                   clients of this stage, likewise shipped.
+#
+# st and FLTK are also built by tools/build-userspace.sh, which skips both
+# when the stage is not populated yet. That skip is what made the ordering
+# a trap: build-userspace.sh runs BEFORE this script on a fresh machine, so
+# it skipped them, and nothing ever came back for them. Both scripts are
+# idempotent, so whichever runs second is a no-op -- there is no double
+# build, only a guarantee that they happen at all.
+#
+# --skip-st leaves st out (and only st). It exists for the same reason
+# tools/build-userspace.sh's --skip-st does: st is the one component whose
+# source is a submodule of a non-GitHub upstream, and when that is
+# unavailable userspace/src/st is an empty directory that fails the build
+# at the very last step. Pass it to tools/build-matchbox-payload.sh too, or
+# the payload will still demand the binary.
 #
 # Env overrides (same names/defaults as tools/build-thirdparty-deps.sh):
 #   CROSS_HOST         default arm-unknown-linux-uclibcgnueabi
@@ -58,32 +96,40 @@ HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST/bin}"
 BUILD_ARCH="$(uname -m)-pc-linux-gnu"
 
-# Separate DESTDIRs for the four end-user Matchbox apps -- same variable
-# names as tools/build-matchbox-payload.sh, which reads these back out.
+# Separate DESTDIRs for the end-user Matchbox apps -- same variable names
+# as tools/build-matchbox-payload.sh, which reads these back out.
 # They were built in parallel by separate agents the first time around and
 # would otherwise race installing into one tree.
 D_WM="${D_WM:-/tmp/mbwm-stage}"
 D_DESKTOP="${D_DESKTOP:-/tmp/mb-stage-desktop}"
 D_PANEL="${D_PANEL:-/tmp/mb-stage-panel}"
 D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
+D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 
 FORCE=0
+SKIP_ST=0
 PKGS=""
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE=1 ;;
+        --skip-st) SKIP_ST=1 ;;
         -*) echo "FAILED: unknown option: $arg" >&2; exit 1 ;;
         *) PKGS="$PKGS $arg" ;;
     esac
 done
+# Whether this is a full build or an explicit "just these packages" run.
+# st/FLTK at the end are part of "everything" and must NOT run when the
+# caller asked for one component it is iterating on.
+FULL_BUILD=0
+[ -n "$PKGS" ] || FULL_BUILD=1
 # Dependency order -- see docs/HOWTO-MATCHBOX-DESKTOP.md "Build order" and
 # docs/archive/HANDOFF-2026-07-28-X11-XFBDEV.md for why this chain is what
 # it is (xcb-proto before libxcb: code generation input, not just a link
 # dependency; libXrender/libXft/libmatchbox before the matchbox-* apps).
 [ -n "$PKGS" ] || PKGS="xorg-macros xtrans libfontenc libXfont xcb-proto \
-libxcb libXau libXdmcp libX11 libXext pixman libxkbfile xserver xkbcomp xev \
+libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
-matchbox-desktop-classic matchbox-panel matchbox-common"
+matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -144,6 +190,17 @@ extra_configure_args() {
     libX11)     echo "--disable-static --disable-xcursor --disable-composecache" ;;
     libxcb)     echo "--disable-static --without-doxygen" ;;
     libXfont)   echo "--disable-static --disable-freetype" ;;
+    libXpm)
+        # Needed only to decode the toasters screensaver's XPM sprite
+        # sheets (userspace/src/toasters.c). --with-localedir=no drops the
+        # gettext/libintl lookup, which uClibc has no business satisfying
+        # for a library whose only messages are decoder errors nothing
+        # displays; the two z-file options drop popen()-ing gzip/compress
+        # to read compressed .xpm files off disk, which this never does --
+        # its data is compiled in.
+        echo "--disable-static --disable-open-zfile --disable-stat-zfile \
+--with-localedir=no"
+        ;;
     pixman)
         echo "--disable-static --disable-gtk --disable-libpng --disable-openmp \
 --disable-arm-simd --disable-arm-neon --disable-arm-a64-neon --disable-arm-iwmmxt"
@@ -204,6 +261,7 @@ destdir_for() {
     matchbox-desktop-classic)        echo "$D_DESKTOP" ;;
     matchbox-panel)                  echo "$D_PANEL" ;;
     matchbox-common)                 echo "$D_COMMON" ;;
+    mb-applet-card)                  echo "$D_CARD" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -223,6 +281,7 @@ marker_for() {
     libXdmcp)                 echo "$STAGE/usr/lib/pkgconfig/xdmcp.pc" ;;
     libX11)                   echo "$STAGE/usr/lib/pkgconfig/x11.pc" ;;
     libXext)                  echo "$STAGE/usr/lib/pkgconfig/xext.pc" ;;
+    libXpm)                   echo "$STAGE/usr/lib/pkgconfig/xpm.pc" ;;
     pixman)                   echo "$STAGE/usr/lib/pkgconfig/pixman-1.pc" ;;
     libxkbfile)                echo "$STAGE/usr/lib/pkgconfig/xkbfile.pc" ;;
     xserver)                  echo "$SRC/xserver/hw/kdrive/fbdev/Xfbdev" ;;
@@ -235,6 +294,7 @@ marker_for() {
     matchbox-desktop-classic) echo "$D_DESKTOP/usr/bin/matchbox-desktop" ;;
     matchbox-panel)           echo "$D_PANEL/usr/bin/matchbox-panel" ;;
     matchbox-common)          echo "$D_COMMON/usr/bin/matchbox-session" ;;
+    mb-applet-card)           echo "$D_CARD/usr/bin/mb-applet-card" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -246,6 +306,55 @@ submodule_dir_for() {
     matchbox-desktop-classic) echo "$SRC/matchbox-desktop-classic" ;;
     *) echo "$SRC/$1" ;;
     esac
+}
+
+# uses_autotools NAME -- false only for mb-applet-card, which is one source
+# file against one pkg-config module and deliberately ships a plain Makefile
+# instead of autotools (its own Makefile says why). It has no configure and
+# no autogen.sh, so the generate-and-run-configure step below would fail on
+# it with a bare "no such file or directory".
+uses_autotools() {
+    case "$1" in
+    mb-applet-card) return 1 ;;
+    *) return 0 ;;
+    esac
+}
+
+# stamp_for NAME -- where the source state that produced this component's
+# marker is recorded. Kept beside the staging tree, NOT beside the marker:
+# a marker in a DESTDIR gets copied wholesale into the payload, and a
+# build-system dotfile has no business landing in /usr/bin on the device.
+# $STAGE persists in-repo, so a stamp outlives the /tmp DESTDIRs -- which
+# is right, because a vanished DESTDIR already forces a rebuild by itself.
+stamp_for() {
+    echo "$STAGE/.piko-build-stamps/$1"
+}
+
+# source_state DIR -- what the sources currently ARE, as a string to
+# compare against the recorded stamp.
+#
+# HEAD plus a hash of the tracked diff, and deliberately NOT the untracked
+# file list: every one of these packages builds in-tree and leaves dozens
+# of untracked, un-gitignored artefacts behind (65 in matchbox-panel, 83 in
+# matchbox-window-manager), so folding those in would change the state on
+# every build and rebuild the world forever. The tracked diff is clean
+# after a build in every submodule here, which is what makes it usable.
+#
+# The cost of that choice: a brand-new UNTRACKED source file does not
+# trigger a rebuild. --force covers it, and it is the rarer case by far
+# than "the submodule moved to a new commit", which is exactly what this
+# is here to catch.
+source_state() {
+    dir="$1"
+    if [ -e "$dir/.git" ]; then
+        head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+        # Content, not filenames: `git status --porcelain` would call two
+        # different edits of one file identical.
+        diff="$(git -C "$dir" diff HEAD 2>/dev/null | md5sum | cut -d' ' -f1)"
+        echo "$head $diff"
+    else
+        echo "not-a-git-checkout"
+    fi
 }
 
 # configure_args_for NAME -- the FULL configure argument list. Not just
@@ -280,21 +389,77 @@ configure_args_for() {
     fi
 }
 
+# maintainer_mode_args NAME -- --enable-maintainer-mode, but only for the
+# packages whose own autogen.sh passes it.
+#
+# The fast path below runs ./configure directly when one has already been
+# generated, and that quietly produced a DIFFERENTLY configured tree than
+# the from-scratch path for the second family above: autogen.sh hardcodes
+# --enable-maintainer-mode, ./configure on its own does not, and
+# maintainer mode is what installs the `Makefile.in: Makefile.am` rebuild
+# rules. Without them automake never re-runs, so a component that gains a
+# source file keeps building from the old file list -- silently, with a
+# link error naming a function nobody can find any reference to.
+#
+# That is not hypothetical: matchbox-desktop-classic gained
+# mbdesktop_watch.c in Makefile.am, its generated Makefile still says
+# MAINT = # (maintainer mode off) and lists no such object, and it now
+# fails to link with "undefined reference to mbdesktop_watch_init".
+#
+# Detected by reading each package's autogen.sh rather than hardcoding the
+# list in the comment above, so a submodule that changes its mind about
+# this cannot leave the two paths disagreeing again.
+maintainer_mode_args() {
+    d="$(submodule_dir_for "$1")"
+    if [ -f "$d/autogen.sh" ] && grep -q -- '--enable-maintainer-mode' "$d/autogen.sh"; then
+        echo "--enable-maintainer-mode"
+    fi
+}
+
 build_one() {
     name="$1"
     dir="$(submodule_dir_for "$name")"
     marker="$(marker_for "$name")"
     ddir="$(destdir_for "$name")"
 
-    if [ ! -d "$dir" ]; then
+    # An EMPTY directory counts as "not checked out", not as checked out.
+    # A submodule whose worktree has been emptied still has its .git file
+    # (and `git submodule update --init` reports success on it, because the
+    # gitlink is already at the right commit), so `[ -d ]` alone says yes
+    # and the build then dies much later with something unrelated-looking.
+    # Ignore .git itself when deciding, since that is exactly what is left.
+    if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null | grep -v '^\.git$')" ]; then
         echo "FAILED: submodule not checked out: $dir" >&2
         echo "Run: git submodule update --init --recursive" >&2
+        echo "(if that reports nothing to do, the worktree was emptied --" >&2
+        echo " restore it with: git -C $dir checkout HEAD -- .)" >&2
+        echo " HEAD is needed there: a plain 'checkout -- .' fails when the" >&2
+        echo " deletions are already staged, which is how this usually looks." >&2
         exit 1
     fi
 
+    # "The marker exists" answers "was this ever built", not "is what was
+    # built still what the sources say" -- and the second question is the
+    # one that matters, because the staged output is what gets packaged and
+    # deployed. Until 2026-08-01 only the first was asked, so a submodule
+    # bumped to a new commit was silently repackaged from the old staged
+    # copy for as long as its DESTDIR survived: updated applets went out as
+    # their old selves, with nothing anywhere reporting a problem.
+    stamp="$(stamp_for "$name")"
+    state="$(source_state "$dir")"
     if [ "$FORCE" -eq 0 ] && [ -e "$marker" ]; then
-        echo "==> $name: already built, skipping ($marker)"
-        return 0
+        if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$state" ]; then
+            echo "==> $name: already built and current, skipping ($marker)"
+            return 0
+        fi
+        if [ -f "$stamp" ]; then
+            echo "==> $name: sources changed since the staged copy -- rebuilding"
+        else
+            # One-time, on the first run after this check was added: there
+            # is no record of what the existing staged copy was built from,
+            # and assuming it is current is the exact bug above.
+            echo "==> $name: staged but unstamped -- rebuilding once to record one"
+        fi
     fi
 
     echo "==> $name"
@@ -310,15 +475,30 @@ build_one() {
       # with "undefined or overquoted macro: XTRANS_CONNECTION_FLAGS".
       export ACLOCAL_PATH="$SRC/xorg-macros:$STAGE/usr/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
       # shellcheck disable=SC2046
-      if [ -f ./configure ]; then
+      if ! uses_autotools "$name"; then
+          echo "    plain make, nothing to configure"
+      elif [ -f ./configure ]; then
           echo "    configure already generated, running it directly"
-          ./configure $(configure_args_for "$name")
+          ./configure $(maintainer_mode_args "$name") $(configure_args_for "$name")
       else
           echo "    generating + running configure (autogen.sh)"
           ./autogen.sh $(configure_args_for "$name")
       fi
 
       case "$name" in
+      mb-applet-card)
+          # Everything its Makefile reads -- CC, CPPFLAGS, LDFLAGS and the
+          # PKG_CONFIG_* trio it resolves libmb through -- is already
+          # exported above, and `CC ?= cc` in that Makefile yields to the
+          # environment. CC is passed explicitly anyway so a reader does
+          # not have to know that rule to see this is a cross build.
+          #
+          # --force needs an explicit clean here: for every other package
+          # the forced rebuild is driven by deleting ./configure, and this
+          # one has none, so an up-to-date .o would otherwise be reused.
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
+          ;;
       xserver)
           # CWARNFLAGS override: this 15-year-old codebase is full of
           # warnings modern GCC treats as errors by xserver's own default
@@ -359,6 +539,11 @@ build_one() {
         echo "FAILED: $name built but marker is missing: $marker" >&2
         exit 1
     fi
+    # Only now, after the marker is confirmed: a stamp written for a build
+    # that did not finish would make the next run skip a component that
+    # never got staged.
+    mkdir -p "$(dirname "$stamp")"
+    printf '%s\n' "$state" > "$stamp"
     echo "    built: $name"
 }
 
@@ -366,8 +551,51 @@ for p in $PKGS; do
     build_one "$p"
 done
 
+# --- X11 clients that are not X.Org/Matchbox packages ---------------------
+# st and FLTK link against the stage the loop above just populated, and
+# tools/build-matchbox-payload.sh ships everything they produce: st, the
+# libfltk*.so trio, fltktest and matchbox-fbrun. See this script's header
+# for why they live here rather than being every caller's problem.
+#
+# Both are idempotent and exit 0 when already current, so this costs a pair
+# of marker checks on every subsequent run. Skipped entirely for an explicit
+# "build just these packages" invocation: that mode is for iterating on one
+# component and has no business rebuilding the world.
+if [ "$FULL_BUILD" -eq 1 ]; then
+    echo ""
+    if [ "$SKIP_ST" -eq 1 ]; then
+        echo "==> --skip-st: not building st"
+    else
+        echo "==> building st (tools/build-st.sh)"
+        FORCE_ARG=""
+        [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
+        # Unquoted on purpose: an empty "" would be passed through as a
+        # literal argument, and build-st.sh only accepts --force.
+        # shellcheck disable=SC2086
+        sh "$REPO/tools/build-st.sh" $FORCE_ARG
+    fi
+
+    echo ""
+    echo "==> building FLTK + fltktest + matchbox-fbrun (tools/build-fltk.sh)"
+    FORCE_ARG=""
+    [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
+    # shellcheck disable=SC2086
+    sh "$REPO/tools/build-fltk.sh" $FORCE_ARG
+
+    # The flying-toasters screensaver brightd launches on its idle timer.
+    # Same shape as st: one Xlib client against this stage, shipped in the
+    # payload, so it belongs to the same "build what the payload needs"
+    # rule rather than being each caller's job to remember.
+    echo ""
+    echo "==> building the toasters screensaver (tools/build-toasters.sh)"
+    FORCE_ARG=""
+    [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
+    # shellcheck disable=SC2086
+    sh "$REPO/tools/build-toasters.sh" $FORCE_ARG
+fi
+
 echo ""
 echo "==> X11/Matchbox stack ready."
 echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/"
-echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON"
+echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD"
 echo "    Package into a payload with:    tools/build-matchbox-payload.sh"

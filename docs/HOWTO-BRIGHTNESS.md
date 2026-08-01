@@ -1,11 +1,12 @@
 # Backlight control on the Zaurus C7x0
 
-Two pieces, both shipped by `tools/chunked-deploy.sh`:
+Three pieces, all shipped by `tools/chunked-deploy.sh`:
 
 | Thing | What it is | Where it comes from |
 |---|---|---|
 | `/usr/sbin/bright` | one-word CLI, the single definition of the step ladder | `rootfs/usr/sbin/bright` (tracked) |
-| `/usr/sbin/brightd` | policy daemon: Fn hotkeys, idle dim, lid blank | `userspace/src/brightd.c`, built by `tools/build-userspace.sh` |
+| `/usr/sbin/brightd` | policy daemon: Fn hotkeys, idle dim, lid blank, idle screensaver | `userspace/src/brightd.c`, built by `tools/build-userspace.sh` |
+| `/usr/local/bin/toasters` | the idle screensaver `brightd` launches — see "The screensaver" below | `userspace/src/toasters.c`, built by `tools/build-toasters.sh` (needs the X11 stack staged; part of the Matchbox payload, not the plain userspace build) |
 
 ## Using it
 
@@ -25,8 +26,9 @@ normally starve `brightd` of every event; our fork now forwards what it
 sees instead. See "The big one" below for why that was needed and how
 it works.
 
-Defaults: dim to level 5 after 60s idle, blank after 300s, restore on any
-key or touch. Closing the lid blanks immediately.
+Defaults: dim to level 5 after 60s idle, show the toasters screensaver
+after 120s, blank after 300s, restore on any key or touch. Closing the
+lid blanks immediately.
 
 **Watching a video?** `touch /tmp/brightd.inhibit` suspends dimming and
 blanking (hotkeys and the lid still work); delete it afterwards. MPlayer
@@ -42,6 +44,7 @@ defaults with plain `key=value` lines (same format as matchbox's
 
 ```
 dim_secs=60
+toast_secs=120
 blank_secs=300
 dim_level=5
 suspend_on_lid=yes
@@ -59,7 +62,7 @@ signal, because this device's BusyBox has no `kill`/`killall`/`pkill` to
 send one with (see "No signal protocol" above). Save the file, wait a
 couple of seconds, done.
 
-`-d`/`-b`/`-l` passed on `brightd`'s command line (the line in
+`-d`/`-t`/`-b`/`-l` passed on `brightd`'s command line (the line in
 `rootfs/etc/init.d/rcS`) always win over the config file, even across a
 reload — a manual `brightd -d 5` for testing is never silently
 overridden by whatever the file says. `suspend_on_lid` has no
@@ -246,10 +249,11 @@ layer underneath X, and this keymap has `KEY_SYSRQ` on it.
 
 ## Wiring X11 DPMS through brightd
 
-The end goal past this point is real screensaver *content* (animated
-hacks, not just a blanked panel) — which means an X client using the
-core screensaver machinery, and that machinery has to actually do
-something first. Before this, it didn't: `hw/kdrive/fbdev/fbdev.c`'s
+The goal past this point was real screensaver *content* (animated hacks,
+not just a blanked panel) — see "The screensaver: toasters" below for
+what that turned into. That needs an X client using the core screensaver
+machinery, and that machinery had to actually do something first. Before
+this, it didn't: `hw/kdrive/fbdev/fbdev.c`'s
 `fbdevDPMS()` called `FBIOPUT_POWERMODE`/`FBIOBLANK`, which reach
 `w100fb_blank()` (`modules/w100/w100fb.c`) — and that function
 deliberately only tracks a `blanked` flag and skips the real
@@ -269,18 +273,90 @@ the idle timer and lid switch already use, and `w` reuses `go_active()`,
 so a DPMS-driven blank restores to the level the user had, exactly like
 every other path in.
 
-This makes DPMS a real, working backend rather than a silent no-op, which
-is the prerequisite for anything built on top of it later (a screensaver
-client via the `MIT-SCREEN-SAVER` extension, `xset s <timeout>` once
-`xset` is actually built, etc.) — none of that existed as of this
-writing. `brightd`'s own evdev-driven idle detection is unchanged and
-still the primary path; this only makes the X-side entry point that used
-to be a dead end actually reach the panel.
+This makes DPMS a real, working backend rather than a silent no-op.
+`brightd`'s own evdev-driven idle detection is unchanged and still the
+primary path; this only makes the X-side entry point that used to be a
+dead end actually reach the panel — useful on its own for anything that
+calls `XForceScreenSaver`/`DPMSForceLevel` directly, independent of the
+toasters screensaver below (which does not use this path at all — see
+why in that section).
 
 **Not yet verified on hardware** — implemented and reasoned through
 against the same `bl_power` mechanism the rest of this document already
 proved out, but the DPMS call path itself (`xset dpms force off/on`
 against the patched server) has not been run on the device yet.
+
+## The screensaver: toasters
+
+`brightd` launches `/usr/local/bin/toasters` (`userspace/src/
+toasters.c`) after `toast_secs` of idle (default 120s, between the 60s
+dim and the 300s blank) and kills it with `SIGTERM` the moment there is
+activity or it is time to actually blank — see `start_toaster()`/
+`stop_toaster()` and the "SCREENSAVER CONTENT" header comment in
+`brightd.c`.
+
+**Why brightd launches it, not X's screensaver machinery.** The DPMS
+wiring above exists and works, but toasters does not go through it.
+`brightd` already has the reliable, hardware-proven idle clock (see WHY
+NOT X at the top of this document); routing screensaver *activation*
+through X as well would mean either giving X its own idle timer (the
+exact dependency chain WHY NOT X avoids: no `xset`, no libXss) or having
+`brightd` link Xlib just to call `XActivateScreenSaver()`, which it
+deliberately does not do anywhere else. Simplest is `brightd` forking a
+binary the same way `run_bright()` already forks `/usr/sbin/bright` —
+one `fork()`/`execl()` to start, one `kill(pid, SIGTERM)` to stop,
+gated on `/tmp/.X11-unix/X0` existing so an idle *console* (no X running
+at all) does not fork a doomed child every `TICK_SECS`.
+
+**Where the artwork comes from.** The sprites are
+[torunar/flying-toasters-xscreensaver](https://github.com/torunar/flying-toasters-xscreensaver)
+(MIT, Copyright © 2023 Mikhail Shchekotov), vendored as the submodule
+`userspace/src/flying-toasters`. `toasters.c` `#include`s its two XPM
+sheets directly — `img/toaster.xpm` is a six-frame wing flap, 64×64,
+15 colours; `img/toast.xpm` is the single toast frame — and decodes them
+with `XpmCreateImageFromData()`. That is the **only** reason `libXpm` is
+in the X11 stack and the payload.
+
+Upstream's *code* is not compiled, only its data. Its renderer draws into
+the real root window through `vroot.h`, or into a hardcoded 1920×1080
+window with `-windowed`, and animates at 60fps — none of which fits a
+480×640 panel on a 400MHz part, and the root-window path is actively
+wrong here (it leaves the desktop visible around the sprites and gives
+nothing to grab input on, so a stray tap reaches the desktop underneath
+instead of dismissing the screensaver). What is reused, besides the
+artwork, is the diagonal down-and-left drift.
+
+**Why plain Xlib, not a GL hack.** This board's w100 has no DRM/DRI
+driver at all — see the "no hardware acceleration path" story on
+`w100fb_blank()` in `modules/w100/w100fb.c` — so xscreensaver's *own*
+`flyingtoasters`, which is a GL hack, cannot run here regardless of how
+it is invoked. (This is worth stating precisely, because it was once
+taken as a reason not to vendor the repo above either — but that project
+is plain Xlib and `-lXpm`, with no GL and no xscreensaver libraries, so
+the objection never applied to it.) `toasters.c` `XPutImage`s each sprite
+through its shape mask onto an offscreen `Pixmap` and `XCopyArea()`s the
+result to a fullscreen override-redirect window once per frame.
+
+**~10fps, not 60.** Every frame copies the whole 480×640×16bpp panel
+across an unaccelerated framebuffer; at upstream's 60fps that is roughly
+35MB/s of blitting on a part that cannot do it, and the animation would
+tear while eating the CPU an idle machine is supposed to be saving.
+Sprites move further per frame to compensate, so the apparent speed is
+unchanged. Same "budget for the actual hardware" instinct as `bright`'s
+no-fades rule above.
+
+It also grabs the keyboard and pointer and exits on its own if either
+sees input, purely as a safety net for running it by hand (there is a
+desktop launcher for exactly that, `userspace/desktop/
+toasters.desktop`/`Icon=toasters.png` — a manual preview, not the normal
+way it starts). The intended dismissal path is still `brightd` noticing
+activity and sending `SIGTERM`.
+
+**Not yet verified on hardware** — it cross-compiles clean, links against
+the staged X11 stack and libXpm, and its sprite path has been rendered
+offscreen on a build host (XPM decode, 64×64 frames, shape masks and
+compositing all confirmed by reading the pixmap back), but it has not
+actually been watched running on the device yet.
 
 ## Why the hotkeys are not matchbox keybindings
 

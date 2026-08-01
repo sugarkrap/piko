@@ -51,12 +51,59 @@ As of 2026-07-31 this is automated end to end:
     tools/build-x11-stack.sh            # everything below, in order
 
 `tools/build-x11-stack.sh` runs `tools/setup-x11-src.sh`'s verification
-itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox
-and the four Matchbox apps, idempotently (skips anything already built --
-safe to re-run, and cheap once everything exists). It is wired into
-`tools/build-and-deploy.sh` (the live-SSH redeploy path) and
-`flash/build-mtd3-jffs2.sh` (the SD-card flash-image path), so under
-normal use nothing below needs to be run by hand at all.
+itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox,
+the four Matchbox apps and `mb-applet-card`, and finally `st` and FLTK --
+idempotently (skips anything already built **from the sources currently
+checked out** -- safe to re-run, and cheap once everything exists). It is
+wired into `tools/build-and-deploy.sh` (the
+live-SSH redeploy path) and `flash/build-mtd3-jffs2.sh` (the SD-card
+flash-image path), so under normal use nothing below needs to be run by
+hand at all.
+
+The rule that script follows, and the reason its list is longer than "the
+X.Org and Matchbox packages": **whatever
+`tools/build-matchbox-payload.sh` requires, `build-x11-stack.sh` builds.**
+Those two are only ever used together, and while each caller of the pair
+was responsible for the leftovers -- `mb-applet-card`, `st`, FLTK -- every
+caller forgot a different one, so packaging failed for all of them. `st`
+and FLTK are also built by `tools/build-userspace.sh`, which skips both
+when this stage is not populated yet; whichever of the two runs second
+finds them current and does nothing.
+
+### "I changed an applet, deployed, and got the old one"
+
+Two independent staleness traps, both fixed 2026-08-01, both worth
+knowing about because both failed *silently* -- a clean build, a clean
+deploy, and the old binary on the device.
+
+**The marker only proved a component had ever been built.** `build_one`
+skipped anything whose install marker existed, so a submodule bumped to
+a new commit was repackaged from the old staged copy for as long as its
+`DESTDIR` survived. `/tmp` outliving a `git submodule update` is all it
+took. Each component now also records the source state it was built from
+(`$STAGE/.piko-build-stamps/<pkg>`: the submodule's `HEAD` plus a hash of
+its tracked diff) and rebuilds when that no longer matches. Untracked
+files are deliberately excluded -- these packages build in-tree and leave
+dozens of un-gitignored artefacts, which would otherwise make every
+component look dirty forever.
+
+**The fast path configured differently than the slow one.** When
+`./configure` already existed, `build_one` ran it directly -- without the
+`--enable-maintainer-mode` that these packages' own `autogen.sh`
+hardcodes. That flag is what installs the `Makefile.in: Makefile.am`
+rebuild rules, so without it `automake` never re-runs and a component
+that *gains a source file* keeps building from the old file list.
+`matchbox-desktop-classic` hit exactly this: `mbdesktop_watch.c` is in
+`src/Makefile.am`, its generated `Makefile` says `MAINT = #` and lists no
+such object, and it fails to link with `undefined reference to
+mbdesktop_watch_init`. The fast path now passes the flag for any package
+whose `autogen.sh` does -- read out of that file rather than hardcoded,
+so the two paths cannot drift apart again.
+
+If you hit a tree that was configured before this fix, one forced rebuild
+of that component regenerates everything:
+
+    tools/build-x11-stack.sh --force matchbox-desktop-classic
 
 **What follows is the reference this script was built from and is
 verified against** -- read it when a single component needs debugging,
@@ -69,13 +116,23 @@ not a reason to trust it over this.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    # then mb-applet-card -- plain `make` + `make install DESTDIR=`, no
+    # configure; see docs/HOWTO-MATCHBOX-PANEL-APPLETS.md
+    tools/build-st.sh                   # st -- needs libXft staged first
     tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
                                         # and libXrender staged first
+    tools/build-toasters.sh             # the screensaver -- needs libXpm
+                                        # staged and the flying-toasters
+                                        # submodule (its XPM artwork);
+                                        # see docs/HOWTO-BRIGHTNESS.md
 
-The last four are independent of each other once libmatchbox exists and
-*could* be built in parallel -- `tools/build-x11-stack.sh` builds them
-sequentially for determinism, but give each its own `DESTDIR` regardless,
-because they would otherwise race installing into one tree.
+The four Matchbox apps are independent of each other once libmatchbox
+exists and *could* be built in parallel -- `tools/build-x11-stack.sh`
+builds them sequentially for determinism, but give each its own `DESTDIR`
+regardless, because they would otherwise race installing into one tree.
+`mb-applet-card` needs libmatchbox too and gets its own `DESTDIR`
+(`D_CARD`) for the same reason; `st` and FLTK install into the shared
+staging tree rather than a `DESTDIR`, like the libraries do.
 
 One thing worth knowing if you ever touch the automation itself: X.Org's
 per-component `autogen.sh` scripts are not uniform. Roughly half honour
@@ -262,6 +319,44 @@ What matters for *building*:
 - Do not drop `--no-session` from that file. A stale
   `$HOME/.matchbox/mbdock.session` silently overrides `--default-apps`, and
   the panel rewrites it on every clean exit.
+
+---
+
+## System actions in the menu: Suspend, Reboot, Go to TTY
+
+Three entries in the panel menu's **System** folder that *do* something
+rather than open a window. Each is an ordinary `.desktop` file in
+`userspace/desktop/`, and each `Exec=`s a plain script in `/usr/sbin`:
+
+| Menu entry | Exec | What it does |
+|---|---|---|
+| Suspend   | `/usr/sbin/suspend`    | `deep` to `mem_sleep`, then `mem` to `/sys/power/state` |
+| Reboot    | `/usr/sbin/softreboot` | kexec warm reboot (pre-existing script) |
+| Go to TTY | `/usr/sbin/gototty`    | `pkillx Xfbdev`, which cascades the session down to a getty |
+
+Two things about them are easy to get wrong:
+
+**They have no `Type=` line, and that is deliberate.**
+matchbox-desktop-classic's `dotdesktop.c` only draws a desktop icon when
+`Type` is exactly `Application`, so omitting the key keeps these *out* of
+the desktop icon view while `mb-applet-menu-launcher` -- which gates only
+on `Icon`+`Name`+`Exec`, never on `Type` -- still lists them normally. Do
+not reach for `Type=PanelApp` to get the same exclusion: the
+menu-launcher special-cases that exact string and redirects the entry
+into its "Utilities/Panel" applet submenu, which is the wrong folder.
+
+**Go to TTY depends on `pkillx`.** `gototty` is a one-line script and this
+busybox has no `kill`, `killall` or `pkill` applet of its own, so without
+`/usr/sbin/pkillx` (built from `userspace/src/pkillx.c` by
+`tools/build-userspace.sh`) the entry silently does nothing. Both halves
+ship on a normal `tools/build-and-deploy.sh` run: the launchers and icons
+ride in the X11 payload from `build-matchbox-payload.sh`, and the scripts
+plus `pkillx` are sent by `chunked-deploy.sh` section 6e.
+
+The physical on/off button is **not** wired to Suspend, and cannot
+currently be -- see `docs/DEADLETTER-XKB-LIVE-SETMAP.md`. Suspend itself
+has not been watched resume cleanly on real hardware; if the screen stays
+black after a wake, SSH in and read `dmesg | tail` before assuming a hang.
 
 ---
 
