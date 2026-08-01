@@ -352,11 +352,45 @@ toasters.desktop`/`Icon=toasters.png` — a manual preview, not the normal
 way it starts). The intended dismissal path is still `brightd` noticing
 activity and sending `SIGTERM`.
 
-**Not yet verified on hardware** — it cross-compiles clean, links against
-the staged X11 stack and libXpm, and its sprite path has been rendered
-offscreen on a build host (XPM decode, 64×64 frames, shape masks and
-compositing all confirmed by reading the pixmap back), but it has not
-actually been watched running on the device yet.
+**Verified on hardware, 2026-08-01.** Watched running on the device under
+the normal Matchbox session: the XPM sheets decode, the shape masks
+composite cleanly against black, and the toasters and toast drift
+down-and-left as intended, with the wing flap cycling. Captured with
+`userspace/src/fbgrab.c` and decoded with `tools/decode-fb.py` —
+successive grabs differ, so this is real motion rather than one painted
+frame. (`fbgrab` is the only way to get the pixels: this panel's
+`/dev/fb0` does not support `read(2)`, so `dd` returns zero bytes and
+mmap is the sole path off the board. That is the same constraint
+`fbgrab.c`'s header comment already records.)
+
+Two things worth knowing before running it by hand from the launcher,
+both consequences of the preview being a path the design does not
+otherwise use:
+
+* **`brightd` keeps arming its own copy underneath you.** `toast_secs` is
+  120s and SSH is not evdev input, so a board being driven entirely over
+  the network is *idle* as far as `brightd` is concerned — it forks its
+  own toasters on schedule while a manually launched one is already up
+  and holding the keyboard and pointer grabs, and the two then contend
+  for the same grabs. `touch /tmp/brightd.inhibit` (or `pkillx brightd`)
+  before a long manual preview; the inhibit file is the gentler of the
+  two and is what the top of this document already recommends.
+* **With no window manager running it exits immediately** — status 0, in
+  under about three seconds, nothing on stderr. Under the normal session
+  it stays up and animates until something stops it. The input-grab
+  safety net above is the obvious suspect (an override-redirect window
+  mapping onto a bare `-retro` root with no WM is exactly where a
+  synthetic enter/motion event would come from), but this was **not**
+  root-caused, and the normal path — a full session, dismissed by
+  `brightd`'s `SIGTERM` — is unaffected either way.
+
+Also seen during the same session and **not** explained: the X session
+twice ended up dead after a manual launch, leaving `Xfbdev` a zombie and
+tty1 back at a console login, with `Can't deallocate console 2 Device or
+resource busy` closing out `/tmp/xfbdev.log`. One of the two followed a
+`pkillx` of my own, and the board rebooted somewhere in the middle, so
+this is recorded as something to watch on the next session rather than as
+a known toasters bug.
 
 ## Why the hotkeys are not matchbox keybindings
 
