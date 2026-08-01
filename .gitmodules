@@ -85,10 +85,14 @@
 	path = userspace/src/pikostore
 	url = https://github.com/sugarkrap/pikostore
 	branch = main
-[submodule "userspace/src/flying-toasters"]
+[submodule "mb-volume"]
+	path = userspace/src/mb-volume
+	url = https://github.com/sugarkrap/mb-volume
+	branch = main
+[submodule "flying-toasters"]
 	path = userspace/src/flying-toasters
 	url = https://github.com/torunar/flying-toasters-xscreensaver
 	branch = master
-[submodule "userspace/src/libXpm"]
+[submodule "libXpm"]
 	path = userspace/src/libXpm
 	url = https://gitlab.freedesktop.org/xorg/lib/libxpm.git
