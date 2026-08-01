@@ -127,6 +127,16 @@ left->right, raw Y top->bottom) on an SL-C760, so no swap or inversion is
 applied. **If a replacement panel reads inverted, that has to be added --
 the current code assumes this orientation.**
 
+One inversion *is* applied, but only in the swivelled (tablet) posture:
+when the lid is turned around, the w100 CRTC drives the panel 180 degrees
+round and `EvdevPtrAbsolute()` inverts both axes to match, because the
+digitiser is bonded to the panel and turns with it. It composes with the
+calibration above rather than replacing it -- the bounds describe the
+digitiser, the inversion describes which way the user is holding it. So
+**calibrate in the clamshell posture**: `pikalibrate`'s corner taps would
+otherwise be fighting the inversion. See
+[`HOWTO-SCREEN-ROTATION.md`](HOWTO-SCREEN-ROTATION.md).
+
 To re-measure, temporarily restore the debug print in `EvdevPtrMotion()`
 (one `ErrorF` over `ke->abs[]`), then:
 

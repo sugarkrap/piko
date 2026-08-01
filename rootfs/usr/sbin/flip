@@ -1,0 +1,72 @@
+#!/bin/sh
+# flip -- turn the screen 180 degrees by hand.
+#
+# Typable on the device keyboard: no '/' or ':' anywhere in the commands
+# you have to enter (same reason bright/wifiup/netinfo exist).
+#
+#   flip              turn it around (toggle)
+#   flip on           upside down (tablet posture)
+#   flip off          the normal way up (clamshell posture)
+#   flip status       show which way it is
+#
+# This is the same register the swivel switch drives through flipd, so
+# the two agree by construction -- there is no separate state to get out
+# of step. What it does NOT do is stop flipd: swivel the lid after
+# running this and flipd will set the flip to match the posture again.
+# To keep a hand-set orientation, put enabled=0 in
+# /etc/piko/rotation.cfg (flipd re-reads it on the next switch event).
+#
+# The rotation itself is free -- the w100 CRTC rotates during scanout, so
+# nothing re-renders. See docs/HOWTO-SCREEN-ROTATION.md.
+#
+# Device shell notes: this rootfs's BusyBox ash has NO printf, NO working
+# 'echo -n', and NO kill/killall/awk. Plain echo, test and case only.
+
+SYS=/sys/devices/platform/w100fb/flip
+FIFO=/tmp/.pikalibrate-ctl
+XSOCK=/tmp/.X11-unix/X0
+
+if ! test -w "$SYS"; then
+	echo "flip: no $SYS"
+	echo "flip: is w100fb bound? check dmesg for w100fb"
+	exit 1
+fi
+
+cur=$(cat "$SYS")
+
+case "$1" in
+	"")            want=$((1 - cur)) ;;
+	on|1|yes)      want=1 ;;
+	off|0|no)      want=0 ;;
+	status|show)
+		if test "$cur" = "1"; then
+			echo "flip: upside down (tablet posture)"
+		else
+			echo "flip: normal (clamshell posture)"
+		fi
+		exit 0
+		;;
+	*)
+		echo "usage: flip [on|off|status]"
+		exit 2
+		;;
+esac
+
+if test "$want" = "$cur"; then
+	exit 0
+fi
+
+echo "$want" > "$SYS"
+
+# Tell X to re-read the flip state so the touchscreen turns around with
+# the picture. Without this the display looks right and every tap lands
+# 180 degrees away, which is worse than not rotating at all.
+#
+# Both guards matter. Opening a FIFO for writing BLOCKS until a reader
+# appears, so writing to it with no X running would hang this script
+# forever -- and there is no timeout, no job control and no kill on this
+# device to get out of it with. Only write when the server socket says X
+# is up and the FIFO actually exists.
+if test -e "$XSOCK" && test -p "$FIFO"; then
+	echo ROTATE > "$FIFO"
+fi

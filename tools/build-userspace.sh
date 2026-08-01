@@ -25,6 +25,11 @@ set -eu
 #                                   deliberately links nothing X. Ordered
 #                                   next to md5sum because it has no
 #                                   dependencies on anything below.
+# 1b2. userspace/src/flipd          the screen-rotation daemon: watches the
+#                                   swivel hinge's tablet-mode switch and
+#                                   turns the display 180 degrees using the
+#                                   w100 CRTC's own scanout rotation. Static,
+#                                   libc only, same reasoning as brightd.
 #  1c. userspace/src/kill           the only way to signal a process on this
 #                                   device (this busybox has no kill/killall/
 #                                   pkill applet at all). Same reasoning as
@@ -212,6 +217,25 @@ else
     echo "==> skipping brightd (no $BRIGHTD_SRC)"
 fi
 
+# --- 1b2. flipd (screen rotation on the swivel hinge) -----------------------
+# Same shape as brightd: static, libc only, reads evdev and sysfs directly.
+# It turns the display 180 degrees via the w100 CRTC's scanout rotation
+# when the lid is swivelled -- no pixels move. See flipd.c's header.
+FLIPD_SRC="$REPO/userspace/src/flipd.c"
+FLIPD_BIN="$REPO/userspace/src/flipd"
+if [ -f "$FLIPD_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$FLIPD_BIN" ] || [ "$FLIPD_SRC" -nt "$FLIPD_BIN" ]; then
+        echo "==> building userspace/src/flipd"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$FLIPD_BIN" "$FLIPD_SRC"
+        "${CROSS_COMPILE}strip" "$FLIPD_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/flipd already up to date"
+    fi
+else
+    echo "==> skipping flipd (no $FLIPD_SRC)"
+fi
+
 # --- 1c. kill (the only way to signal a process on this device) -------------
 # This busybox has no kill, killall or pkill applet at all, so without this
 # binary there is no way to send a signal to anything. tools/chunked-deploy.sh
@@ -366,6 +390,9 @@ if [ -f "$MD5SUM_BIN" ]; then
 fi
 if [ -f "$BRIGHTD_BIN" ]; then
     echo "    brightd: $BRIGHTD_BIN"
+fi
+if [ -f "$FLIPD_BIN" ]; then
+    echo "    flipd:   $FLIPD_BIN"
 fi
 if [ -f "$KILL_BIN" ]; then
     echo "    kill:    $KILL_BIN"

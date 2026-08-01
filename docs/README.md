@@ -27,6 +27,7 @@ the reasoning, not as instructions — do not follow it.
 | [`HOWTO-OFFLINE-UPDATE.md`](HOWTO-OFFLINE-UPDATE.md) | Building the self-contained update package, and how CI boot-tests it. |
 | [`HOWTO-MATCHBOX-DESKTOP.md`](HOWTO-MATCHBOX-DESKTOP.md) | Building the X11 + Matchbox stack. Contains the non-guessable version pins and configure lines. |
 | [`HOWTO-X11-TOUCHSCREEN.md`](HOWTO-X11-TOUCHSCREEN.md) | Getting the touchscreen working as an absolute pointer under Xfbdev. |
+| [`HOWTO-SCREEN-ROTATION.md`](HOWTO-SCREEN-ROTATION.md) | Turning the display around on the swivel hinge — in the w100's CRTC, for free. Why not `xrandr`. |
 | [`HOWTO-LCD-PHASE-CALIBRATION.md`](HOWTO-LCD-PHASE-CALIBRATION.md) | Fixing LCD smearing via the panel's sampling phase. |
 | [`HOWTO-RTC-TIME.md`](HOWTO-RTC-TIME.md) | The real-time clock: why the board used to boot at 1970, and the `settime` / `ntpsync` tools. |
 
