@@ -1,7 +1,7 @@
 [submodule "matchbox-window-manager"]
 	path = userspace/src/matchbox-window-manager
 	url = ../matchbox-window-manager
-	branch = main
+	branch = master
 [submodule "libX11"]
 	path = userspace/src/libX11
 	url = https://github.com/sugarkrap/libx11
