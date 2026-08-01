@@ -478,17 +478,24 @@ if [ -f "$REPO/userspace/src/brightd" ]; then
 else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
-# power-management.cfg holds USER-CHOSEN POLICY (dim/blank timers, and the
-# opt-in suspend_on_lid) once anyone has edited it on the device --  same
-# reasoning as /etc/piko/touchscreen.cfg below, so it is likewise sent
-# ONLY if the device doesn't already have one.
+# power-management.cfg is APPLIANCE POLICY and is overwritten every deploy.
+#
+# It used to be sent only when absent, on the reasoning that a device-side
+# edit was a user choice worth preserving. That is the wrong side of the
+# line for this file: it carries the dim/blank/screensaver policy the image
+# is defined by -- including toast_secs, which is what turns the
+# flying-toasters screensaver on -- and a board silently running different
+# timings from the tracked source is a board nobody can reason about from
+# here. Same call, and the same reasoning, as removing a stale
+# $HOME/.matchbox/kbdconfig further down.
+#
+# The cost is real and deliberate: an edit made on the device to try
+# something out is gone at the next deploy. brightd re-reads the file on
+# mtime change, so experimenting on the device still works -- it just does
+# not survive, and the way to keep a change is to commit it here.
 if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
-    if [ "$(ssh_do "test -f /etc/zaurus/power-management.cfg && echo yes || echo no")" = "no" ]; then
-        ssh_do "mkdir -p /etc/zaurus"
-        send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
-    else
-        echo "==> /etc/zaurus/power-management.cfg already exists on device, leaving it alone"
-    fi
+    ssh_do "mkdir -p /etc/zaurus"
+    send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
 fi
 
 # 6a-bis. Seed the default wallpaper CHOICE, once.
@@ -501,20 +508,21 @@ fi
 # comes up on the theme's flat colour and the wallpaper we just shipped
 # sits there unused until somebody opens the picker and taps it.
 #
-# $HOME/.matchbox/wallpaper is USER-CHOSEN STATE though -- it is the exact
-# file mb-wallpaper-picker writes. So seed it only when the device has
-# none: same rule as power-management.cfg above and touchscreen.cfg below.
-# A default on a fresh device, never an override of a choice made since.
-# Delete the file on the device to get the default back next deploy.
+# $HOME/.matchbox/wallpaper is the file mb-wallpaper-picker writes, and it
+# is overwritten every deploy anyway -- the image's wallpaper is part of
+# what the image IS, like the kbdconfig removal below and the
+# power-management.cfg above. A deploy puts the board back to a known
+# state; a wallpaper picked on the device does not survive one.
+#
+# That is a deliberate trade, not an oversight: the picker still works and
+# still applies immediately (it sets _MB_WALLPAPER_SPEC on the root window
+# as well as writing this file), it just does not outlive the next deploy.
+# To change the default, change userspace/backgrounds/piko-default.png.
 #
 # HOME is /root for the session (rootfs/etc/init.d/xsession sets it
 # explicitly, precisely so this lookup resolves to anything at all).
-if [ "$(ssh_do "test -f /root/.matchbox/wallpaper && echo yes || echo no")" = "no" ]; then
-    ssh_do "mkdir -p /root/.matchbox && echo img-filled:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
-    echo "==> seeded /root/.matchbox/wallpaper (first deploy; the picker owns it from now on)"
-else
-    echo "==> /root/.matchbox/wallpaper already set, leaving the user's choice alone"
-fi
+ssh_do "mkdir -p /root/.matchbox && echo img-filled:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
+echo "==> set /root/.matchbox/wallpaper to the shipped default"
 
 # 6b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
