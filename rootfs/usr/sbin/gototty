@@ -1,0 +1,21 @@
+#!/bin/sh
+# gototty: drop the graphical session and land on a text console on the
+# same tty.
+#
+# Killing Xfbdev is enough on its own. Every X client here -- the window
+# manager, matchbox-desktop, the panel, every panel applet -- sits
+# blocked reading the X connection socket, and Xlib's default IO-error
+# handler calls exit() the instant that socket closes, so this cascades
+# a clean shutdown of the whole session exactly like any ordinary client
+# crash would.
+#
+# /etc/init.d/xsession execs matchbox-window-manager as matchbox-session's
+# very last step (see that script's own comments), so once the WM exits,
+# xsession's "$SESSION" line returns and falls into
+# fallback_to_console(), which execs a getty IN PLACE on this tty -- no
+# new process for init to track, so init does not see an exit to respawn
+# and does not just relaunch X again immediately.
+#
+# To get the desktop back: log in on the console, then either
+# `reboot`/`softreboot`, or run /etc/init.d/xsession directly.
+pkillx Xfbdev

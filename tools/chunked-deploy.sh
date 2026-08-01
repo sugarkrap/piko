@@ -535,6 +535,41 @@ fi
 ssh_do "mkdir -p /root/.matchbox && echo img-centered:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
 echo "==> set /root/.matchbox/wallpaper to the shipped default"
 
+# 6a-ter. Clock: hwclock + ntpsync + the "settime" helper (single-word, per
+# the AGENTS.md typing constraint -- and settime takes its date as plain
+# space-separated integers so there is no ':' to type either).
+#
+# The kernel sets the system clock from the RTC by itself at boot
+# (CONFIG_RTC_DRV_SA1100=y feeding CONFIG_RTC_HCTOSYS), so these three are
+# only needed to CHANGE the time -- but without them there is no way to,
+# since this busybox has no hwclock, ntpd or rdate applet.
+#
+# /etc/TZ is seeded, not forced. It is display-only (both the RTC and the
+# system clock keep UTC), so a device-side change cannot desynchronise
+# anything, and someone who set their zone should not have it reverted on
+# every deploy. Contrast power-management.cfg above, which is appliance
+# policy and is deliberately overwritten every time.
+send_file "$REPO/rootfs/usr/sbin/settime" "/usr/sbin/settime"
+ssh_do "chmod 0755 /usr/sbin/settime"
+for clock_tool in hwclock ntpsync; do
+    if [ -f "$REPO/userspace/src/$clock_tool" ]; then
+        send_file "$REPO/userspace/src/$clock_tool" "/usr/sbin/$clock_tool"
+        ssh_do "chmod 0755 /usr/sbin/$clock_tool"
+    else
+        echo "==> skipping $clock_tool (not built -- run tools/build-userspace.sh)"
+    fi
+done
+if [ -f "$REPO/rootfs/etc/TZ" ]; then
+    # Probe by echoing a token rather than relying on the remote exit
+    # status: a dropped SSH connection also exits non-zero, and that must
+    # not read as "the device has no /etc/TZ, overwrite it".
+    if [ "$(ssh_do "if [ -e /etc/TZ ]; then echo yes; else echo no; fi")" = "no" ]; then
+        send_file "$REPO/rootfs/etc/TZ" "/etc/TZ"
+    else
+        echo "==> keeping the device's existing /etc/TZ"
+    fi
+fi
+
 # 6b. SD-card software overlay. /etc/zaurus-card.sh puts
 # /mnt/card/.zaurus/usr/bin on PATH (unconditionally -- a PATH element that
 # does not exist is simply skipped, so this costs nothing with no card in,
@@ -652,6 +687,38 @@ fi
 if [ -x "$REPO/userspace/src/kill" ]; then
     send_file "$REPO/userspace/src/kill" "/usr/local/bin/kill"
     ssh_do "chmod 0755 /usr/local/bin/kill"
+fi
+
+# 6e. The three system actions reachable from the panel menu: Suspend,
+# Reboot and Go to TTY. Their LAUNCHERS (the .desktop entries + icons) ride
+# in the X11 payload at section 8; what ships here is the thing each one
+# actually Exec=s, which is a plain script in /usr/sbin.
+#
+# All three are sent unconditionally, including softreboot, which has been
+# in the flashed base image for a long time and so was never sent from
+# here. That is exactly the problem: "it is already on the device" is only
+# true of devices flashed recently enough, and a menu entry that works on
+# the author's board and not on a freshly-deployed one is the worst
+# version of this. They are scripts, none of them is running, so
+# overwriting them costs nothing.
+#
+# pkillx is not a menu action -- it is the dependency that makes one work.
+# /usr/sbin/gototty is a one-liner, "pkillx Xfbdev", and this busybox has
+# no kill/killall/pkill applet of its own, so without the binary from
+# userspace/src/pkillx.c the Go to TTY entry silently does nothing at all.
+# Guarded like kill above rather than sent unconditionally: a clean
+# checkout that has not run tools/build-userspace.sh yet does not have it.
+send_file "$REPO/rootfs/usr/sbin/suspend"    "/usr/sbin/suspend"
+send_file "$REPO/rootfs/usr/sbin/gototty"    "/usr/sbin/gototty"
+send_file "$REPO/rootfs/usr/sbin/softreboot" "/usr/sbin/softreboot"
+ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty /usr/sbin/softreboot"
+
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    send_file "$REPO/userspace/src/pkillx" "/usr/sbin/pkillx"
+    ssh_do "chmod 0755 /usr/sbin/pkillx"
+else
+    echo "==> no built pkillx -- skipping (run tools/build-userspace.sh)"
+    echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
 fi
 
 # 7. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
@@ -886,6 +953,10 @@ fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
+echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    echo "  /usr/sbin/pkillx         (gototty needs it)"
+fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then

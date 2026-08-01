@@ -121,6 +121,8 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/pkgdel
 !rootfs/usr/sbin/pkglist
 !rootfs/usr/sbin/deskscan
+!rootfs/usr/sbin/suspend
+!rootfs/usr/sbin/gototty
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
@@ -184,6 +186,10 @@ userspace/src/md5sum
 # tracked source is brightd.c and tools/build-userspace.sh rebuilds it.
 userspace/src/brightd
 userspace/src/kill
+# clock tools, same rule -- tracked source is hwclock.c / ntpsync.c and
+# tools/build-userspace.sh rebuilds both.
+userspace/src/hwclock
+userspace/src/ntpsync
 # mhz: same rule again -- tracked source is mhz.c, tools/build-userspace.sh
 # rebuilds it.
 userspace/src/mhz

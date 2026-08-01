@@ -72,6 +72,10 @@ on:
       # Compiled into the package and exec'd by piko-update for every smf
       # operation, so a change here changes what ships.
       - "flash/piko-smf-write.c"
+      # The ROM manifest generator: its output ships in every package and
+      # is what the Software Center displays.
+      - "tools/gen-rom-manifest.sh"
+      - "CHANGELOG"
       - "tools/setup-kernel-src.sh"
       - "tools/build-ssh.sh"
       - "tools/ssh-payload.sh"
@@ -169,6 +173,21 @@ jobs:
         run: |
           ./tools/build-thirdparty-deps.sh
 
+      # Host-side tests for the Software Center's manifest/history parsing
+      # and the piko-update progress protocol. No FLTK, no X, no device --
+      # which is exactly why they are the part worth running here. They
+      # guard the contract between piko-update (which writes those files
+      # and emits those records) and pikostore (which reads them), and a
+      # break there would otherwise only show up on the one spare board.
+      #
+      # The source arrives via the checkout's `submodules: recursive`
+      # above; no separate init step is needed.
+      - name: pikostore host tests (romstate)
+        run: |
+          g++ -O2 -Wall -Wextra \
+              -o /tmp/romstate-test \
+              userspace/src/pikostore/tests/romstate-test.cxx
+          /tmp/romstate-test
       # scp + sftp-server (+ dbclient/dropbearkey) for the rootfs overlay.
       # An offline update package is what a device that is NOT reachable
       # over the network gets -- i.e. exactly the device that most needs
