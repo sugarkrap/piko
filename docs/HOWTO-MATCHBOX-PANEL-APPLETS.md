@@ -28,6 +28,12 @@ their own tray icon. The tree ships six plus a wrapper script:
 | `mb-applet-launcher` | built, unused | generic button: `-l <icon.png> <command>` |
 | `mb-applet-xterm-wrapper.sh` | installed, unused | execs `rxvt` or `xterm` |
 
+Plus one of our own, in its own repo rather than in matchbox-panel:
+
+| Applet | Notes |
+|---|---|
+| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built with its own `Makefile` into `D_CARD`. See that repo's README. |
+
 `mb-launcher-term.desktop` wires the last two together. It is installed but
 **deliberately not started**: the wrapper execs `rxvt` or `xterm` and the
 payload ships neither, so it would be a dead button. Add it to the session

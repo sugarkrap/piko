@@ -12,6 +12,7 @@
  *
  * Modes:
  *   fbflip info          report the fields that gate panning, change nothing
+ *   fbflip buffers       compare the two buffers of a live setup (read-only)
  *   fbflip setup         try to claim a second buffer (yres_virtual = 2*yres)
  *   fbflip flip [n]      claim, fill the two buffers with solid colours, and
  *                        flip between them n times (default 60), timing each
@@ -188,6 +189,51 @@ int main(int argc, char **argv)
 
 	if (!strcmp(mode, "info"))
 		return 0;
+
+	/*
+	 * Read-only: compare the two buffers of a live double-buffered setup.
+	 *
+	 * Changes nothing, so it is safe to run against a running X server.
+	 * If the server's damage bookkeeping is correct the two buffers
+	 * converge once drawing stops, because whatever is painted for one
+	 * frame is also repainted into the buffer that missed it. Buffers
+	 * that stay far apart while idle mean the display is alternating
+	 * between two different pictures, which reads as flicker.
+	 */
+	if (!strcmp(mode, "buffers")) {
+		size_t buf_bytes = (size_t)fix.line_length * var.yres;
+		unsigned char *fb;
+		size_t i2, diff = 0;
+		unsigned long sum0 = 0, sum1 = 0;
+
+		if (var.yres_virtual < var.yres * 2) {
+			printf("not double buffered (yres_virtual=%u)\n",
+			       var.yres_virtual);
+			return 1;
+		}
+		fb = mmap(NULL, buf_bytes * 2, PROT_READ, MAP_SHARED, fd, 0);
+		if (fb == MAP_FAILED) {
+			perror("mmap");
+			return 1;
+		}
+		for (i2 = 0; i2 < buf_bytes; i2++) {
+			unsigned char a = fb[i2], b = fb[buf_bytes + i2];
+
+			sum0 += a;
+			sum1 += b;
+			if (a != b)
+				diff++;
+		}
+		printf("buffer0 checksum %lu, buffer1 checksum %lu\n", sum0, sum1);
+		printf("bytes differing: %lu of %lu (%.2f%%)\n",
+		       (unsigned long)diff, (unsigned long)buf_bytes,
+		       100.0 * diff / buf_bytes);
+		printf("%s\n", diff * 100 / buf_bytes < 2
+		       ? "buffers agree -- damage bookkeeping is converging"
+		       : "buffers DIVERGE -- expect flicker between two pictures");
+		munmap(fb, buf_bytes * 2);
+		return 0;
+	}
 
 	if (!strcmp(mode, "vsync")) {
 		for (i = 0; i < iterations; i++) {

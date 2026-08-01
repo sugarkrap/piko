@@ -78,3 +78,7 @@
 [submodule "userspace/src/fltk"]
 	path = userspace/src/fltk
 	url = https://github.com/fltk/fltk.git
+[submodule "mb-applet-card"]
+	path = userspace/src/mb-applet-card
+	url = https://github.com/sugarkrap/mb-applet-card
+	branch = main

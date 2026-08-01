@@ -41,7 +41,8 @@ set -eu
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
 # --skip-userspace skips building the cross-compiled userspace
-# (tools/build-userspace.sh: md5sum + ALSA + MPlayer + SDL + st + FLTK) and forwards
+# (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
+# + st + FLTK) and forwards
 # --no-userspace to chunked-deploy.sh so it does not ship a stale staged
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
@@ -182,7 +183,8 @@ if ! (
 fi
 echo "==> build OK"
 
-# Userspace (md5sum + ALSA + MPlayer + SDL + st + FLTK). Delegated to
+# Userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL + st + FLTK).
+# Delegated to
 # tools/build-userspace.sh
 # rather than open-coded here -- it is the single entry point for every
 # cross-built userspace component, and each step it runs is idempotent, so
@@ -199,7 +201,7 @@ if [ "$KERNEL_ONLY" -eq 1 ]; then
 elif [ "$SKIP_USERSPACE" -eq 1 ]; then
     echo "==> --skip-userspace: not building userspace components"
 else
-    echo "==> building userspace (md5sum + ALSA + MPlayer + SDL + st + FLTK) via tools/build-userspace.sh..."
+    echo "==> building userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL + st + FLTK) via tools/build-userspace.sh..."
     if ! (
         export PATH TOOLCHAIN_BIN_DIR CROSS_COMPILE
         sh "$REPO/tools/build-userspace.sh"
