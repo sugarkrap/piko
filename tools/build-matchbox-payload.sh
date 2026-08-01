@@ -298,6 +298,8 @@ done
 # The Categories= line in each file picks which app-folder it lands in:
 # Development matches the vfolder displayed as "Programming", System
 # matches "System Tools" (see matchbox-common's data/vfolders-desktop).
+# Categories=Action is the one that is not a folder at all -- both the
+# menu-launcher and the desktop special-case it; see suspend.desktop.
 #
 # pikostore needs a launcher more than most: it is the GUI for updating the
 # ROM, and expecting the user to open a terminal and type its name to reach
@@ -310,7 +312,9 @@ done
 # still ships either way: it is perfectly usable from a shell over SSH.
 #
 # suspend, reboot and gototty are the three system ACTIONS rather than
-# apps: tapping one does the thing instead of opening a window. They are
+# apps: tapping one does the thing instead of opening a window, and
+# Categories=Action puts all three at the ROOT of the menu rather than
+# inside a folder. They are
 # unconditional -- what each one Exec=s is a plain shell script
 # (/usr/sbin/suspend, /usr/sbin/softreboot, /usr/sbin/gototty), none of
 # which depend on st or on anything else that --skip-st can take away.
