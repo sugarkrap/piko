@@ -57,6 +57,9 @@ D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 # mb-applet-card is its own repo/submodule rather than part of
 # matchbox-panel, so it gets its own DESTDIR too.
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
+# Same story for mb-volume: userspace/src/mb-volume, not part of
+# matchbox-panel proper.
+D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 
 DEPLOY=0
 TARGET=""
@@ -149,7 +152,7 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
@@ -285,11 +288,6 @@ for a in $applets; do
     echo "    applet: $a"
 done
 
-# Menu launchers + icons. The Categories= line picks which app-folder each
-# lands in: Development matches the vfolder displayed as "Programming",
-# System matches "System Tools" (see matchbox-common's
-# data/vfolders-desktop/*.directory).
-#
 # Menu launchers + icons. Shipping an entry here is what puts an app on the
 # desktop at all -- matchbox-desktop only reads the /usr/share/applications
 # this payload deploys. That is independent of where the BINARY comes from:
@@ -310,8 +308,16 @@ done
 # stdout and is useless without a terminal), so both entries would be menu
 # items that do nothing when tapped -- worse than no entry. The xev BINARY
 # still ships either way: it is perfectly usable from a shell over SSH.
+#
+# suspend, reboot and gototty are the three system ACTIONS rather than
+# apps: tapping one does the thing instead of opening a window. They are
+# unconditional -- what each one Exec=s is a plain shell script
+# (/usr/sbin/suspend, /usr/sbin/softreboot, /usr/sbin/gototty), none of
+# which depend on st or on anything else that --skip-st can take away.
+# Those scripts ship via tools/chunked-deploy.sh, not from here; as with
+# pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikalibrate pikostore toasters"
+LAUNCHERS="pikalibrate pikostore toasters suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else
@@ -324,6 +330,7 @@ for app in $LAUNCHERS; do
        "$PAYLOAD/usr/share/pixmaps/$app.png"
     echo "    launcher: $app"
 done
+
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths
 # into the image; dlopen() loads the .so directly and never reads them.
