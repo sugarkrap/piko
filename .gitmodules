@@ -74,7 +74,7 @@
 	url = https://git.yoctoproject.org/matchbox-common
 [submodule "st"]
 	path = userspace/src/st
-	url = https://git.suckless.org/st
+	url = https://github.com/Shourai/st
 [submodule "userspace/src/fltk"]
 	path = userspace/src/fltk
 	url = https://github.com/fltk/fltk.git
