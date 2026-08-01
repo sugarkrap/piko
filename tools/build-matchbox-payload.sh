@@ -216,11 +216,20 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # listed by the picker and then fail to decode. See "Wallpaper: modes,
 # formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# FITTED, not cropped, and pre-rendered to exactly 480x640 -- the panel's
-# size -- with black bars where the aspect ratios disagree. The source is
-# landscape and the panel is portrait, so a fill-and-crop would have thrown
-# away most of the image's width to fill the height; the whole picture
-# visible with bars is the better trade for a wallpaper somebody chose.
+# FITTED, not cropped, and pre-rendered to exactly 640x480 -- the panel's
+# size -- with black bars where the aspect ratios disagree. Fitted rather
+# than filled so the whole picture is visible; with a landscape source on
+# this landscape panel the bars are 7px a side and it covers 97.7% of the
+# screen anyway.
+#
+# 640x480 LANDSCAPE. Getting this wrong is not subtle but it IS ambiguous
+# from the outside: /sys/class/graphics/fb0/modes says U:640x480p and the
+# stride is 1280 bytes (640px x 2), while the archived hardware notes call
+# the panel "physically portrait: 480x640 fb" -- both true, describing
+# different things. A 480x640 build of this file put 480x368 of picture in
+# the middle of the screen, 57.5% of it, and read on the device as "really
+# small". The composited cache is 480*640*2 == 640*480*2, so its size
+# cannot tell the two apart either. Trust fb0/modes.
 #
 # Because the file is already exactly screen-sized, the spec that goes with
 # it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
@@ -229,9 +238,10 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # 400MHz part -- it is a straight blit.
 #
 # Regenerate with:
-#   magick <src> -resize 480x640 -background black -gravity center \
-#          -extent 480x640 -alpha off -strip -interlace none \
-#          -define png:compression-level=9 PNG24:piko-default.png
+#   magick <src> -resize 640x480 -background black -gravity center \
+#          -extent 640x480 -alpha off -strip -interlace none \
+#          -define png:exclude-chunk=all -define png:compression-level=9 \
+#          PNG24:piko-default.png
 mkdir -p "$PAYLOAD/usr/share/backgrounds"
 cp "$REPO/userspace/backgrounds/piko-default.png" \
    "$PAYLOAD/usr/share/backgrounds/piko-default.png"
