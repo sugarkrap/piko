@@ -82,3 +82,7 @@
 	path = userspace/src/mb-applet-card
 	url = https://github.com/sugarkrap/mb-applet-card
 	branch = main
+[submodule "mb-volume"]
+	path = userspace/src/mb-volume
+	url = https://github.com/sugarkrap/mb-volume
+	branch = main

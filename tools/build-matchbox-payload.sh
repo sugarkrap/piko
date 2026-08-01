@@ -48,6 +48,9 @@ D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 # mb-applet-card is its own repo/submodule rather than part of
 # matchbox-panel, so it gets its own DESTDIR too.
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
+# Same story for mb-volume: userspace/src/mb-volume, not part of
+# matchbox-panel proper.
+D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 
 DEPLOY=0
 TARGET=""
@@ -129,7 +132,7 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2

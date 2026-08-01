@@ -33,6 +33,7 @@ Plus one of our own, in its own repo rather than in matchbox-panel:
 | Applet | Notes |
 |---|---|
 | `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built with its own `Makefile` into `D_CARD`. See that repo's README. |
+| `mb-volume` | Volume slider + mute checkbox, in a self-drawn popup themed off the panel's own message-bubble colours (the panel's real tray bubble is text-only and panel-drawn, so a widget can't live in it). Submodule `userspace/src/mb-volume`, from `github.com/sugarkrap/mb-volume`. Controls ALSA's `Master` element on `hw:0` directly, statically linked against libasound. Built into `D_VOLUME`. See that repo's README. |
 
 `mb-launcher-term.desktop` wires the last two together. It is installed but
 **deliberately not started**: the wrapper execs `rxvt` or `xterm` and the
