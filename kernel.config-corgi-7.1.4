@@ -5466,7 +5466,20 @@ CONFIG_RTC_I2C_AND_SPI=y
 #
 # on-CPU RTC drivers
 #
-CONFIG_RTC_DRV_SA1100=m
+# Built in, NOT a module. The PXA25x RTC is the SA1100-compatible block
+# (pxa25x_devices[] registers &sa1100_device_rtc; the PXA27x-only extended
+# RTC behind CONFIG_RTC_DRV_PXA is a different device and stays a module).
+#
+# Two reasons this must be =y rather than =m:
+#   1. Nothing on the device would ever load it. tools/kernel-modules.sh
+#      ships only the audio/wifi/SD module sets, and /etc/init.d/rcS has no
+#      modprobe for it -- so as a module the platform device sat there
+#      unbound forever, there was no /dev/rtc0, and the system clock started
+#      at the epoch on every boot (00:00 1970-01-01).
+#   2. CONFIG_RTC_HCTOSYS below only sets the system clock when rtc0 is
+#      registered. Built in, that happens during boot, before rcS and long
+#      before anything timestamps a file.
+CONFIG_RTC_DRV_SA1100=y
 CONFIG_RTC_DRV_PXA=m
 # CONFIG_RTC_DRV_CADENCE is not set
 # CONFIG_RTC_DRV_FTRTC010 is not set

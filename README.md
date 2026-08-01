@@ -22,7 +22,8 @@ two-stage kexec boot  ->  Xfbdev (kdrive)  ->  matchbox-session
 
 **Working:** framebuffer X, built-in keyboard (custom XKB layout for the
 Zaurus Fn symbol row), touchscreen as an absolute pointer, WiFi (Prism2
-PCMCIA), SSH, audio, SD card, MPlayer.
+PCMCIA), SSH, audio, SD card, MPlayer, real-time clock (`settime`, and an
+automatic NTP sync once WiFi is up).
 
 **Open:** the w100 vsync timeout is worked around in `w100fb_pan_display()`
 rather than root-caused ([`DEADLETTER-W100-VSYNC.md`](docs/DEADLETTER-W100-VSYNC.md)),
