@@ -184,6 +184,9 @@ userspace/src/md5sum
 # tracked source is brightd.c and tools/build-userspace.sh rebuilds it.
 userspace/src/brightd
 userspace/src/kill
+# mhz: same rule again -- tracked source is mhz.c, tools/build-userspace.sh
+# rebuilds it.
+userspace/src/mhz
 # toasters is an ARM target binary too, same rule -- tracked source is
 # toasters.c, tools/build-toasters.sh (via tools/build-userspace.sh) rebuilds it.
 userspace/src/toasters
