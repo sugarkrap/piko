@@ -102,6 +102,15 @@
  *        this is a wake-up, not an event log.
  *   'u'  brightness up   (Fn+4)
  *   'd'  brightness down (Fn+3)
+ *   's'  screen saver ON.  X's own DPMS/screensaver core wants the panel
+ *        blanked -- sent by fbdevDPMS() (hw/kdrive/fbdev/fbdev.c), on a
+ *        writer fd of its own, since real hardware blanking on this board
+ *        stops at bl_power and brightd is the only thing that touches it.
+ *        Must NOT count as activity, or go_blank() would be immediately
+ *        undone by the activity handling below.
+ *   'w'  screen saver OFF. Counts as activity: X only sends this because
+ *        something legitimate happened (DPMSForceLevel, XSetScreenSaver
+ *        reset, a future screensaver client, ...), same as 'u'/'d'.
  *
  * The heartbeat is what makes the grab survivable. Without it we cannot
  * tell "X is grabbing input and forwarding it, and the user really is
@@ -569,6 +578,16 @@ main(int argc, char **argv)
 						case 'd':
 							go_active();
 							run_bright(buf[k] == 'u' ? "up" : "down");
+							activity = 1;
+							break;
+						case 's':
+							/* Not activity -- see the
+							 * protocol comment above. */
+							if (state != ST_BLANKED)
+								go_blank();
+							break;
+						case 'w':
+							go_active();
 							activity = 1;
 							break;
 						default:

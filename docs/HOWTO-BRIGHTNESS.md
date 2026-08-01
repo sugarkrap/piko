@@ -137,6 +137,8 @@ byte per message:
 | `a` | input activity (any key or touch). Rate-limit it; this is a wake-up, not an event log. |
 | `u` | brightness up (Fn+4) |
 | `d` | brightness down (Fn+3) |
+| `s` | screen saver ON — sent by `fbdevDPMS()`, see "Wiring X11 DPMS" below. Not activity. |
+| `w` | screen saver OFF — same sender. Counts as activity. |
 
 Unknown bytes are ignored rather than guessed at, so the protocol can
 grow without breaking an older daemon.
@@ -186,6 +188,44 @@ Two bugs only showed up at this stage, both fixed in the same commit:
 Removing the grab instead is the other obvious option and is deliberately
 **not** taken: the grab is what stops keystrokes reaching the kernel VT
 layer underneath X, and this keymap has `KEY_SYSRQ` on it.
+
+## Wiring X11 DPMS through brightd
+
+The end goal past this point is real screensaver *content* (animated
+hacks, not just a blanked panel) — which means an X client using the
+core screensaver machinery, and that machinery has to actually do
+something first. Before this, it didn't: `hw/kdrive/fbdev/fbdev.c`'s
+`fbdevDPMS()` called `FBIOPUT_POWERMODE`/`FBIOBLANK`, which reach
+`w100fb_blank()` (`modules/w100/w100fb.c`) — and that function
+deliberately only tracks a `blanked` flag and skips the real
+`corgi_lcd` suspend/resume, because those SPI calls stall the W100 bus
+when triggered from this path (the same freeze this project already
+routes around elsewhere). So `xset dpms force off`, or X's own
+`-b`-style idle timeout if one were ever configured, would report
+success and change nothing on the panel — worse than doing nothing,
+because `KdSaveScreen` returning `TRUE` also means the DIX screensaver
+core never falls back to painting anything of its own either.
+
+`fbdevDPMS()` now sends `s` / `w` on `brightd`'s FIFO instead (its own
+writer fd — DPMS transitions are unrelated to the input stream and rare,
+so it does not share `evdev.c`'s connection). `brightd` remains the
+single owner of `bl_power`; X only asks. `s` reuses the same `go_blank()`
+the idle timer and lid switch already use, and `w` reuses `go_active()`,
+so a DPMS-driven blank restores to the level the user had, exactly like
+every other path in.
+
+This makes DPMS a real, working backend rather than a silent no-op, which
+is the prerequisite for anything built on top of it later (a screensaver
+client via the `MIT-SCREEN-SAVER` extension, `xset s <timeout>` once
+`xset` is actually built, etc.) — none of that existed as of this
+writing. `brightd`'s own evdev-driven idle detection is unchanged and
+still the primary path; this only makes the X-side entry point that used
+to be a dead end actually reach the panel.
+
+**Not yet verified on hardware** — implemented and reasoned through
+against the same `bl_power` mechanism the rest of this document already
+proved out, but the DPMS call path itself (`xset dpms force off/on`
+against the patched server) has not been run on the device yet.
 
 ## Why the hotkeys are not matchbox keybindings
 
