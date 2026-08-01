@@ -14,9 +14,11 @@ set -eu
 # under github.com/sugarkrap, and the local changes are real commits on top
 # of the same upstream commit they were pinned at:
 #
-#   matchbox-panel           3 commits  battery /proc/apm backend, the
-#                                       system-monitor meminfo parse, and
-#                                       the wireless applet fixes
+#   matchbox-panel           6 commits  battery /proc/apm backend, the
+#                                       system-monitor meminfo parse and its
+#                                       swap bar, the wireless applet fixes,
+#                                       the clock's font-size option, and
+#                                       mb-applet-tasks (the taskbar)
 #   matchbox-window-manager  2 commits  GConf m4 fallback, missing includes
 #   xserver                  5 commits  font-util compat m4, kdrive evdev
 #                                       absolute-pointer (touchscreen),
@@ -98,6 +100,8 @@ check_marker "$SRC/matchbox-panel" "battery /proc/apm backend" \
     "configure.ac" "enable_proc_apm"
 check_marker "$SRC/matchbox-panel" "system-monitor meminfo parse by key" \
     "applets/mb-applet-system-monitor.c" "MemAvailable"
+check_marker "$SRC/matchbox-panel" "system-monitor swap bar" \
+    "applets/mb-applet-system-monitor.c" "CARD_SWAP_PREFIX"
 check_marker "$SRC/matchbox-panel" "wireless applet fixes" \
     "applets/mb-applet-wireless.c" "iface_address"
 

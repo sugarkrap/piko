@@ -27,15 +27,22 @@
 # and each one after that sits to its left. So the clock being first is what
 # puts it at the far right end of the panel.
 #
-# mb-applet-menu-launcher is the exception: it calls
-# mb_tray_app_request_offset(-1) itself and ends up on the left regardless,
-# so it is listed last to keep this list reading right-to-left honestly.
+# mb-applet-menu-launcher and mb-applet-tasks are the exceptions: both call
+# mb_tray_app_request_offset(-1) themselves and end up on the LEFT
+# regardless, in the order they dock. They are listed last, after the
+# right-hand group, so this list still reads right-to-left honestly -- and
+# the taskbar is listed after the menu button so the menu button lands
+# furthest left, with the taskbar growing rightwards from beside it.
 #
 # -s 16 shrinks the clock font. Without it the clock sizes its font to the
 # full tray height (32px here), which fills the panel edge to edge and makes
 # the applet wide, because its requested width is the rendered width of
 # "99999" in that font. Tune this number, not the panel size.
 APPLETS="mb-applet-clock -s 16"
+# Right-to-left list order (see above) puts mb-volume just left of the
+# clock and system-monitor just left of that -- i.e. reading the panel
+# left-to-right: ...system-monitor, volume, clock.
+APPLETS="$APPLETS,mb-volume"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
 APPLETS="$APPLETS,mb-applet-wireless"
@@ -43,6 +50,14 @@ APPLETS="$APPLETS,mb-applet-wireless"
 # card is actually inserted, so it costs nothing to always start it.
 APPLETS="$APPLETS,mb-applet-card"
 APPLETS="$APPLETS,mb-applet-menu-launcher"
+# The taskbar: one button per running application, with its icon, its name
+# and a count when it has several windows. Also self-hiding -- with nothing
+# open it docks no window at all, so the panel looks exactly as it did
+# before until there is a task to show. It claims the space between the
+# menu button and the leftmost right-hand applet, working the free width
+# out for itself from the panel's own applet list, so nothing here needs
+# adjusting when applets come and go.
+APPLETS="$APPLETS,mb-applet-tasks"
 
 # Not enabled:
 #

@@ -13,6 +13,7 @@ updates the running system directly, no network involved at all.*
 |---|---|
 | Device boots, WiFi/SSH work | `tools/build-and-deploy.sh` — see `docs/HOWTO-BUILD-DEPLOY-KERNEL.md` |
 | Device boots, but WiFi/SSH is unavailable or you'd rather not depend on it | **`piko-update`** (this doc) |
+| You'd rather do it from the desktop than a shell | the Software Center app — `docs/HOWTO-SOFTWARE-CENTER.md` |
 | Iterating on the bootstrap kernel with the device on WiFi | `flash/run-stage2-smf-update.sh` |
 | Device unreachable / unbootable | SD-card recovery flash — `docs/FLASH-MTD1-MTD3-SAFE.md` |
 
@@ -132,6 +133,15 @@ Useful flags:
 - `--no-reboot` — installs but leaves the reboot to you (run `softreboot`
   by hand when ready).
 - `--commit-smf` — see below. Also reachable as `smfcommit`.
+- `--progress-fd N` — emit machine-readable progress records on fd N. This
+  is what the Software Center's progress bar reads; the format is
+  documented in `docs/HOWTO-SOFTWARE-CENTER.md`. Watch it by hand with
+  `piko-update pkg.tar --dry-run --progress-fd 3 3>&1 >/dev/null`.
+
+Every package also carries `etc/zaurus/manifest`, naming the ROM version
+and its changelog, and every successful install appends a line to
+`/etc/zaurus/update-history`. Both exist for the Software Center to
+display — see `docs/HOWTO-SOFTWARE-CENTER.md` for the formats.
 
 ## Updating the bootstrap
 

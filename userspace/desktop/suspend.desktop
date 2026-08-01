@@ -1,0 +1,33 @@
+[Desktop Entry]
+Name=Suspend
+Comment=Suspend to RAM
+Exec=/usr/sbin/suspend
+Icon=suspend.png
+Terminal=false
+Categories=Action;
+# Categories=Action, NOT System, and that single word is what puts this
+# entry where it belongs. Both consumers of this file special-case it:
+#
+#   * mb-applet-menu-launcher (applets/mb-applet-menu-launcher.c) tests
+#     Categories for "Action" BEFORE it does any vfolder matching, and on
+#     a hit sets m = mbmenu->rootmenu -- the top level of the menu,
+#     alongside the Programs/System/Settings folders rather than inside
+#     one of them. It also drops a separator above the first such entry
+#     and passes MBMENU_NO_SORT, so the actions stay grouped at the root
+#     instead of being alphabetised in among the folders.
+#
+#   * matchbox-desktop-classic (modules/dotdesktop.c) opens
+#     add_a_dotdesktop_item() with "We dont want 'action' entrys" and
+#     returns early on the same substring, so this stays off the desktop
+#     icon view.
+#
+# With Categories=System these landed in the "System Tools" folder, one
+# level down, which is not where a power action should live.
+#
+# There is also deliberately no Type= line. That is now belt-and-braces
+# rather than the mechanism -- dotdesktop.c's Action check fires before
+# it ever looks at Type -- but it costs nothing and independently keeps
+# the entry off the desktop, which gates on Type being exactly
+# "Application". Do NOT reach for Type=PanelApp: the menu-launcher
+# special-cases that exact string LAST, after the Action branch, and
+# would redirect this into its "Utilities/Panel" applet submenu.

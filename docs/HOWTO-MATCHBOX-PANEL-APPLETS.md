@@ -25,6 +25,7 @@ their own tray icon. The tree ships six plus a wrapper script:
 | `mb-applet-system-monitor` | shipped | CPU + memory bars |
 | `mb-applet-battery` | shipped | needed a new backend, see below |
 | `mb-applet-wireless` | shipped | needed three fixes to even run |
+| `mb-applet-tasks` | shipped | the taskbar, ours -- see below |
 | `mb-applet-launcher` | built, unused | generic button: `-l <icon.png> <command>` |
 | `mb-applet-xterm-wrapper.sh` | installed, unused | execs `rxvt` or `xterm` |
 
@@ -32,7 +33,8 @@ Plus one of our own, in its own repo rather than in matchbox-panel:
 
 | Applet | Notes |
 |---|---|
-| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Built by `tools/build-x11-stack.sh` like every other Matchbox app, into `D_CARD` (`/tmp/mb-stage-card`) -- but with plain `make`, not autotools: it is one source file against one `pkg-config` module and ships a hand-written `Makefile`, so it is the one package in that script with no `configure` step. See that repo's README. |
+| `mb-applet-card` | SD/CF eject, like XP's *Safely Remove Hardware*. Submodule `userspace/src/mb-applet-card`, from `github.com/sugarkrap/mb-applet-card`. Self-hiding: the icon appears only while a card is inserted. Raises a tray bubble when a card turns up and when an eject fails -- see "Urgent tray messages" below. Built by `tools/build-x11-stack.sh` like every other Matchbox app, into `D_CARD` (`/tmp/mb-stage-card`) -- but with plain `make`, not autotools: it is one source file against one `pkg-config` module and ships a hand-written `Makefile`, so it is the one package in that script with no `configure` step. See that repo's README. |
+| `mb-volume` | Volume slider + mute checkbox, in a self-drawn popup themed off the panel's own message-bubble colours (the panel's real tray bubble is text-only and panel-drawn, so a widget can't live in it). Submodule `userspace/src/mb-volume`, from `github.com/sugarkrap/mb-volume`. Controls ALSA's `Master` element on `hw:0` directly, statically linked against libasound. Built into `D_VOLUME`. See that repo's README. |
 
 Until 2026-08-01 `mb-applet-card` was *not* in `build-x11-stack.sh`'s
 package list, even though `tools/build-matchbox-payload.sh` requires
@@ -88,6 +90,168 @@ worth reintroducing the stale-state problem for.
 `build-matchbox-payload.sh` fails the build if the session file names an
 applet that is not in the payload. Without that check the panel logs a
 session timeout per missing applet and comes up looking half-broken.
+
+---
+
+## mb-applet-tasks: the taskbar
+
+*Added 2026-08-01, replacing the "Active Tasks" folder in
+matchbox-desktop.* One button per running **application** -- not per
+window -- with its icon, its name, and a count when it has more than one
+window open. Classic Windows / GNOME 2 behaviour:
+
+- click an application that is not on screen -> raise it;
+- click the one that *is* on screen -> minimise it;
+- click an application with several windows -> a menu of its windows,
+  each by title, minimised ones in `[brackets]`;
+- more applications than fit -> the tail goes behind a `>>` button rather
+  than being silently dropped.
+
+It lives in `matchbox-panel/applets/` rather than in a repo of its own
+(the way `mb-applet-card` does) because it is generic panel
+functionality, not piko hardware support -- so it builds, installs and
+lands in the payload with the rest of the panel, with nothing new to
+wire up.
+
+### It does not need matchbox-desktop, and does not need a patched WM
+
+Everything it reads is plain EWMH on the root window: `_NET_CLIENT_LIST`,
+`_NET_ACTIVE_WINDOW`, plus per-window `_NET_WM_NAME`, `_NET_WM_STATE`,
+`_NET_WM_ICON`, `WM_CLASS` and `_NET_WM_PID`. It drives the window
+manager back with `_NET_ACTIVE_WINDOW` and `_NET_WM_STATE` client
+messages. Against an unpatched matchbox the minimise half simply does
+nothing and everything else still works.
+
+Two matchbox-specific touches, both optional:
+
+- `_MB_CURRENT_APP_WINDOW` is preferred over `_NET_ACTIVE_WINDOW` for
+  deciding which button is pressed in. Under matchbox the active window
+  is the *dialog* whenever an application has one open, and a dialog is
+  never in the task list -- so without this no button lights up while a
+  file chooser is on screen.
+- `_NET_WM_STATE_HIDDEN` is what minimise sends, and matchbox-window-manager
+  gained support for it for this (see below).
+
+### Identity comes from /proc, not WM_CLASS
+
+The grouping key is the basename of `/proc/<pid>/cmdline`'s argv[0],
+found via `_NET_WM_PID`, and only then WM_CLASS.
+
+That order is not stylistic. **Every FLTK program reports
+`WM_CLASS = "FLTK", "FLTK"`** unless it has been told otherwise, so
+grouping on WM_CLASS folds `pikalibrate`, `matchbox-fbrun` and every
+future FLTK tool into one button labelled "FLTK". Verified on a live
+display: the applet reported `key=piko-designer` for a window whose
+WM_CLASS was `FLTK`/`FLTK`.
+
+argv[0] is also exactly what `.desktop` `Exec=` names, so the same key
+does double duty as the icon and display-name lookup -- which is why a
+taskbar button shows the same icon and name as the launcher menu entry
+it was started from. Falling back:
+
+1. `.desktop` `Name=` / `Icon=` for that binary;
+2. WM_CLASS `res_class`, but *only* when it is plainly the same word as
+   the key (a prefix either way) -- `steam` for `steamwebhelper` yes,
+   `FLTK` for `piko-designer` no;
+3. the key itself;
+
+and for the icon, `_NET_WM_ICON`, then the `WM_HINTS` icon pixmap, then
+`mbnoapp.png` from matchbox-common.
+
+### Do NOT make it self-hiding
+
+This is the trap. `mb-applet-card` hides itself when there is no card,
+and copying that pattern here was a mistake worth recording.
+
+The panel starts its applets **one at a time and waits for each to dock**
+before starting the next, giving up after `SESSION_TIMEOUT` (10 seconds,
+`src/panel.h`). An applet that calls `mb_tray_app_hide()` before the main
+loop never docks at all -- `_init_docking()` early-returns when
+`is_hidden` is set -- so it burns that entire timeout and delays every
+applet listed after it. Nothing is open at login, which is exactly when
+this bites: measured on the test rig, the clock and everything to its
+right appeared **10 seconds late on every boot**, with
+`Session timeout on mb-applet-tasks` in the panel's stderr.
+
+An empty taskbar asks for a 1px width instead, which disappears between
+the panel's own margins.
+
+**The same cost applies to `mb-applet-card` today** whenever no card is
+inserted. Nobody has complained, but that is where a mystery 10-second
+pause at boot would be coming from.
+
+### How it knows how much room it has
+
+The panel reparents every applet into itself and publishes the docked set
+as `_NET_CLIENT_LIST` **on its own window** (`panel_update_client_list_prop`,
+`src/panel.c`). The taskbar reads that, takes the geometry of the nearest
+applet to its right, and sizes itself to the gap. So the applet list in
+`/etc/matchbox/session` can change freely without anything here needing
+adjustment.
+
+Asking for more than that does not fail -- the panel just lets applets
+overlap -- so getting it wrong would be silent.
+
+Two panel behaviours to know before touching the sizing:
+
+- **Never request width == height.** `panel_app_handle_configure_request`
+  reads a square request as "this applet wants to be square" and
+  overrides the width with the panel height.
+- A resize is a *request*. `layout()` sizes buttons for the width asked
+  for; the repaint that follows runs against the width granted **so
+  far**. Painting a full row of buttons onto the 1px background of an
+  applet the panel has not resized yet overran the heap, because libmb's
+  compositor does not bounds-check its destination (`fill_rect()` in the
+  applet does). Everything drawn is now clipped to the image actually in
+  hand.
+
+### `--dump`
+
+`mb-applet-tasks --dump` scans once, prints the `.desktop` index, the
+task list, the groups, their labels, computed geometry and whether an
+icon was found, and exits. It needs a display connection but not a
+system tray, so it runs alongside a live panel.
+
+There is no debugger on the target and the panel swallows applet stderr,
+so this is the only way to answer "what does it think is running, and why
+did it pick that icon" without a camera pointed at the screen.
+
+### What the window manager had to gain: minimise
+
+matchbox could *already* iconise a window -- `main_client_iconize()` sets
+`IconicState`, unmaps, and takes the client's dialogs with it -- but the
+only way to reach it was the titlebar's minimise button, which most
+themes do not draw, and nothing ever said so on the wire. Three gaps,
+all closed on the fork:
+
+- a `_NET_WM_STATE` client message adding or removing
+  `_NET_WM_STATE_HIDDEN` now iconises or restores the window. Restoring
+  goes through `wm_activate_client()`, not a flag clear: `main_client_show()`
+  is what resets `IconicState`, remaps the frame and brings the dialogs
+  back with it;
+- iconised app clients carry that state on `_NET_WM_STATE`. **This is the
+  only way a taskbar can tell a minimised window from one merely stacked
+  below the visible app** -- under matchbox every main client but the top
+  one is covered yet still mapped, so map state says nothing;
+- `_NET_WM_STATE_HIDDEN` and `_NET_WM_ACTION_MINIMIZE` are advertised in
+  `_NET_SUPPORTED` / `_NET_WM_ALLOWED_ACTIONS`.
+
+`main_client_iconize()` also updates the root window lists
+unconditionally now. It only reached them via `main_client_unmap()`'s
+activation of a next client, so minimising the *last* window left the
+lists still claiming it was up.
+
+Deliberately **not** done: making "show desktop" work without a desktop
+client. `wm_toggle_desktop()` returns early when `wm_get_desktop()` finds
+nothing, so once matchbox-desktop is dropped that path dies -- but the
+taskbar does not use it. Per-window `_NET_WM_STATE_HIDDEN` is both the
+standard mechanism and the one that survives the deprecation.
+
+One unrelated fix rode along: `_NET_CLIENT_LIST` was published with the
+*stack's* item count over the *age list's* contents. The two are
+maintained separately, so the moment they disagree that hands out
+uninitialised heap as window IDs -- to exactly the pagers and taskbars
+that read it.
 
 ---
 
@@ -258,6 +422,44 @@ hotspot re-addressed its subnet.
 
 ---
 
+## Urgent tray messages
+
+Applets raise a bubble with `mb_tray_app_tray_send_message()`; the panel
+draws it next to the sending applet's icon. Stock 0.9.3 draws every one of
+them in the same colour, even though `MBPanel` has carried a second colour
+for the purpose -- `msg_urgent_col`, themeable as `PanelMsgBgUrgentCol`,
+default `orange` -- since forever. It is initialised, it is re-read on every
+theme change, and **nothing has ever read it**. There was no way for an
+applet to ask for it.
+
+Our fork adds one. An applet sets a `_MB_SYSTEM_TRAY_MESSAGE_URGENT`
+CARDINAL (non-zero = urgent) on its own tray window immediately before
+sending, and the panel reads it as `SYSTEM_TRAY_BEGIN_MESSAGE` arrives. The
+default was retuned from `orange` to a washed-out red, `#f2a0a0`.
+
+Three things about the shape of this that are not arbitrary:
+
+- **It is a window property, not a field of the client message.** All five
+  `data.l` slots of `SYSTEM_TRAY_BEGIN_MESSAGE` are already spoken for
+  (timestamp, opcode, timeout, length, id). `_MB_SYSTEM_TRAY_CONTEXT`
+  already solved the same problem the same way.
+- **Read at `BEGIN_MESSAGE`, not at draw time.** A bubble is drawn only
+  once all of its data has arrived, which can be several client messages
+  later; by then the sender may have moved on. Reading as the message
+  *starts* is the only point at which the property is guaranteed to still
+  describe that message -- requests from one client are processed in order,
+  so setting it just before sending is enough.
+- **Only the fill changes.** Border and text stay black, so an error bubble
+  reads as the same bubble with a warning colour behind it. Black on
+  saturated red is genuinely hard to read on a transflective panel
+  outdoors, which is also why the default is washed out.
+
+An applet that never sets the property, or a stock panel that never reads
+it, both behave exactly as before. `mb-applet-card` is the first user; see
+its README.
+
+---
+
 ## Deploying onto a running session
 
 Two device constraints make this harder than it should be, and both are
@@ -303,8 +505,8 @@ commit it was pinned at, plus our commits on top:
 
 | Submodule | Fork | Our commits |
 |---|---|---|
-| `matchbox-panel` | `sugarkrap/matchbox-panel` | battery `/proc/apm`, meminfo parse, wireless fixes |
-| `matchbox-window-manager` | `sugarkrap/matchbox-window-manager` | GConf m4 fallback, missing includes |
+| `matchbox-panel` | `sugarkrap/matchbox-panel` | battery `/proc/apm`, meminfo parse, wireless fixes, `mb-applet-tasks`, `msg_set_timeout` prototype |
+| `matchbox-window-manager` | `sugarkrap/matchbox-window-manager` | GConf m4 fallback, missing includes, `_NET_WM_STATE_HIDDEN` |
 | `xserver` | `sugarkrap/xserver` | font-util compat m4, kdrive evdev absolute pointer |
 | `libX11` | `sugarkrap/libx11` | cherry-picked upstream `XKBgeom.h` (`1f1ca086`), nls srcdir |
 | `libfontenc` | `sugarkrap/libfontenc` | font-util compat m4 |
@@ -329,6 +531,39 @@ kind of thing that costs an afternoon. `modules/x11/` now holds only
 
 The applets are graphical and mostly cannot be asserted on from a script,
 so lean on these instead. All of them caught something real here:
+
+- **Run the whole session headlessly, on the host.** This is the strongest
+  of these and was not available until 2026-08-01. The `xserver` submodule
+  builds a native **Xvfb** (`--enable-xvfb`, plus native `xtrans` and
+  `libXfont`; point `ACLOCAL_PATH` at `userspace/src/xorg-macros` or
+  configure dies on `xorg-macros`/`XTRANS_CONNECTION_FLAGS`). Build
+  libmatchbox, the WM and the panel natively into the same throwaway
+  prefix, run `Xvfb :9 -screen 0 640x480x16` at the device's real
+  geometry and depth, and you have the actual session to poke at:
+
+      xprop -root _NET_CLIENT_LIST        # what the WM is publishing
+      import -window root shot.png        # what it looks like
+      XTestFakeButtonEvent via a 20-line  # real clicks, so menus and
+        helper                            #   button hit-testing run
+
+  Two Xvfb gotchas: it execs `xkbcomp` **from its own `--prefix`** (symlink
+  the host one in, or it dies with "Failed to activate core devices"), and
+  the default font path under a throwaway prefix is empty, which is
+  harmless once Xft is finding fonts through fontconfig.
+
+  Every bug in `mb-applet-tasks` that mattered was found this way and none
+  of them could have been: a use-after-free that crashed it the instant it
+  docked, a heap overflow when the applet grew from empty, a 10-second
+  boot stall from self-hiding, and a font weight that measured 42% grey
+  where it should have been black. It cross-compiled cleanly with zero
+  warnings through all of them.
+
+- **Measure the pixels, do not squint at them.** `magick <shot> -crop
+  <region> -format %[min] info:` gives the darkest pixel in a region --
+  which is how "the label looks a bit washed out" became "42% grey versus
+  the clock's 0", i.e. a real defect rather than a matter of taste. Crop
+  the panel strip and `-filter point -resize 300%` to actually see 24px
+  icons and 12px text.
 
 - **Extract the function under test and drive it.** `sed` the real function
   out of the patched source into a harness so the test cannot drift from

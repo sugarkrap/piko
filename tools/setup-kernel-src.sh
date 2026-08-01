@@ -122,6 +122,14 @@ copy_in "$REPO/modules/clk-pxa/timer_pxa_patched.c"   drivers/clocksource/timer-
 copy_in "$REPO/modules/clk-pxa/clk_pxa25x_patched.c"  drivers/clk/pxa/clk-pxa25x.c
 copy_in "$REPO/modules/clk-pxa/clk_pxa_patched.c"     drivers/clk/pxa/clk-pxa.c
 
+# CPU frequency scaling, plus the overclock steps the `mhz` tool drives.
+# pxa2xx-cpufreq.c gains a `pxa255_maxfreq` module parameter (default: the
+# rated 398 MHz, i.e. stock behaviour) and drops three frequency-table
+# entries that the pxa25x clock driver could never actually program. The
+# CCCR combinations themselves live in clk_pxa25x_patched.c above.
+# See docs/HOWTO-OVERCLOCK.md.
+copy_in "$REPO/modules/cpufreq/pxa2xx_cpufreq_patched.c" drivers/cpufreq/pxa2xx-cpufreq.c
+
 # pxa25x.c adds the "pxa2xx-i2s" rx/tx DMA slave-map entries that mainline
 # only ever defined for pxa27x -- without them dma_request_slave_channel()
 # returns NULL and ASoC fails PCM open with -ENXIO on this board. See the

@@ -226,6 +226,20 @@ if test -x /usr/sbin/brightd; then
 	trap - HUP
 fi
 
+# --- screen rotation on the swivel hinge ---
+# Turns the display 180 degrees when the lid is swivelled and folded flat.
+# The rotation is done by the w100 CRTC during scanout (the "flip" sysfs
+# attribute), so it costs a register write and moves no pixels -- see
+# userspace/src/flipd.c. Started here rather than from the X session
+# because it works on the console too, and because it must apply the
+# current posture at boot, not at login. Stop it with "pkillx flipd";
+# to disable it for good put enabled=0 in /etc/piko/rotation.cfg.
+if test -x /usr/sbin/flipd; then
+	trap "" HUP
+	/usr/sbin/flipd 2>/dev/null &
+	trap - HUP
+fi
+
 # --- ssh ---
 mkdir -p /etc/dropbear
 # Generate host keys on first boot (persisted to the jffs2 root).

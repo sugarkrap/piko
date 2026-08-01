@@ -322,6 +322,121 @@ What matters for *building*:
 
 ---
 
+## The hardware buttons
+
+The Zaurus's front buttons are ordinary matrix keys -- there is no
+separate "button" input device. `corgikbd_keymap[]` in
+`modules/mach-pxa/corgi_patched.c` is the whole story:
+
+| Button              | Matrix | evdev key     | X keysym |
+|---------------------|--------|---------------|----------|
+| Calendar            | (3,0)  | `KEY_F1`      | `F1`     |
+| Address             | (4,0)  | `KEY_F2`      | `F2`     |
+| Mail                | (5,0)  | `KEY_F10`     | `F10`    |
+| **Home**            | (6,0)  | `KEY_SYSRQ`   | `Print`  |
+| Cancel              | (6,3)  | `KEY_F4`      | `F4`     |
+| OK                  | (6,4)  | `KEY_F11`     | `F11`    |
+| Menu                | (6,5)  | `KEY_F12`     | `F12`    |
+| On/off              | (7,0)  | `KEY_SUSPEND` | *none*   |
+
+Bindings live in the window manager's `data/kbdconfig`
+(`userspace/src/matchbox-window-manager`, our fork), which installs to
+**`/usr/etc/matchbox/kbdconfig`** -- `--prefix=/usr` with no
+`--sysconfdir`, so it is *not* `/etc/matchbox/`. A stale
+`/root/.matchbox/kbdconfig` shadows it completely;
+`build-matchbox-payload.sh` deletes that file on every deploy for
+exactly that reason.
+
+**Home shows the desktop.** It is bound as `Print=showdesktop`.
+`showdesktop` is a piko addition to the fork: matchbox's stock `desktop`
+action is a *toggle*, so pressing Home twice would drop you back into
+the app you had just left. `showdesktop` only ever raises the desktop.
+`<Alt>d` and `matchbox-remote -desktop` still toggle.
+
+Nothing is closed or iconified by it -- matchbox shows one app at a time
+anyway, and the desktop is just another client raised above the rest.
+Running apps stay running and are still listed by the task menu
+(`<Alt>space`) and `mb-applet-menu-launcher`.
+
+Two things not to re-litigate when adding more of these:
+
+- **A bare binding here is an `XGrabKey()` on the root window**, so the
+  key is taken away from every client. That is why `f11=fullscreen` is
+  commented out: OK belongs to `matchbox-desktop` as its activate key.
+  Home is safe to grab because nothing else in this ROM used `KEY_SYSRQ`.
+- **The on/off button cannot be bound yet.** `KEY_SUSPEND` has no keysym
+  in the `zaurus` XKB symbols file, and adding any previously-undefined
+  keycode there makes `xsession`'s live `xkbcomp` upload fail with
+  `XKEYBOARD BadValue`. `XKeysymToKeycode()` then has nothing to resolve,
+  so the binding would be silently inert. Home needed none of this: the
+  stock evdev keycodes already carry `KEY_SYSRQ` as `<PRSC> = 107` and
+  `symbols/pc` already gives it `Print`.
+
+---
+
+## System actions in the menu: Suspend, Reboot, Go to TTY
+
+Three entries at the **root of the panel menu** that *do* something rather
+than open a window — they sit at the top level alongside the Programs /
+System / Settings folders, not inside one. Each is an ordinary `.desktop`
+file in `userspace/desktop/`, and each `Exec=`s a plain script in
+`/usr/sbin`:
+
+| Menu entry | Exec | What it does |
+|---|---|---|
+| Suspend   | `/usr/sbin/suspend`    | `deep` to `mem_sleep`, then `mem` to `/sys/power/state` |
+| Reboot    | `/usr/sbin/softreboot` | kexec warm reboot (pre-existing script) |
+| Go to TTY | `/usr/sbin/gototty`    | `pkillx Xfbdev`, which cascades the session down to a getty |
+
+Two things about them are easy to get wrong:
+
+**`Categories=Action` is what does the work — not `System`.** That one
+word is special-cased by *both* consumers of these files, which is the
+only reason a root-level menu entry is possible at all:
+
+- `mb-applet-menu-launcher.c` tests `Categories` for `Action` **before**
+  any vfolder matching, and on a hit sets `m = mbmenu->rootmenu`. It also
+  emits a separator above the first such entry and passes
+  `MBMENU_NO_SORT`, so the actions stay grouped at the root rather than
+  being alphabetised in among the folders.
+- `matchbox-desktop-classic/modules/dotdesktop.c` opens
+  `add_a_dotdesktop_item()` with `/* We dont want 'action' entrys */` and
+  returns early on the same substring — so they stay off the desktop
+  icon view.
+
+With `Categories=System` they landed in the "System Tools" folder, one
+level down. There is no vfolder you can point at to get root placement:
+`Root.directory` has no `Match=` line, and `mb_dot_desktop_folders_new()`
+only registers folders that have both `Name` and `Match`, so `Root` is
+skipped entirely as a folder. `Action` is the mechanism.
+
+Because the entries are appended `NO_SORT` in `readdir()` order, their
+order relative to *each other* follows the filesystem, not the file
+names.
+
+They also carry no `Type=` line. That is now belt-and-braces rather than
+the mechanism — the `Action` check fires before `dotdesktop.c` ever looks
+at `Type` — but it costs nothing and independently keeps them off the
+desktop, which gates on `Type` being exactly `Application`. Do **not**
+reach for `Type=PanelApp` instead: the menu-launcher special-cases that
+exact string *last*, after the `Action` branch, and would redirect the
+entry into its "Utilities/Panel" applet submenu.
+
+**Go to TTY depends on `pkillx`.** `gototty` is a one-line script and this
+busybox has no `kill`, `killall` or `pkill` applet of its own, so without
+`/usr/sbin/pkillx` (built from `userspace/src/pkillx.c` by
+`tools/build-userspace.sh`) the entry silently does nothing. Both halves
+ship on a normal `tools/build-and-deploy.sh` run: the launchers and icons
+ride in the X11 payload from `build-matchbox-payload.sh`, and the scripts
+plus `pkillx` are sent by `chunked-deploy.sh` section 6e.
+
+The physical on/off button is **not** wired to Suspend, and cannot
+currently be -- see `docs/DEADLETTER-XKB-LIVE-SETMAP.md`. Suspend itself
+has not been watched resume cleanly on real hardware; if the screen stays
+black after a wake, SSH in and read `dmesg | tail` before assuming a hang.
+
+---
+
 ## Wallpaper: modes, formats, and why it's cached raw
 
 `matchbox-desktop` already had a background system (`--bg`, XSettings,

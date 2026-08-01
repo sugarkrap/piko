@@ -25,6 +25,11 @@ set -eu
 #                                   deliberately links nothing X. Ordered
 #                                   next to md5sum because it has no
 #                                   dependencies on anything below.
+# 1b2. userspace/src/flipd          the screen-rotation daemon: watches the
+#                                   swivel hinge's tablet-mode switch and
+#                                   turns the display 180 degrees using the
+#                                   w100 CRTC's own scanout rotation. Static,
+#                                   libc only, same reasoning as brightd.
 #  1c. userspace/src/kill           the only way to signal a process on this
 #                                   device (this busybox has no kill/killall/
 #                                   pkill applet at all). Same reasoning as
@@ -212,6 +217,25 @@ else
     echo "==> skipping brightd (no $BRIGHTD_SRC)"
 fi
 
+# --- 1b2. flipd (screen rotation on the swivel hinge) -----------------------
+# Same shape as brightd: static, libc only, reads evdev and sysfs directly.
+# It turns the display 180 degrees via the w100 CRTC's scanout rotation
+# when the lid is swivelled -- no pixels move. See flipd.c's header.
+FLIPD_SRC="$REPO/userspace/src/flipd.c"
+FLIPD_BIN="$REPO/userspace/src/flipd"
+if [ -f "$FLIPD_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$FLIPD_BIN" ] || [ "$FLIPD_SRC" -nt "$FLIPD_BIN" ]; then
+        echo "==> building userspace/src/flipd"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$FLIPD_BIN" "$FLIPD_SRC"
+        "${CROSS_COMPILE}strip" "$FLIPD_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/flipd already up to date"
+    fi
+else
+    echo "==> skipping flipd (no $FLIPD_SRC)"
+fi
+
 # --- 1c. kill (the only way to signal a process on this device) -------------
 # This busybox has no kill, killall or pkill applet at all, so without this
 # binary there is no way to send a signal to anything. tools/chunked-deploy.sh
@@ -233,6 +257,83 @@ if [ -f "$KILL_SRC" ]; then
     fi
 else
     echo "==> skipping kill (no $KILL_SRC)"
+fi
+
+# --- 1c2. mhz (CPU speed / overclocking) ------------------------------------
+# Single-word name for the same reason as `bright` and `netinfo`: it is typed
+# on the device keyboard, which cannot produce '/' or ':' (AGENTS.md). Drives
+# the cpufreq sysfs and (re)loads pxa2xx-cpufreq at the requested ceiling --
+# see userspace/src/mhz.c and docs/HOWTO-OVERCLOCK.md. Same -static reasoning
+# as md5sum above; links nothing but libc.
+MHZ_SRC="$REPO/userspace/src/mhz.c"
+MHZ_BIN="$REPO/userspace/src/mhz"
+if [ -f "$MHZ_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$MHZ_BIN" ] || [ "$MHZ_SRC" -nt "$MHZ_BIN" ]; then
+        echo "==> building userspace/src/mhz"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$MHZ_BIN" "$MHZ_SRC"
+        "${CROSS_COMPILE}strip" "$MHZ_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/mhz already up to date"
+    fi
+else
+    echo "==> skipping mhz (no $MHZ_SRC)"
+fi
+
+# --- 1c-ter. pkillx (signal a process BY NAME) ------------------------------
+# The companion to kill above: kill needs a PID, and with no ps-parsing
+# tools on this busybox that is the hard part. pkillx walks /proc itself
+# and matches on the process basename, which is what makes it usable from
+# a script that cannot know a PID in advance.
+#
+# It was in exactly the hole kill was: userspace/src/pkillx.c has been in
+# the tree since e348909 and three separate places already tell you to run
+# it -- rcS's comment ("Stop it with pkillx brightd"), docs/HOWTO-
+# BRIGHTNESS.md, docs/HOWTO-FLTK.md -- but nothing ever built it, so it
+# only existed on boards where it had been hand-fed a copy. It became load
+# bearing with /usr/sbin/gototty, whose entire body is "pkillx Xfbdev":
+# without this, the Go to TTY menu entry silently does nothing.
+#
+# Same -static reasoning as md5sum above.
+PKILLX_SRC="$REPO/userspace/src/pkillx.c"
+PKILLX_BIN="$REPO/userspace/src/pkillx"
+if [ -f "$PKILLX_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$PKILLX_BIN" ] || [ "$PKILLX_SRC" -nt "$PKILLX_BIN" ]; then
+        echo "==> building userspace/src/pkillx"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$PKILLX_BIN" "$PKILLX_SRC"
+        "${CROSS_COMPILE}strip" "$PKILLX_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/pkillx already up to date"
+    fi
+else
+    echo "==> skipping pkillx (no $PKILLX_SRC)"
+fi
+
+# --- 1c-quater. cardswap (the SD card's swapfile) ---------------------------
+# Same hole as kill and pkillx, one layer down: this busybox is built
+# without mkswap, swapon AND swapoff, so there is no shell path to a swap
+# area at all on this device. cardswap creates, signs and enables the
+# 64 MiB file at /mnt/card/.zaurus/swap with the syscalls directly, and is
+# what /usr/sbin/sdcard (the mdev hook) and mb-applet-card's Eject both
+# call. Without it the card mounts exactly as before and the machine
+# simply has no swap -- everything degrades quietly, which is why the
+# callers all guard on it being executable.
+#
+# Same -static reasoning as md5sum above.
+CARDSWAP_SRC="$REPO/userspace/src/cardswap.c"
+CARDSWAP_BIN="$REPO/userspace/src/cardswap"
+if [ -f "$CARDSWAP_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$CARDSWAP_BIN" ] || [ "$CARDSWAP_SRC" -nt "$CARDSWAP_BIN" ]; then
+        echo "==> building userspace/src/cardswap"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$CARDSWAP_BIN" "$CARDSWAP_SRC"
+        "${CROSS_COMPILE}strip" "$CARDSWAP_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/cardswap already up to date"
+    fi
+else
+    echo "==> skipping cardswap (no $CARDSWAP_SRC)"
 fi
 
 # --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
@@ -259,7 +360,6 @@ for _clock_tool in hwclock ntpsync; do
     fi
 done
 unset _clock_tool
-
 # --- 1d. opkg (package manager) ---------------------------------------------
 # Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
 # in before they were added here: tools/build-opkg.sh existed and worked,
@@ -367,8 +467,14 @@ fi
 if [ -f "$BRIGHTD_BIN" ]; then
     echo "    brightd: $BRIGHTD_BIN"
 fi
+if [ -f "$FLIPD_BIN" ]; then
+    echo "    flipd:   $FLIPD_BIN"
+fi
 if [ -f "$KILL_BIN" ]; then
     echo "    kill:    $KILL_BIN"
+fi
+if [ -f "$CARDSWAP_BIN" ]; then
+    echo "    cardswap: $CARDSWAP_BIN"
 fi
 if [ -d "$REPO/userspace/stage-ssh" ]; then
     echo "    ssh:     $REPO/userspace/stage-ssh ($(du -sh "$REPO/userspace/stage-ssh" 2>/dev/null | cut -f1))"

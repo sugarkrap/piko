@@ -478,6 +478,17 @@ if [ -f "$REPO/userspace/src/brightd" ]; then
 else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
+
+# 6a2. CPU speed / overclocking: the "mhz" helper, single-word for the same
+# typing constraint as "bright" above. It reloads pxa2xx-cpufreq to change
+# the overclock ceiling, so it needs no daemon and nothing at boot -- the
+# board always comes up at the rated 398 MHz. See docs/HOWTO-OVERCLOCK.md.
+if [ -f "$REPO/userspace/src/mhz" ]; then
+    send_file "$REPO/userspace/src/mhz" "/usr/sbin/mhz"
+    ssh_do "chmod 0755 /usr/sbin/mhz"
+else
+    echo "==> skipping mhz (not built -- run tools/build-userspace.sh)"
+fi
 # power-management.cfg is APPLIANCE POLICY and is overwritten every deploy.
 #
 # It used to be sent only when absent, on the reasoning that a device-side
@@ -496,6 +507,33 @@ fi
 if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
     ssh_do "mkdir -p /etc/zaurus"
     send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
+fi
+
+# 6a2. Screen rotation: the "flip" helper (single-word, same typing
+# constraint as "bright") plus the flipd daemon that drives it off the
+# swivel hinge's tablet-mode switch. Rotation is done by the w100 CRTC
+# during scanout, so this moves no pixels -- see userspace/src/flipd.c.
+#
+# flipd, like brightd, is normally running (rcS starts it), so it relies
+# on send_file's rename-aside dance: overwriting a running binary in place
+# fails with ETXTBSY on this kernel. The old one keeps running from the
+# unlinked inode until the next reboot.
+send_file "$REPO/rootfs/usr/sbin/flip" "/usr/sbin/flip"
+ssh_do "chmod 0755 /usr/sbin/flip"
+if [ -f "$REPO/userspace/src/flipd" ]; then
+    send_file "$REPO/userspace/src/flipd" "/usr/sbin/flipd"
+    ssh_do "chmod 0755 /usr/sbin/flipd"
+else
+    echo "==> skipping flipd (not built -- run tools/build-userspace.sh)"
+fi
+# rotation.cfg is APPLIANCE POLICY, not user state, so it is overwritten
+# every deploy -- same call and same reasoning as power-management.cfg
+# above, and deliberately NOT the "leave it alone if it exists" treatment
+# touchscreen.cfg gets (that file holds measured calibration; this one
+# holds a policy decision that belongs in tracked source).
+if [ -f "$REPO/rootfs/etc/piko/rotation.cfg" ]; then
+    ssh_do "mkdir -p /etc/piko"
+    send_file "$REPO/rootfs/etc/piko/rotation.cfg" "/etc/piko/rotation.cfg"
 fi
 
 # 6a-bis. Seed the default wallpaper CHOICE, once.
@@ -571,6 +609,44 @@ send_file "$REPO/rootfs/etc/zshrc"          "/etc/zshrc"
 send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
+
+# The card's swap area. /usr/sbin/sdcard is the mdev hook that mounts the
+# card; it now also asks cardswap to bring a 64 MiB swapfile up and down
+# with the mount. Both ship here because neither is reachable any other
+# way -- the hook is normally baked into the ROM image, so without this a
+# deploy would leave a device whose /etc/mdev.conf still runs the old
+# swapless version, and the new binary sitting unused beside it.
+#
+# cardswap is guarded like kill and pkillx below: a clean checkout that
+# has not run tools/build-userspace.sh yet does not have the binary, and a
+# card that mounts without swap is a perfectly good outcome to fall back
+# to. The hook checks for it with -x before calling it for the same
+# reason.
+send_file "$REPO/rootfs/usr/sbin/sdcard"  "/usr/sbin/sdcard"
+ssh_do "chmod 0755 /usr/sbin/sdcard"
+
+# /etc/mdev.conf is what actually invokes that hook, and until now nothing
+# deployed it -- it only ever arrived with a flashed image. That was not
+# academic: the rule's owner field was `root:disk` until 2026-07-31, this
+# rootfs's /etc/group has no "disk" group, and mdev responds to an
+# unresolvable owner by silently DROPPING THE WHOLE RULE, command included.
+# So every board deployed to (rather than reflashed) since that fix still
+# had SD automount quietly broken -- confirmed live on 2026-08-02, where a
+# freshly deployed device had a card in the slot, /dev/mmcblk0p1 present,
+# and nothing mounted. Shipping the file here is what closes that gap, and
+# it has to be shipped for the swapfile above to ever be reached.
+#
+# Safe to replace on a running device: `mdev -d` re-reads the file per
+# event, so this takes effect on the next hotplug with nothing to restart.
+send_file "$REPO/rootfs/etc/mdev.conf" "/etc/mdev.conf"
+ssh_do "chmod 0644 /etc/mdev.conf"
+if [ -x "$REPO/userspace/src/cardswap" ]; then
+    send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
+    ssh_do "chmod 0755 /usr/sbin/cardswap"
+else
+    echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
+    echo "    without it an inserted card mounts, but gets no swap area"
+fi
 
 # 6c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
 #
@@ -676,6 +752,38 @@ fi
 if [ -x "$REPO/userspace/src/kill" ]; then
     send_file "$REPO/userspace/src/kill" "/usr/local/bin/kill"
     ssh_do "chmod 0755 /usr/local/bin/kill"
+fi
+
+# 6e. The three system actions reachable from the panel menu: Suspend,
+# Reboot and Go to TTY. Their LAUNCHERS (the .desktop entries + icons) ride
+# in the X11 payload at section 8; what ships here is the thing each one
+# actually Exec=s, which is a plain script in /usr/sbin.
+#
+# All three are sent unconditionally, including softreboot, which has been
+# in the flashed base image for a long time and so was never sent from
+# here. That is exactly the problem: "it is already on the device" is only
+# true of devices flashed recently enough, and a menu entry that works on
+# the author's board and not on a freshly-deployed one is the worst
+# version of this. They are scripts, none of them is running, so
+# overwriting them costs nothing.
+#
+# pkillx is not a menu action -- it is the dependency that makes one work.
+# /usr/sbin/gototty is a one-liner, "pkillx Xfbdev", and this busybox has
+# no kill/killall/pkill applet of its own, so without the binary from
+# userspace/src/pkillx.c the Go to TTY entry silently does nothing at all.
+# Guarded like kill above rather than sent unconditionally: a clean
+# checkout that has not run tools/build-userspace.sh yet does not have it.
+send_file "$REPO/rootfs/usr/sbin/suspend"    "/usr/sbin/suspend"
+send_file "$REPO/rootfs/usr/sbin/gototty"    "/usr/sbin/gototty"
+send_file "$REPO/rootfs/usr/sbin/softreboot" "/usr/sbin/softreboot"
+ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty /usr/sbin/softreboot"
+
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    send_file "$REPO/userspace/src/pkillx" "/usr/sbin/pkillx"
+    ssh_do "chmod 0755 /usr/sbin/pkillx"
+else
+    echo "==> no built pkillx -- skipping (run tools/build-userspace.sh)"
+    echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
 fi
 
 # 7. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
@@ -910,6 +1018,15 @@ fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
 echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
+echo "  /usr/sbin/flip, /usr/sbin/flipd     (screen rotation; flipd starts from rcS)"
+echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    echo "  /usr/sbin/pkillx         (gototty needs it)"
+fi
+echo "  /usr/sbin/sdcard         (mdev hook: mounts the card, and its swapfile)"
+if [ -x "$REPO/userspace/src/cardswap" ]; then
+    echo "  /usr/sbin/cardswap       (64 MiB swap at /mnt/card/.zaurus/swap)"
+fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Reboot
+Comment=Warm-reboot the device (kexec)
+Exec=/usr/sbin/softreboot
+Icon=reboot.png
+Terminal=false
+Categories=Action;
+# See suspend.desktop's comment: Categories=Action is what puts this at
+# the ROOT of the panel menu rather than inside the System folder, and
+# what keeps it off the desktop icon view. No Type= on purpose.
