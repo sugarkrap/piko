@@ -25,7 +25,7 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--skip-x11] [--build-only] [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--skip-st] [--skip-x11] [--build-only] [user@host]
 # Example:
 #   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
 #
@@ -52,6 +52,16 @@ set -eu
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
+# --skip-st forwards --skip-st to tools/build-userspace.sh: build every
+# other userspace component as usual, but leave st out. Narrower than
+# --skip-userspace, and the reason it exists is that st is the one
+# component whose source is a submodule of an upstream that is not
+# GitHub (git.suckless.org) -- when that host is down or the submodule
+# was never initialized, userspace/src/st is an empty directory and
+# build-st.sh dies with a bare "make: no makefile found", failing the
+# whole run at the last step after everything else already succeeded.
+# This lets a deploy proceed without it instead of forcing --skip-userspace
+# and losing ALSA/MPlayer/SDL/SSH along with it.
 # --build-only builds everything this script would normally build (kernel,
 # modules, userspace, the X11/Matchbox payload) and then STOPS, without
 # contacting the device at all -- no SSH reachability probe up front and no
@@ -69,6 +79,7 @@ ADAPTER=""
 FORCE_KERNEL_SRC=0
 KERNEL_ONLY=0
 SKIP_USERSPACE=0
+SKIP_ST=0
 SKIP_X11=0
 BUILD_ONLY=0
 TARGET=""
@@ -92,6 +103,10 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-userspace)
             SKIP_USERSPACE=1
+            shift
+            ;;
+        --skip-st)
+            SKIP_ST=1
             shift
             ;;
         --build-only)
@@ -206,14 +221,24 @@ if [ "$KERNEL_ONLY" -eq 1 ]; then
 elif [ "$SKIP_USERSPACE" -eq 1 ]; then
     echo "==> --skip-userspace: not building userspace components"
 else
+    USERSPACE_ARGS=""
+    if [ "$SKIP_ST" -eq 1 ]; then
+        USERSPACE_ARGS="--skip-st"
+        echo "==> --skip-st: building userspace without st"
+    fi
     echo "==> building userspace (md5sum + scp/sftp-server + ALSA + MPlayer + SDL + st + FLTK) via tools/build-userspace.sh..."
     if ! (
         export PATH TOOLCHAIN_BIN_DIR CROSS_COMPILE
-        sh "$REPO/tools/build-userspace.sh"
+        # Unquoted on purpose: empty means "no extra argument" here, and a
+        # quoted "" would be passed through as a literal empty argument
+        # that build-userspace.sh rejects as an unknown option.
+        sh "$REPO/tools/build-userspace.sh" $USERSPACE_ARGS
     ); then
         echo "FAILED: userspace build did not complete." >&2
         echo "Re-run tools/build-userspace.sh directly to see the full output," >&2
         echo "or pass --skip-userspace to deploy the kernel without it." >&2
+        echo "If it died on st (empty userspace/src/st, or git.suckless.org" >&2
+        echo "unreachable), --skip-st builds everything else and carries on." >&2
         exit 1
     fi
     echo "==> userspace build OK"
