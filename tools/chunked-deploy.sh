@@ -678,6 +678,38 @@ if [ -x "$REPO/userspace/src/kill" ]; then
     ssh_do "chmod 0755 /usr/local/bin/kill"
 fi
 
+# 6e. The three system actions reachable from the panel menu: Suspend,
+# Reboot and Go to TTY. Their LAUNCHERS (the .desktop entries + icons) ride
+# in the X11 payload at section 8; what ships here is the thing each one
+# actually Exec=s, which is a plain script in /usr/sbin.
+#
+# All three are sent unconditionally, including softreboot, which has been
+# in the flashed base image for a long time and so was never sent from
+# here. That is exactly the problem: "it is already on the device" is only
+# true of devices flashed recently enough, and a menu entry that works on
+# the author's board and not on a freshly-deployed one is the worst
+# version of this. They are scripts, none of them is running, so
+# overwriting them costs nothing.
+#
+# pkillx is not a menu action -- it is the dependency that makes one work.
+# /usr/sbin/gototty is a one-liner, "pkillx Xfbdev", and this busybox has
+# no kill/killall/pkill applet of its own, so without the binary from
+# userspace/src/pkillx.c the Go to TTY entry silently does nothing at all.
+# Guarded like kill above rather than sent unconditionally: a clean
+# checkout that has not run tools/build-userspace.sh yet does not have it.
+send_file "$REPO/rootfs/usr/sbin/suspend"    "/usr/sbin/suspend"
+send_file "$REPO/rootfs/usr/sbin/gototty"    "/usr/sbin/gototty"
+send_file "$REPO/rootfs/usr/sbin/softreboot" "/usr/sbin/softreboot"
+ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty /usr/sbin/softreboot"
+
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    send_file "$REPO/userspace/src/pkillx" "/usr/sbin/pkillx"
+    ssh_do "chmod 0755 /usr/sbin/pkillx"
+else
+    echo "==> no built pkillx -- skipping (run tools/build-userspace.sh)"
+    echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
+fi
+
 # 7. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
@@ -909,7 +941,12 @@ else
 fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
+echo "  /usr/sbin/suspend, /usr/sbin/gototty"
 echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
+echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
+if [ -x "$REPO/userspace/src/pkillx" ]; then
+    echo "  /usr/sbin/pkillx         (gototty needs it)"
+fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then

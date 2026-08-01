@@ -235,6 +235,36 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1c-ter. pkillx (signal a process BY NAME) ------------------------------
+# The companion to kill above: kill needs a PID, and with no ps-parsing
+# tools on this busybox that is the hard part. pkillx walks /proc itself
+# and matches on the process basename, which is what makes it usable from
+# a script that cannot know a PID in advance.
+#
+# It was in exactly the hole kill was: userspace/src/pkillx.c has been in
+# the tree since e348909 and three separate places already tell you to run
+# it -- rcS's comment ("Stop it with pkillx brightd"), docs/HOWTO-
+# BRIGHTNESS.md, docs/HOWTO-FLTK.md -- but nothing ever built it, so it
+# only existed on boards where it had been hand-fed a copy. It became load
+# bearing with /usr/sbin/gototty, whose entire body is "pkillx Xfbdev":
+# without this, the Go to TTY menu entry silently does nothing.
+#
+# Same -static reasoning as md5sum above.
+PKILLX_SRC="$REPO/userspace/src/pkillx.c"
+PKILLX_BIN="$REPO/userspace/src/pkillx"
+if [ -f "$PKILLX_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$PKILLX_BIN" ] || [ "$PKILLX_SRC" -nt "$PKILLX_BIN" ]; then
+        echo "==> building userspace/src/pkillx"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$PKILLX_BIN" "$PKILLX_SRC"
+        "${CROSS_COMPILE}strip" "$PKILLX_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/pkillx already up to date"
+    fi
+else
+    echo "==> skipping pkillx (no $PKILLX_SRC)"
+fi
+
 # --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
 # This busybox has no hwclock, no ntpd and no rdate applet, so with the
 # kernel RTC driver alone there was still no way to persist a time change

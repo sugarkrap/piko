@@ -121,6 +121,8 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/pkgdel
 !rootfs/usr/sbin/pkglist
 !rootfs/usr/sbin/deskscan
+!rootfs/usr/sbin/suspend
+!rootfs/usr/sbin/gototty
 
 # =====================================================================
 #  userspace/  -- upstream source trees + tarballs + compiled test bins;
