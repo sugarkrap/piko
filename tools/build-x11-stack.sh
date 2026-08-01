@@ -428,6 +428,41 @@ maintainer_mode_args() {
     fi
 }
 
+# drop_host_libdir_from_libtool -- stop `make install` from putting the
+# HOST's /usr/lib on the cross-linker's search path. Run in the package's
+# build dir, just before install.
+#
+# At install time libtool RELINKS every library that was built against
+# another not-yet-installed libtool library, so the installed copy names
+# the final -L path rather than the build tree's. Building that relink
+# command it emits, for each such dependency:
+#
+#     -L$libdir  -L$inst_prefix_dir$libdir   (ltmain "we'll fake it" branch)
+#
+# $libdir here is where the library will live ON THE DEVICE -- /usr/lib --
+# and $inst_prefix_dir is our DESTDIR, so the second -L is the one that
+# means anything to us and the first is pure poison: it points the ARM
+# linker at the build host's own /usr/lib. libtool computes it from the
+# .la's absolute libdir, so neither LDFLAGS ordering nor deleting .la files
+# after install (which we already do, below) can head it off -- by then the
+# damage is done.
+#
+# It went unnoticed for as long as it did because ld merely WARNS on an
+# incompatible .so ("skipping incompatible /usr/lib/libc.so") and moves on
+# to the right one. A host glibc that also ships /usr/lib/libc.a turns the
+# same search into a hard error -- "file format not recognized" -- and the
+# whole stack dies at libxcb, the first package here with sub-libraries
+# (libxcb-composite and 20 more) that link against a sibling .la.
+#
+# Emptying the bare `-L$libdir` is the whole fix: $inst_prefix_dir$libdir
+# still follows it, so the relink resolves against the staging tree, and
+# the toolchain's own sysroot supplies -lc as it should. Nothing about the
+# device's /usr/lib is knowable at cross-link time anyway.
+drop_host_libdir_from_libtool() {
+    [ -f ./libtool ] || return 0
+    sed -i 's|^\([[:space:]]*\)add_dir=-L\$lt_sysroot\$libdir$|\1add_dir=|' ./libtool
+}
+
 build_one() {
     name="$1"
     dir="$(submodule_dir_for "$name")"
@@ -554,6 +589,11 @@ build_one() {
       esac
 
       if [ -n "$ddir" ]; then
+          # Immediately before install, NOT right after configure: `make`
+          # lets config.status regenerate ./libtool (it is a config file
+          # like any other), which would quietly undo the patch somewhere
+          # between the two.
+          drop_host_libdir_from_libtool
           make install DESTDIR="$ddir"
       fi
     )
