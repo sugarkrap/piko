@@ -310,6 +310,32 @@ else
     echo "==> skipping pkillx (no $PKILLX_SRC)"
 fi
 
+# --- 1c-quater. cardswap (the SD card's swapfile) ---------------------------
+# Same hole as kill and pkillx, one layer down: this busybox is built
+# without mkswap, swapon AND swapoff, so there is no shell path to a swap
+# area at all on this device. cardswap creates, signs and enables the
+# 64 MiB file at /mnt/card/.zaurus/swap with the syscalls directly, and is
+# what /usr/sbin/sdcard (the mdev hook) and mb-applet-card's Eject both
+# call. Without it the card mounts exactly as before and the machine
+# simply has no swap -- everything degrades quietly, which is why the
+# callers all guard on it being executable.
+#
+# Same -static reasoning as md5sum above.
+CARDSWAP_SRC="$REPO/userspace/src/cardswap.c"
+CARDSWAP_BIN="$REPO/userspace/src/cardswap"
+if [ -f "$CARDSWAP_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$CARDSWAP_BIN" ] || [ "$CARDSWAP_SRC" -nt "$CARDSWAP_BIN" ]; then
+        echo "==> building userspace/src/cardswap"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$CARDSWAP_BIN" "$CARDSWAP_SRC"
+        "${CROSS_COMPILE}strip" "$CARDSWAP_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/cardswap already up to date"
+    fi
+else
+    echo "==> skipping cardswap (no $CARDSWAP_SRC)"
+fi
+
 # --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
 # This busybox has no hwclock, no ntpd and no rdate applet, so with the
 # kernel RTC driver alone there was still no way to persist a time change
@@ -446,6 +472,9 @@ if [ -f "$FLIPD_BIN" ]; then
 fi
 if [ -f "$KILL_BIN" ]; then
     echo "    kill:    $KILL_BIN"
+fi
+if [ -f "$CARDSWAP_BIN" ]; then
+    echo "    cardswap: $CARDSWAP_BIN"
 fi
 if [ -d "$REPO/userspace/stage-ssh" ]; then
     echo "    ssh:     $REPO/userspace/stage-ssh ($(du -sh "$REPO/userspace/stage-ssh" 2>/dev/null | cut -f1))"

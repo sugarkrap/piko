@@ -10,5 +10,48 @@
 # which then hangs poweroff's `umount -a` and leaves the machine
 # semi-dead (found 2026-07-27). Re-mount only when a card is actually
 # present (add), not on removal.
+#
+# SWAP. The card also carries this machine's only swap area, a 64 MiB file
+# at /mnt/card/.zaurus/swap -- with 64 MiB of RAM and a ~68 MiB root jffs2
+# there is nowhere else to put one. /usr/sbin/cardswap does the whole job
+# (create, sign, swapon(2), swapoff(2)); see its source for why it is a
+# binary and not four lines of shell here (this busybox has no mkswap,
+# swapon or swapoff applet at all).
+#
+# BOTH cardswap calls are backgrounded, and that is not an optimisation:
+#
+#   * `on` writes 64 MiB to the card the first time a given card is used,
+#     which takes the better part of a minute. mdev processes events one
+#     at a time, so blocking here would stall every other hotplug event --
+#     including the PCMCIA/wifi ones -- for that long.
+#   * `off` calls swapoff(2), which pages everything still in swap back
+#     into RAM. On a card that has just been physically pulled that I/O
+#     cannot complete, and a synchronous call would wedge mdev itself in
+#     exactly the D-state the umount comment above is about.
+#
+# Backgrounding them lets the two overlap on a fast remove/insert, so
+# cardswap takes an flock internally to serialise itself. Nothing here
+# needs to wait for either: the panel's system-monitor applet notices the
+# swap area appear and disappear on its own, by polling /proc/swaps.
+#
+# The orderly way to remove a card is still mb-applet-card's Eject, which
+# turns swap off while the card is still present and can therefore
+# finish. This hook is the fallback for a card pulled without asking,
+# where some loss is unavoidable whatever we do.
+CARDSWAP=/usr/sbin/cardswap
+
+# Before the umount, always: an enabled swapfile pins the filesystem it
+# lives on, so a card left with swap on would not unmount at all.
+[ -x "$CARDSWAP" ] && "$CARDSWAP" off >/dev/null 2>&1 &
+
 umount -l /mnt/card 2>/dev/null
-[ "$ACTION" = "remove" ] || mount /mnt/card 2>/dev/null
+
+if [ "$ACTION" != "remove" ]; then
+	mount /mnt/card 2>/dev/null
+	# Truncating rather than appending: /tmp is on the root jffs2, so
+	# this log is flash wear. One insertion's worth is enough to see
+	# why swap did not come up, and it never grows.
+	[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1 &
+fi
+
+exit 0

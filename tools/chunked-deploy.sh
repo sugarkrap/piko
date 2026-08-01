@@ -610,6 +610,44 @@ send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
 ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
+# The card's swap area. /usr/sbin/sdcard is the mdev hook that mounts the
+# card; it now also asks cardswap to bring a 64 MiB swapfile up and down
+# with the mount. Both ship here because neither is reachable any other
+# way -- the hook is normally baked into the ROM image, so without this a
+# deploy would leave a device whose /etc/mdev.conf still runs the old
+# swapless version, and the new binary sitting unused beside it.
+#
+# cardswap is guarded like kill and pkillx below: a clean checkout that
+# has not run tools/build-userspace.sh yet does not have the binary, and a
+# card that mounts without swap is a perfectly good outcome to fall back
+# to. The hook checks for it with -x before calling it for the same
+# reason.
+send_file "$REPO/rootfs/usr/sbin/sdcard"  "/usr/sbin/sdcard"
+ssh_do "chmod 0755 /usr/sbin/sdcard"
+
+# /etc/mdev.conf is what actually invokes that hook, and until now nothing
+# deployed it -- it only ever arrived with a flashed image. That was not
+# academic: the rule's owner field was `root:disk` until 2026-07-31, this
+# rootfs's /etc/group has no "disk" group, and mdev responds to an
+# unresolvable owner by silently DROPPING THE WHOLE RULE, command included.
+# So every board deployed to (rather than reflashed) since that fix still
+# had SD automount quietly broken -- confirmed live on 2026-08-02, where a
+# freshly deployed device had a card in the slot, /dev/mmcblk0p1 present,
+# and nothing mounted. Shipping the file here is what closes that gap, and
+# it has to be shipped for the swapfile above to ever be reached.
+#
+# Safe to replace on a running device: `mdev -d` re-reads the file per
+# event, so this takes effect on the next hotplug with nothing to restart.
+send_file "$REPO/rootfs/etc/mdev.conf" "/etc/mdev.conf"
+ssh_do "chmod 0644 /etc/mdev.conf"
+if [ -x "$REPO/userspace/src/cardswap" ]; then
+    send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
+    ssh_do "chmod 0755 /usr/sbin/cardswap"
+else
+    echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
+    echo "    without it an inserted card mounts, but gets no swap area"
+fi
+
 # 6c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
 #
 # Built by tools/build-ssh.sh into userspace/stage-ssh; skipped silently
@@ -984,6 +1022,10 @@ echo "  /usr/sbin/flip, /usr/sbin/flipd     (screen rotation; flipd starts from 
 echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
 if [ -x "$REPO/userspace/src/pkillx" ]; then
     echo "  /usr/sbin/pkillx         (gototty needs it)"
+fi
+echo "  /usr/sbin/sdcard         (mdev hook: mounts the card, and its swapfile)"
+if [ -x "$REPO/userspace/src/cardswap" ]; then
+    echo "  /usr/sbin/cardswap       (64 MiB swap at /mnt/card/.zaurus/swap)"
 fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
