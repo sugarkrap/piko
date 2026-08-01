@@ -16,8 +16,10 @@
 # dependency on the physical power button), at the cost of leaving the
 # machine "dirty" (no clean unmount of /).
 #
-# --atags is NOT optional here: this is an ATAG board (MACHINE_START(HUSKY),
-# no device tree). Without it, kexec hands the new kernel no ATAG_MEM at
+# --atags is NOT optional here: this is an ATAG board (MACHINE_START(SHARP_BOOTLOADER),
+# machine number 19 -- see docs/DEADLETTER-MACHINE-ID-196.md; this board is
+# NOT Husky, that was an earlier bricked/swapped unit, no device tree here
+# either way). Without --atags, kexec hands the new kernel no ATAG_MEM at
 # all, so it hangs in early setup before the framebuffer console even
 # exists -- a silent freeze right after the kernel's own "Bye!" print in
 # machine_kexec(). This exact failure mode (and fix) is already documented
@@ -29,5 +31,18 @@ KERNEL=/boot/zImage-full
 CMDLINE="$(cat /proc/cmdline)"
 
 kexec -l "$KERNEL" --atags --append="$CMDLINE"
+
+# Lazy-detach the SD card BEFORE sync, same reasoning and same fix as
+# inittab's ::shutdown: sequence (2026-07-27): a plain umount -- or `sync`
+# itself flushing a mounted card's dirty pages -- can wedge forever in
+# uninterruptible D-state (immune to SIGKILL) if the card was pulled or
+# card-detect never fired, because Corgi's pxamci does not reliably signal
+# removal. softreboot does NOT go through ::shutdown: at all (it is invoked
+# directly, e.g. via ::ctrlaltdel:), so it never got this fix even though
+# it hits the exact same failure mode via `sync` below. umount -l
+# (MNT_DETACH) returns immediately -- it defers teardown instead of
+# flushing -- so sync afterwards never has to touch /mnt/card.
+umount -l /mnt/card 2>/dev/null || true
+
 sync
 exec kexec -e

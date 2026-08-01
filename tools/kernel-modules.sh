@@ -103,14 +103,13 @@ kernel/drivers/input/evdev.ko
 kernel/drivers/input/mousedev.ko
 "
 
-# MMC/SD + VFAT stack. These are all configured as modules, so the
-# pxa2xx-mci platform device remains unbound and an inserted card is
-# invisible unless they are shipped and loaded explicitly. VFAT/NLS covers
-# the usual Cacko-formatted SD cards; ext4 support is built into the kernel.
+# VFAT/NLS stack for SD cards. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA
+# are built into the kernel (not modules) specifically so the pxa2xx-mci
+# platform device probes and the block device appears during kernel init,
+# before rcS's mdev daemon is even running -- see rcS's mdev-coldplug
+# comment for the race this avoids. VFAT/NLS covers the usual
+# Cacko-formatted SD cards; ext4 support is built into the kernel too.
 SD_MODULES="
-kernel/drivers/mmc/core/mmc_core.ko
-kernel/drivers/mmc/core/mmc_block.ko
-kernel/drivers/mmc/host/pxamci.ko
 kernel/fs/nls/nls_cp437.ko
 kernel/fs/nls/nls_cp850.ko
 kernel/fs/nls/nls_iso8859-15.ko

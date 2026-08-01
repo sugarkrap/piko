@@ -117,18 +117,44 @@ insmod "/lib/modules/$KVER/kernel/drivers/input/evdev.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/drivers/input/mousedev.ko" 2>/dev/null
 
 # --- MMC/SD + VFAT ---
-# MMC_PXA/MMC_BLOCK are modules. Without these explicit loads the board's
-# pxa2xx-mci.0 platform device remains unbound, so no host exists to detect an
-# already-inserted card or generate insertion hotplug events. FAT/VFAT and the
-# common Cacko-era codepages are modular too; ext4 is built into the kernel.
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_core.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/core/mmc_block.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/mmc/host/pxamci.ko" 2>/dev/null
+# MMC core/block and the pxamci host driver are built into the kernel
+# (CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA=y), so the board's
+# pxa2xx-mci.0 platform device is already bound and probing by the time
+# this script runs -- no insmod needed, and no window where the host
+# doesn't exist yet. FAT/VFAT and the common Cacko-era codepages are still
+# modular, so those still need loading; ext4 is built into the kernel.
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp850.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_iso8859-15.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/fat/fat.ko" 2>/dev/null
 insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
+
+# --- mdev coldplug: catch devices that were already present before the
+# netlink daemon above was ready to hear about them ---
+#
+# `mdev -d &` (started near the top of this script) is a NETLINK listener:
+# a uevent broadcast while nothing is bound yet is simply lost, not queued.
+# On this board's slow single-core PXA255, forking mdev and having the
+# child actually reach socket()/bind() can genuinely take longer than the
+# handful of insmod lines above -- and now that MMC core/block/pxamci are
+# built into the kernel rather than modules, an already-inserted card's
+# add-uevent chain (mmc0 -> mmcblk0 -> mmcblk0p1) fires during kernel init,
+# before rcS -- let alone the mdev daemon -- has even started, so this is
+# no longer a narrow race for MMC, it's a certainty every boot. The kernel
+# side works fine either way (confirmed via dmesg: "mmc0: new SD card",
+# "mmcblk0: p1", the device node exists) -- what's lost is purely the
+# userspace hotplug event, so /etc/mdev.conf's mmcblk0p1 rule (which mounts
+# it) never runs, and a manual `mount /mnt/card` afterwards always works
+# instantly. This is the exact race `mdev -s` (coldplug scan) exists to
+# close: it re-walks /sys and re-fires every matching rule for whatever is
+# ALREADY there, so a card already in the slot at boot gets mounted
+# regardless of whether its hotplug event made it to the daemon in time.
+# Placed after every module load above so /sys actually has something to
+# find (PCMCIA/hostap's own MODALIAS rule benefits from this too -- a card
+# already seated at boot was likely hitting the identical race, just
+# unnoticed because WiFi cards here are normally inserted after boot,
+# well past this window).
+mdev -s 2>/dev/null
 
 # --- audio stack (WM8731 codec via I2S, ALSA OSS emulation) ---
 # Loads the same modules as the manual /usr/sbin/audioon helper (see

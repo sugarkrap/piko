@@ -56,4 +56,9 @@ matchbox-desktop &
 
 matchbox-panel --orientation south --no-session --default-apps "$APPLETS" &
 
-exec matchbox-window-manager "$@"
+# -use_cursor no: this device has a touchscreen, not a mouse, so the
+# pointer only ever appears where a finger just was and serves no
+# purpose. matchbox-window-manager already supports hiding it natively
+# (wm_set_cursor_visibility() in src/wm.c) -- no Xfixes needed, it just
+# swaps the root window's cursor for a 1x1 transparent pixmap one.
+exec matchbox-window-manager -use_cursor no "$@"
