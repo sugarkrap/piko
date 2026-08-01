@@ -235,6 +235,31 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
+# This busybox has no hwclock, no ntpd and no rdate applet, so with the
+# kernel RTC driver alone there was still no way to persist a time change
+# or to fetch an accurate one. Same -static reasoning as md5sum above.
+#
+# ntpsync execs /usr/sbin/hwclock to write the RTC, so the two ship together
+# or neither is much use -- built in one loop for exactly that reason.
+for _clock_tool in hwclock ntpsync; do
+    CLOCK_SRC="$REPO/userspace/src/$_clock_tool.c"
+    CLOCK_BIN="$REPO/userspace/src/$_clock_tool"
+    if [ -f "$CLOCK_SRC" ]; then
+        if [ "$FORCE" -eq 1 ] || [ ! -f "$CLOCK_BIN" ] || [ "$CLOCK_SRC" -nt "$CLOCK_BIN" ]; then
+            echo "==> building userspace/src/$_clock_tool"
+            "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+                -o "$CLOCK_BIN" "$CLOCK_SRC"
+            "${CROSS_COMPILE}strip" "$CLOCK_BIN" 2>/dev/null || true
+        else
+            echo "==> userspace/src/$_clock_tool already up to date"
+        fi
+    else
+        echo "==> skipping $_clock_tool (no $CLOCK_SRC)"
+    fi
+done
+unset _clock_tool
+
 # --- 1d. opkg (package manager) ---------------------------------------------
 # Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
 # in before they were added here: tools/build-opkg.sh existed and worked,

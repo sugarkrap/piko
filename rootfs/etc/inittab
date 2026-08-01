@@ -24,6 +24,12 @@ tty1::respawn:/etc/init.d/xsession
 # watchdog hard reset, which behaves identically to poweroff on this
 # hardware -- see usr/sbin/softreboot).
 ::ctrlaltdel:/usr/sbin/softreboot
+# Persist the system clock to the RTC before going down. The RTC keeps
+# running on its own, so this matters only when something moved the system
+# clock without writing the chip (a bare `date` change). `settime` and
+# `ntpsync` both write the RTC themselves, so this is belt-and-braces --
+# and harmlessly skipped if hwclock hasn't been deployed yet.
+::shutdown:/usr/sbin/hwclock -w
 # Lazy-detach the SD card FIRST, before the blocking `umount -a -r`.
 # If the card was pulled while mounted (or card-detect never fired a
 # remove uevent), /mnt/card points at absent mmc hardware; a plain
