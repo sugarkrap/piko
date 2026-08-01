@@ -608,6 +608,16 @@ fi
 # no kill/killall/pkill applet), and because the X11 payload step further
 # down already assumes /usr/local/bin/kill exists to stop the session.
 if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
+    # BEFORE the sends, not after. send_file reassembles into
+    # <dest>.new and renames, so it cannot create a missing parent -- and
+    # /etc/opkg does not exist on a device that has never had opkg, which
+    # is every device, because until now nothing built opkg and this whole
+    # block was dead code. The first run that reached it died on
+    #     ash: can't create /etc/opkg/opkg.conf.new: nonexistent directory
+    # after having already spent the transfer. The /var directories were
+    # always created here, just at the bottom, where they were no use to a
+    # send_file above them.
+    ssh_do "mkdir -p /etc/opkg /var/lib/opkg/info /var/cache/opkg"
     send_file "$REPO/userspace/stage-target/usr/bin/opkg" "/usr/bin/opkg"
     send_file "$REPO/rootfs/etc/opkg/opkg.conf" "/etc/opkg/opkg.conf"
     send_file "$REPO/rootfs/usr/sbin/pkgadd"   "/usr/sbin/pkgadd"
@@ -616,7 +626,6 @@ if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
     send_file "$REPO/rootfs/usr/sbin/deskscan" "/usr/sbin/deskscan"
     ssh_do "chmod 0755 /usr/bin/opkg /usr/sbin/pkgadd /usr/sbin/pkgdel /usr/sbin/pkglist /usr/sbin/deskscan"
     ssh_do "chmod 0644 /etc/opkg/opkg.conf"
-    ssh_do "mkdir -p /var/lib/opkg/info /var/cache/opkg"
 else
     echo "==> no staged opkg -- skipping (build it with tools/build-opkg.sh)"
 fi
