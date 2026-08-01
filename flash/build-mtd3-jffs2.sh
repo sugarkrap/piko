@@ -106,10 +106,9 @@ for relpath in $AUDIO_MODULES; do
     cp "$KERNEL_DIR/$relpath" "$dst"
 done
 
-WIFI_PCMCIA_SPI_SD_MODULES="$WIFI_MODULES
-$SPI_MODULES
+WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
 $SD_MODULES"
-for relpath in $WIFI_PCMCIA_SPI_SD_MODULES; do
+for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
     dst="$OVERLAY/lib/modules/$KVER/$relpath"
     mkdir -p "$(dirname "$dst")"
