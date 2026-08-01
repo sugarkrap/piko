@@ -1,8 +1,9 @@
 [Desktop Entry]
-Type=Application
 Name=Go to TTY
 Comment=Exit the graphical session to a text console
 Exec=/usr/sbin/gototty
 Icon=gototty.png
 Terminal=false
 Categories=System;
+# See suspend.desktop's comment: no Type= on purpose, so this shows in
+# mb-applet-menu-launcher's System folder but not on the desktop.

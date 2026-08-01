@@ -1,8 +1,16 @@
 [Desktop Entry]
-Type=Application
 Name=Suspend
 Comment=Suspend to RAM
 Exec=/usr/sbin/suspend
 Icon=suspend.png
 Terminal=false
 Categories=System;
+# Deliberately no Type=Application: matchbox-desktop-classic's dotdesktop
+# module (modules/dotdesktop.c) only shows an icon when Type is exactly
+# "Application", so omitting it keeps this off the desktop entirely.
+# mb-applet-menu-launcher does not gate on Type at all -- it only checks
+# Icon+Name+Exec -- so this still shows up normally there, in the System
+# folder. Do NOT set Type=PanelApp to achieve the same exclusion: that
+# string is separately special-cased by the menu-launcher to redirect the
+# entry into its "Utilities/Panel" applet-listing submenu instead of
+# System, which is the wrong place for this.

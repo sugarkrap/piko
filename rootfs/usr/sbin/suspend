@@ -24,4 +24,15 @@
 # nothing and matches softreboot's own habit before a state transition
 # that can't be un-done from here if it goes wrong.
 sync
+
+# /sys/power/mem_sleep offers a choice of how "mem" is implemented; on
+# this device it lists "s2idle [deep]" -- deep is the bracketed/selected
+# one already, going by the kernel's own convention for that file, but
+# this device does not suspend correctly without deep being selected
+# explicitly right before the transition. Harmless to repeat if it is
+# already selected: writing the currently-active choice is a no-op.
+if [ -w /sys/power/mem_sleep ]; then
+	echo deep > /sys/power/mem_sleep
+fi
+
 echo mem > /sys/power/state
