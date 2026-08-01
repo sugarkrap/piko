@@ -28,6 +28,8 @@ the reasoning, not as instructions — do not follow it.
 | [`HOWTO-MATCHBOX-DESKTOP.md`](HOWTO-MATCHBOX-DESKTOP.md) | Building the X11 + Matchbox stack. Contains the non-guessable version pins and configure lines. |
 | [`HOWTO-X11-TOUCHSCREEN.md`](HOWTO-X11-TOUCHSCREEN.md) | Getting the touchscreen working as an absolute pointer under Xfbdev. |
 | [`HOWTO-LCD-PHASE-CALIBRATION.md`](HOWTO-LCD-PHASE-CALIBRATION.md) | Fixing LCD smearing via the panel's sampling phase. |
+| [`HOWTO-OVERCLOCK.md`](HOWTO-OVERCLOCK.md) | CPU speed steps and the `mhz` tool — which frequencies the PXA255 can actually produce, and what the memory bus does when you raise them. |
+| [`HOWTO-RTC-TIME.md`](HOWTO-RTC-TIME.md) | The real-time clock: why the board used to boot at 1970, and the `settime` / `ntpsync` tools. |
 
 ## Flashing (destructive)
 

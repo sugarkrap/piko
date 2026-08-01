@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Software Center
+Comment=Install updates and manage packages
+Exec=pikostore
+Icon=pikostore
+Terminal=false
+Categories=System;

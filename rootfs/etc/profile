@@ -3,6 +3,16 @@
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export TERM=linux
 
+# Timezone. Both the RTC and the system clock keep UTC -- TZ only decides
+# how a time is *displayed*, never what is stored (see `settime help` and
+# docs/HOWTO-RTC-TIME.md).
+#
+# The uClibc binaries we build ourselves (the whole X11/Matchbox stack)
+# read /etc/TZ on their own whenever TZ is unset, so the panel clock needs
+# nothing from here. The stage-2 busybox baked into NAND is an older build
+# that only honours the environment variable, so export it for `date`.
+[ -r /etc/TZ ] && export TZ="$(cat /etc/TZ)"
+
 # Software living on the SD card (/mnt/card/.zaurus). Sourced rather than
 # inlined so /etc/zshrc gets exactly the same behaviour from one file.
 # Harmless with no card inserted -- see the file for why the PATH entry is

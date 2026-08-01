@@ -168,6 +168,51 @@ static struct pxa2xx_freq pxa25x_freqs[] = {
 	{199065600, 99500, PXA25x_CCCR(4,  1, 1),  0, PXA25x_CLKCFG(1)},
 	{298598400, 99500, PXA25x_CCCR(3,  2, 1),  0, PXA25x_CLKCFG(1)},
 	{398131200, 99500, PXA25x_CCCR(4,  2, 1),  0, PXA25x_CLKCFG(1)},
+
+	/*
+	 * OVERCLOCK STEPS -- above the PXA255's rated 400 MHz. Present in this
+	 * table but NOT reachable by default: nothing selects a rate that is
+	 * not in the cpufreq driver's frequency table, and that driver builds
+	 * its pxa25x table only up to its `maxfreq` module parameter, which
+	 * defaults to the stock 398 MHz. See docs/HOWTO-OVERCLOCK.md.
+	 *
+	 * There is no N (turbo ratio) step between 2 and 3 on this part, so
+	 * every intermediate step above 398 MHz has to come from raising L,
+	 * the crystal-to-memory multiplier -- which means the memory clock
+	 * rises in lockstep with the core:
+	 *
+	 *   L idx  l   core (n=2, m=2)  membus = l * 3.6864
+	 *     2    32     471.86 MHz        117.96 MHz
+	 *     3    36     530.84 MHz        132.71 MHz
+	 *     4    40     589.82 MHz        147.46 MHz
+	 *     5    45     663.55 MHz        165.89 MHz
+	 *
+	 * DIV2 stays 0, so SDCLK tracks the memory clock and the SDRAM is
+	 * overclocked by the same ratio as the core -- exactly what the
+	 * period Zaurus/PXA255 overclocking tools did. 471 MHz (SDRAM at
+	 * 118 MHz) is the step those tools shipped as their first and safest
+	 * notch; the three above it run SDRAM 33-67% over its 100 MHz rating
+	 * and are not expected to be stable on most boards.
+	 *
+	 * Two consumers of the memory clock are worth naming, because they
+	 * behave differently:
+	 *
+	 *  - PCMCIA (and so WiFi -- the only remote access this board has)
+	 *    re-derives its socket timings on every frequency change, via
+	 *    pxa2xx_pcmcia_frequency_change() in drivers/pcmcia/pxa2xx_base.c.
+	 *    That path is compiled in here (CONFIG_CPU_FREQ) and needs nothing
+	 *    from us.
+	 *  - The W100 framebuffer on nCS_2 does NOT. Its static-memory timing
+	 *    (MSC1.CS2) is left at the VLIO value the bootloader programmed
+	 *    (see corgi_init() in modules/mach-pxa/corgi_patched.c), and is
+	 *    expressed in bus cycles, so raising the memory clock shortens
+	 *    every W100 access in real time. The display is therefore the
+	 *    most likely thing to misbehave first when stepping up.
+	 */
+	{471859200, 117964, PXA25x_CCCR(4,  2, 2),  0, PXA25x_CLKCFG(1)},
+	{530841600, 132710, PXA25x_CCCR(4,  2, 3),  0, PXA25x_CLKCFG(1)},
+	{589824000, 147456, PXA25x_CCCR(4,  2, 4),  0, PXA25x_CLKCFG(1)},
+	{663552000, 165888, PXA25x_CCCR(4,  2, 5),  0, PXA25x_CLKCFG(1)},
 };
 
 static u8 clk_pxa25x_core_get_parent(struct clk_hw *hw)

@@ -43,6 +43,25 @@ fi
 
 hostname zaurus
 
+# --- clock ---
+# The kernel already sets the system clock from the RTC during boot
+# (CONFIG_RTC_DRV_SA1100=y feeding CONFIG_RTC_HCTOSYS), so in the normal
+# case there is nothing to do here and the `hwclock -s` below is a no-op
+# that costs one ioctl.
+#
+# The check exists for the abnormal case: before the driver was built in it
+# was CONFIG_RTC_DRV_SA1100=m and nothing ever loaded it, so there was no
+# /dev/rtc0, hctosys never ran, and every boot started at the epoch --
+# 00:00 1970-01-01, which then timestamps every file written this session.
+# If someone boots an older zImage that is exactly what happens again, so
+# say it out loud rather than letting 1970 go unnoticed.
+if test -e /dev/rtc0; then
+	test -x /usr/sbin/hwclock && /usr/sbin/hwclock -s 2>/dev/null
+else
+	echo "rcS: no /dev/rtc0 -- the clock starts at the epoch this boot"
+	echo "rcS: needs CONFIG_RTC_DRV_SA1100=y (see docs/HOWTO-RTC-TIME.md)"
+fi
+
 # The mtd3 image is built with mkfs.jffs2 -q (everything squashed to root),
 # so piko's home ends up root-owned and piko's shell can't write its
 # history / completion dump. Give piko ownership of its own home at boot.
