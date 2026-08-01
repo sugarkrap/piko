@@ -127,7 +127,7 @@ FULL_BUILD=0
 # it is (xcb-proto before libxcb: code generation input, not just a link
 # dependency; libXrender/libXft/libmatchbox before the matchbox-* apps).
 [ -n "$PKGS" ] || PKGS="xorg-macros xtrans libfontenc libXfont xcb-proto \
-libxcb libXau libXdmcp libX11 libXext pixman libxkbfile xserver xkbcomp xev \
+libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
 matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card"
 
@@ -190,6 +190,17 @@ extra_configure_args() {
     libX11)     echo "--disable-static --disable-xcursor --disable-composecache" ;;
     libxcb)     echo "--disable-static --without-doxygen" ;;
     libXfont)   echo "--disable-static --disable-freetype" ;;
+    libXpm)
+        # Needed only to decode the toasters screensaver's XPM sprite
+        # sheets (userspace/src/toasters.c). --with-localedir=no drops the
+        # gettext/libintl lookup, which uClibc has no business satisfying
+        # for a library whose only messages are decoder errors nothing
+        # displays; the two z-file options drop popen()-ing gzip/compress
+        # to read compressed .xpm files off disk, which this never does --
+        # its data is compiled in.
+        echo "--disable-static --disable-open-zfile --disable-stat-zfile \
+--with-localedir=no"
+        ;;
     pixman)
         echo "--disable-static --disable-gtk --disable-libpng --disable-openmp \
 --disable-arm-simd --disable-arm-neon --disable-arm-a64-neon --disable-arm-iwmmxt"
@@ -270,6 +281,7 @@ marker_for() {
     libXdmcp)                 echo "$STAGE/usr/lib/pkgconfig/xdmcp.pc" ;;
     libX11)                   echo "$STAGE/usr/lib/pkgconfig/x11.pc" ;;
     libXext)                  echo "$STAGE/usr/lib/pkgconfig/xext.pc" ;;
+    libXpm)                   echo "$STAGE/usr/lib/pkgconfig/xpm.pc" ;;
     pixman)                   echo "$STAGE/usr/lib/pkgconfig/pixman-1.pc" ;;
     libxkbfile)                echo "$STAGE/usr/lib/pkgconfig/xkbfile.pc" ;;
     xserver)                  echo "$SRC/xserver/hw/kdrive/fbdev/Xfbdev" ;;

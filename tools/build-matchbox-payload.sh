@@ -84,7 +84,9 @@ STRIP="$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip"
 #
 # Bare names here; the version suffix is discovered below, so a rebuilt
 # library cannot silently keep shipping the old one.
-LIBS="libX11 libXext libxcb libXau libXdmcp libz libexpat libpng16 \
+# libXpm is here for exactly one consumer, the toasters screensaver, which
+# decodes its vendored XPM sprite sheets with XpmCreateImageFromData().
+LIBS="libX11 libXext libXpm libxcb libXau libXdmcp libz libexpat libpng16 \
 libfreetype libfontconfig libXrender libXft libmb libpixman-1 libXfont \
 libfontenc libxkbfile libmd libfltk libfltk_images libfltk_forms"
 

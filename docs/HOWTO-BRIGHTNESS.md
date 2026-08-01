@@ -308,16 +308,42 @@ one `fork()`/`execl()` to start, one `kill(pid, SIGTERM)` to stop,
 gated on `/tmp/.X11-unix/X0` existing so an idle *console* (no X running
 at all) does not fork a doomed child every `TICK_SECS`.
 
+**Where the artwork comes from.** The sprites are
+[torunar/flying-toasters-xscreensaver](https://github.com/torunar/flying-toasters-xscreensaver)
+(MIT, Copyright © 2023 Mikhail Shchekotov), vendored as the submodule
+`userspace/src/flying-toasters`. `toasters.c` `#include`s its two XPM
+sheets directly — `img/toaster.xpm` is a six-frame wing flap, 64×64,
+15 colours; `img/toast.xpm` is the single toast frame — and decodes them
+with `XpmCreateImageFromData()`. That is the **only** reason `libXpm` is
+in the X11 stack and the payload.
+
+Upstream's *code* is not compiled, only its data. Its renderer draws into
+the real root window through `vroot.h`, or into a hardcoded 1920×1080
+window with `-windowed`, and animates at 60fps — none of which fits a
+480×640 panel on a 400MHz part, and the root-window path is actively
+wrong here (it leaves the desktop visible around the sprites and gives
+nothing to grab input on, so a stray tap reaches the desktop underneath
+instead of dismissing the screensaver). What is reused, besides the
+artwork, is the diagonal down-and-left drift.
+
 **Why plain Xlib, not a GL hack.** This board's w100 has no DRM/DRI
 driver at all — see the "no hardware acceleration path" story on
-`w100fb_blank()` in `modules/w100/w100fb.c` — so the classic
-xscreensaver `GLXScreenSaver` "flying toasters" hack cannot run here
-regardless of how it is invoked. `toasters.c` draws its own sprites
-(rectangles, triangles) onto an offscreen `Pixmap` and `XCopyArea()`s
-the result to a fullscreen override-redirect window once per frame,
-~8fps — plenty for this animation on a 400MHz part, and the same
-"budget for the actual hardware" instinct as `bright`'s no-fades rule
-above.
+`w100fb_blank()` in `modules/w100/w100fb.c` — so xscreensaver's *own*
+`flyingtoasters`, which is a GL hack, cannot run here regardless of how
+it is invoked. (This is worth stating precisely, because it was once
+taken as a reason not to vendor the repo above either — but that project
+is plain Xlib and `-lXpm`, with no GL and no xscreensaver libraries, so
+the objection never applied to it.) `toasters.c` `XPutImage`s each sprite
+through its shape mask onto an offscreen `Pixmap` and `XCopyArea()`s the
+result to a fullscreen override-redirect window once per frame.
+
+**~10fps, not 60.** Every frame copies the whole 480×640×16bpp panel
+across an unaccelerated framebuffer; at upstream's 60fps that is roughly
+35MB/s of blitting on a part that cannot do it, and the animation would
+tear while eating the CPU an idle machine is supposed to be saving.
+Sprites move further per frame to compensate, so the apparent speed is
+unchanged. Same "budget for the actual hardware" instinct as `bright`'s
+no-fades rule above.
 
 It also grabs the keyboard and pointer and exits on its own if either
 sees input, purely as a safety net for running it by hand (there is a
@@ -326,9 +352,11 @@ toasters.desktop`/`Icon=toasters.png` — a manual preview, not the normal
 way it starts). The intended dismissal path is still `brightd` noticing
 activity and sending `SIGTERM`.
 
-**Not yet verified on hardware** — compiles clean and links against the
-staged X11 stack, but has not actually been watched running on the
-device yet.
+**Not yet verified on hardware** — it cross-compiles clean, links against
+the staged X11 stack and libXpm, and its sprite path has been rendered
+offscreen on a build host (XPM decode, 64×64 frames, shape masks and
+compositing all confirmed by reading the pixmap back), but it has not
+actually been watched running on the device yet.
 
 ## Why the hotkeys are not matchbox keybindings
 

@@ -121,6 +121,10 @@ not a reason to trust it over this.
     tools/build-st.sh                   # st -- needs libXft staged first
     tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
                                         # and libXrender staged first
+    tools/build-toasters.sh             # the screensaver -- needs libXpm
+                                        # staged and the flying-toasters
+                                        # submodule (its XPM artwork);
+                                        # see docs/HOWTO-BRIGHTNESS.md
 
 The four Matchbox apps are independent of each other once libmatchbox
 exists and *could* be built in parallel -- `tools/build-x11-stack.sh`

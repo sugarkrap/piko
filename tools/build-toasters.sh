@@ -69,17 +69,38 @@ if [ ! -f "$STAGE/usr/include/X11/Xlib.h" ] || [ ! -f "$STAGE/usr/lib/libX11.so"
     echo "stack first (docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
     exit 1
 fi
+if [ ! -f "$STAGE/usr/include/X11/xpm.h" ] || [ ! -f "$STAGE/usr/lib/libXpm.so" ]; then
+    echo "tools/build-toasters.sh: libXpm not staged at $STAGE" >&2
+    echo "The sprite sheets are XPM data decoded with XpmCreateImageFromData()." >&2
+    echo "tools/build-x11-stack.sh builds libXpm as part of the stack." >&2
+    exit 1
+fi
 
-if [ "$FORCE" -eq 0 ] && [ -x "$BIN" ] && [ ! "$SRC" -nt "$BIN" ]; then
+# The sprite sheets are the vendored submodule's, included by relative path
+# from toasters.c. An uninitialised submodule is an empty directory, and the
+# failure that produces is a #include error naming a path nobody recognises.
+SPRITES="$REPO/userspace/src/flying-toasters/img/toaster.xpm"
+if [ ! -f "$SPRITES" ]; then
+    echo "tools/build-toasters.sh: $SPRITES missing" >&2
+    echo "The sprite artwork is the flying-toasters submodule (MIT, see its" >&2
+    echo "LICENSE). Run: git submodule update --init userspace/src/flying-toasters" >&2
+    exit 1
+fi
+
+if [ "$FORCE" -eq 0 ] && [ -x "$BIN" ] && [ ! "$SRC" -nt "$BIN" ] \
+   && [ ! "$SPRITES" -nt "$BIN" ]; then
     echo "==> toasters already built and current: $BIN"
     exit 0
 fi
 
 echo "==> building toasters against $STAGE"
+# -lXpm for XpmCreateImageFromData(), which turns the vendored XPM sprite
+# sheets into XImages plus their shape masks. The sheets themselves need no
+# -I: toasters.c includes them by relative path out of the submodule.
 "$CC" -march=armv5te -O2 -Wall -Wextra \
     -I"$STAGE/usr/include" \
     -o "$BIN" "$SRC" \
-    -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" -lX11
+    -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" -lXpm -lX11
 "$STRIP" --strip-unneeded "$BIN" 2>/dev/null || true
 
 echo "==> done: $BIN ($(du -h "$BIN" | cut -f1))"

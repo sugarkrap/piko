@@ -82,3 +82,10 @@
 	path = userspace/src/mb-applet-card
 	url = https://github.com/sugarkrap/mb-applet-card
 	branch = main
+[submodule "userspace/src/flying-toasters"]
+	path = userspace/src/flying-toasters
+	url = https://github.com/torunar/flying-toasters-xscreensaver
+	branch = master
+[submodule "userspace/src/libXpm"]
+	path = userspace/src/libXpm
+	url = https://gitlab.freedesktop.org/xorg/lib/libxpm.git
