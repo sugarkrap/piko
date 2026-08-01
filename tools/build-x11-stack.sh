@@ -301,7 +301,14 @@ build_one() {
     [ "$FORCE" -eq 1 ] && rm -f "$dir/configure"
 
     ( cd "$dir"
-      export ACLOCAL_PATH="$SRC/xorg-macros${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
+      # $STAGE/usr/share/aclocal matters as much as xorg-macros: xtrans
+      # installs xtrans.m4 there, and xserver's configure.ac calls
+      # XTRANS_CONNECTION_FLAGS out of it. Leaving it off only bites when
+      # autogen actually runs -- with a configure already generated (the
+      # usual case) the macro is long since expanded -- so this failed
+      # exactly once, on a --force rebuild of xserver in a fresh checkout,
+      # with "undefined or overquoted macro: XTRANS_CONNECTION_FLAGS".
+      export ACLOCAL_PATH="$SRC/xorg-macros:$STAGE/usr/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
       # shellcheck disable=SC2046
       if [ -f ./configure ]; then
           echo "    configure already generated, running it directly"

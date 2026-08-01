@@ -24,7 +24,10 @@ touchscreen.
 
 Working: framebuffer X, keyboard (with a custom XKB layout for the
 Zaurus Fn symbol row), touchscreen as an absolute pointer, WiFi, SSH,
-audio, SD card, MPlayer.
+audio, SD card, MPlayer, SDL 1.2 (fbcon backend, confirmed drawing to
+the panel via `sdltest` -- see `tools/build-sdl.sh`), and FLTK 1.3 as a
+shared X11 toolkit (confirmed on screen via `fltktest` -- see
+`tools/build-fltk.sh`).
 
 ---
 
@@ -188,7 +191,30 @@ is a direct automation of that document, cross-checked against the real
 build's own `config.log`, not a reinvention of it -- the two should never
 disagree on what a given component needs.
 
-**5. Pack and deploy.**
+**5. FLTK.** Needs step 4 finished (it links libXft/libXrender out of the
+staging tree), and is the one X-adjacent component that *is* scripted:
+
+    tools/build-fltk.sh
+
+It cross-builds FLTK 1.3 as a shared library straight into
+`userspace/stage-target`, so the payload picks it up with everything else.
+`tools/build-userspace.sh` runs it too, and skips it (without failing) when
+the X stage isn't there yet. **`docs/HOWTO-FLTK.md`** has the whole story:
+the four non-obvious configure choices, what is deliberately off, how to
+test it with `fltktest`, and how to cross-build your own FLTK apps.
+
+**6. SSH file transfer.** `scp` + OpenSSH's `sftp-server`, plus a
+reproducible rebuild of dropbear itself (both fetched and SHA-256-verified;
+the two cross-compile fixes from `docs/DEADLETTER-DROPBEAR-PTY.md` are
+applied as build steps and then verified in the resulting binary):
+
+    tools/build-ssh.sh
+
+`tools/build-userspace.sh` runs it too. The server binary is staged but
+never installed unless you ask for it (`chunked-deploy.sh
+--replace-dropbear`) -- see that document for why that one is opt-in.
+
+**7. Pack and deploy.**
 
     tools/build-matchbox-payload.sh                 # inspect the tar first
     tools/build-and-deploy.sh --adapter <iface> root@<device-ip>
@@ -198,7 +224,7 @@ and hands off to `chunked-deploy.sh`, which ships everything and unpacks
 X with `untar`. Useful flags: `--kernel-only`, `--skip-x11`,
 `--no-userspace`, `--force-kernel-src`.
 
-**6. Reboot.** It should come up at the desktop. If X fails,
+**8. Reboot.** It should come up at the desktop. If X fails,
 `/etc/init.d/xsession` drops you to a console login on tty1 instead --
 by design, since inittab respawns it.
 
@@ -239,6 +265,13 @@ enumerate fine and do nothing.
    kernel has `CONFIG_APM_EMULATION=y` so `/proc/apm` exists. A patch was
    drafted this session but deliberately not applied.
 6. `Root.directory` references `gnome-folder.png`, which nothing ships.
+7. **FLTK costs `libstdc++.so.6`** -- 1.6MB stripped, the single largest
+   thing in the payload after Xfbdev and libX11, and it is there purely
+   because FLTK is the only C++ component in the stack. Nothing is wrong
+   with it; it is just the one line item worth knowing about if flash gets
+   tight. (FLTK itself is verified working on hardware -- `fltktest`
+   renders under the Matchbox session -- so this is a size note, not a
+   defect.)
 
 ---
 
@@ -246,7 +279,7 @@ enumerate fine and do nothing.
 
     modules/                kernel patches, applied by setup-kernel-src.sh
       spi/                  the SPI double-request + PIO fix
-      x11/                  patches into the X submodules (setup-x11-src.sh)
+      x11/                  /etc/matchbox/session (the panel applet list)
     userspace/src/          X.Org + Matchbox submodules, and our own .c
                             (untar.c, kill.c, md5sum.c)
     userspace/xkb/          the hand-written Zaurus XKB layout

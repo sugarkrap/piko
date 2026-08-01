@@ -1,0 +1,155 @@
+name: Provision the piko uClibc cross-toolchain
+description: >
+  Restores from cache, or builds from source with crosstool-NG, this
+  project's main cross-toolchain (arm-unknown-linux-uclibcgnueabi, GCC
+  13.4.0, uClibc-ng, ARMv5TE, EABI5, soft-float, C++ enabled), then proves
+  it actually emits correct code before reporting success.
+
+# WHY THIS EXISTS
+#
+# Everything in userspace/ is built with this toolchain -- ALSA, MPlayer,
+# SDL, st, the whole X11/Matchbox stack, and FLTK. CI could not build any
+# of it, because CI only ever had apt's gcc-arm-linux-gnueabi, which is
+# glibc-cross and produces binaries this uClibc rootfs cannot run. The
+# toolchain itself is gitignored (multi-GB build output, not source) and
+# vendored nowhere fetchable; what IS tracked is the crosstool-NG .config
+# that produced the known-good one. So the only way for CI to have it is to
+# rebuild it -- expensive once, then cached.
+#
+# Pulled out into a composite action rather than pasted into a workflow so
+# the two existing workflows (and any future one) share a single definition
+# and a single cache. Use it with:
+#
+#     - uses: ./.github/actions/piko-uclibc-toolchain
+#       id: toolchain
+#     - run: tools/build-userspace.sh
+#       env:
+#         TOOLCHAIN_BIN_DIR: ${{ steps.toolchain.outputs.toolchain_bin_dir }}
+#
+# It also prepends the bin dir to $GITHUB_PATH, so later steps that just
+# expect arm-unknown-linux-uclibcgnueabi-gcc on PATH work without the env
+# plumbing.
+#
+# COST: the from-source build is tens of minutes (GCC is built twice, as
+# crosstool-NG always does) and wants several GB of disk. It comfortably
+# fits a GitHub-hosted runner's 6-hour job limit and ~14GB free disk, but
+# it is not free -- which is the entire point of the cache below. Cache
+# hits make this step effectively instant.
+#
+# NOTE FOR WHOEVER CONSOLIDATES THE CI TOOLCHAINS: tools/oabi-toolchain.config
+# and tools/uclibc-toolchain.config are byte-identical except for a single
+# line -- uclibc's `CT_CC_LANG_CXX=y`. Both declare the same CT_TARGET and
+# both install to toolchain/x-tools/arm-unknown-linux-uclibcgnueabi, i.e.
+# the same path. So ONE crosstool-NG build could serve both this and
+# tools/build-oabi-toolchain.sh, halving the cold-cache cost, and the two
+# caches keyed on `path: toolchain` in build-piko-zip.yml and here are
+# describing the same directory. That consolidation is deliberately NOT
+# done here: the OABI toolchain feeds piko-install, which flashes NAND on
+# the last spare board, and it is not something to change as a drive-by.
+
+outputs:
+  toolchain_bin_dir:
+    description: Absolute path to the toolchain's bin/ directory.
+    value: ${{ steps.verify.outputs.toolchain_bin_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install crosstool-NG build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        # Same list build-piko-zip.yml already proves is sufficient for a
+        # crosstool-NG build on ubuntu-latest, plus bzip2 (this script
+        # fetches the .tar.xz, but ct-ng unpacks .bz2 component tarballs).
+        sudo apt-get install -y -qq \
+            build-essential git autoconf automake bison flex texinfo \
+            gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
+            patch gawk python3-dev rsync bzip2
+
+    - name: Cache the built toolchain
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: toolchain
+        # Keyed on the things that actually determine the output. Bump the
+        # v1 when the toolchain layout itself changes in a way an old cache
+        # entry would not reflect.
+        key: piko-uclibc-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+        # actions/cache skips its post-job save whenever the job's overall
+        # conclusion is "failure" -- and a job that gets partway through a
+        # multi-hour toolchain build before failing for an unrelated reason
+        # is exactly when you most want to keep the progress. Same reasoning
+        # build-update-package.yml's kernel-src cache documents.
+        save-always: true
+
+    - name: Build the toolchain (skipped when the cache hit)
+      shell: bash
+      run: |
+        # The script exits 0 immediately when the toolchain is already
+        # present, so this is safe and cheap to run unconditionally -- no
+        # need to branch on cache-hit, and it self-heals a partial restore
+        # that the cache key alone would call a hit.
+        #
+        # crosstool-NG refuses to run as root and the script enforces that
+        # too. GitHub-hosted runners run as the non-root `runner` user, so
+        # this is fine; a self-hosted runner running as root is not.
+        ./tools/build-uclibc-toolchain.sh
+
+    - name: Verify the toolchain really emits ARMv5TE soft-float
+      id: verify
+      shell: bash
+      run: |
+        set -eu
+        BIN="$GITHUB_WORKSPACE/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin"
+        PREFIX="$BIN/arm-unknown-linux-uclibcgnueabi"
+
+        for tool in gcc g++; do
+          if [ ! -x "$PREFIX-$tool" ]; then
+            echo "::error::$PREFIX-$tool missing after provisioning"
+            exit 1
+          fi
+        done
+        "$PREFIX-gcc" --version | head -1
+        "$PREFIX-g++" --version | head -1
+
+        # Never report "the script exited 0" as success. Compile something
+        # and read the ELF flags -- 0x5000200 is Version5 EABI + soft-float,
+        # the same check tools/build-fltk.sh and tools/build-sdl.sh make on
+        # their own output. A toolchain that builds but emits hard-float or
+        # EABI4 would sail through every other check and produce a payload
+        # the device cannot run.
+        tmp="$(mktemp -d)"
+        printf 'int main(void){return 0;}\n' > "$tmp/t.c"
+        printf 'struct S { virtual ~S(){} }; int main(){ S s; (void)s; return 0; }\n' > "$tmp/t.cxx"
+        "$PREFIX-gcc" -o "$tmp/t.c.out"   "$tmp/t.c"
+        "$PREFIX-g++" -o "$tmp/t.cxx.out" "$tmp/t.cxx"
+
+        for out in "$tmp/t.c.out" "$tmp/t.cxx.out"; do
+          flags="$("$PREFIX-readelf" -h "$out" | sed -n 's/^ *Flags: *//p')"
+          echo "  $(basename "$out"): Flags: $flags"
+          case "$flags" in
+            0x5000200*) : ;;
+            *)
+              echo "::error::unexpected ELF flags for $(basename "$out"): $flags (want 0x5000200)"
+              exit 1
+              ;;
+          esac
+        done
+        rm -rf "$tmp"
+
+        # C++ specifically: FLTK is the only C++ component in the tree, and
+        # a toolchain built from a config without CT_CC_LANG_CXX=y would
+        # still pass everything above except this.
+        if [ ! -f "$GITHUB_WORKSPACE/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/arm-unknown-linux-uclibcgnueabi/sysroot/lib/libstdc++.so.6" ]; then
+          echo "::error::no libstdc++.so.6 in the sysroot -- FLTK cannot be built or shipped with this toolchain"
+          exit 1
+        fi
+
+        echo "toolchain_bin_dir=$BIN" >> "$GITHUB_OUTPUT"
+        echo "$BIN" >> "$GITHUB_PATH"
+        echo "### uClibc toolchain ready" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        echo "$("$PREFIX-gcc" --version | head -1)" >> "$GITHUB_STEP_SUMMARY"
+        echo "ARMv5TE soft-float verified (ELF Flags 0x5000200), C++ + libstdc++ present" >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"

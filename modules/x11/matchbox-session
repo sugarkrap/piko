@@ -22,11 +22,27 @@
 # mbdock.session file format instead, which is not worth reintroducing the
 # stale-state problem for.
 
-APPLETS="mb-applet-menu-launcher"
+# ORDER MATTERS, and it runs RIGHT TO LEFT. panel_app_add_end() gives the
+# first END-gravity applet offset = panel_width - size, i.e. the right edge,
+# and each one after that sits to its left. So the clock being first is what
+# puts it at the far right end of the panel.
+#
+# mb-applet-menu-launcher is the exception: it calls
+# mb_tray_app_request_offset(-1) itself and ends up on the left regardless,
+# so it is listed last to keep this list reading right-to-left honestly.
+#
+# -s 16 shrinks the clock font. Without it the clock sizes its font to the
+# full tray height (32px here), which fills the panel edge to edge and makes
+# the applet wide, because its requested width is the rendered width of
+# "99999" in that font. Tune this number, not the panel size.
+APPLETS="mb-applet-clock -s 16"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
 APPLETS="$APPLETS,mb-applet-wireless"
-APPLETS="$APPLETS,mb-applet-clock"
+# Self-hiding: mb-applet-card shows a tray icon only while an SD or CF
+# card is actually inserted, so it costs nothing to always start it.
+APPLETS="$APPLETS,mb-applet-card"
+APPLETS="$APPLETS,mb-applet-menu-launcher"
 
 # Not enabled:
 #

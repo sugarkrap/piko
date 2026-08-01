@@ -8,6 +8,14 @@ This covers the desktop **on top of** X. If X itself or the touchscreen
 misbehaves, that is a different layer -- see
 `docs/HOWTO-X11-TOUCHSCREEN.md`.
 
+For the panel's applets specifically -- what exists, the four upstream bugs
+that had to be fixed, and why a two-applet panel is the default rather than
+a fault -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
+
+For **writing our own GUI apps** against this X server, see
+`docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
+cross-compile line for your own programs.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2
@@ -42,7 +50,7 @@ As of 2026-07-31 this is automated end to end:
                                         # fontconfig + DejaVu faces
     tools/build-x11-stack.sh            # everything below, in order
 
-`tools/build-x11-stack.sh` applies `tools/setup-x11-src.sh`'s patches
+`tools/build-x11-stack.sh` runs `tools/setup-x11-src.sh`'s verification
 itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox
 and the four Matchbox apps, idempotently (skips anything already built --
 safe to re-run, and cheap once everything exists). It is wired into
@@ -56,11 +64,13 @@ not as a competing set of instructions. If this document and the script
 ever disagree about what a component needs, that is a bug in the script,
 not a reason to trust it over this.
 
-    tools/setup-x11-src.sh              # local patches into X submodules
+    tools/setup-x11-src.sh              # verify submodules carry our commits
     tools/build-libiw.sh                # libiw, for mb-applet-wireless
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
+                                        # and libXrender staged first
 
 The last four are independent of each other once libmatchbox exists and
 *could* be built in parallel -- `tools/build-x11-stack.sh` builds them
@@ -140,13 +150,56 @@ applet (and `tools/build-libiw.sh` run first, or no wireless one):
         --enable-proc-apm
 
 Confirm the summary says `Building mb-applet-battery: yes, with
-/proc/apm`. That flag is ours (`modules/x11/matchbox-panel-battery-proc-apm.patch`,
-applied by `tools/setup-x11-src.sh`) -- see "Panel applets" below for why
+/proc/apm`. That flag is ours (a commit on the `matchbox-panel` fork,
+`github.com/sugarkrap/matchbox-panel`) -- see "Panel applets" below for why
 neither upstream backend works here.
 
 **matchbox-common** needs no special flags. It is
 architecture-independent -- no `.c` files anywhere, no ELF output;
 `--host` only makes configure complete.
+
+**st** (suckless terminal, `userspace/src/st`) has no configure step at
+all -- it's a bare Makefile whose `config.mk` hardcodes `X11INC`/`X11LIB`
+to `/usr/X11R6`, which does not exist here. `tools/build-st.sh` overrides
+both to the staging tree; everything else (fontconfig/freetype2 via
+`pkg-config`) already works from the common environment above. It needs no
+new runtime libraries -- libX11, libXft, libfontconfig and libfreetype are
+already shipped for the rest of the desktop -- and its binary is picked up
+straight from `userspace/src/st/st` by `tools/build-matchbox-payload.sh`,
+same as xkbcomp/xev.
+
+**xev** (`userspace/src/xev`) needs no special flags -- it is a stock
+X.Org autotools package, links against libX11 only, and
+`tools/build-x11-stack.sh` already builds it as part of the default
+package list. Its binary is read straight out of `userspace/src/xev/xev`,
+same as xkbcomp/Xfbdev.
+
+Its menu entry (`userspace/desktop/xev.desktop`) launches it **inside st**
+rather than bare, because xev only ever writes to stdout: started from the
+desktop that stdout is inherited from matchbox-session, which
+`/etc/init.d/xsession` redirects to `/tmp/matchbox-session.log` -- and
+`/tmp` here is jffs2 on NAND, not tmpfs, so every event line would be a
+flash write. In a terminal the events are visible live and nothing is
+written. Both halves of `Exec=` are absolute paths, and `Icon=` carries
+its `.png` extension, for the two reasons st.desktop had to be fixed for:
+`/usr/local/bin` is not on this device's `PATH`, and
+`mb_dot_desktop_icon_get_full_path()` never auto-appends an extension.
+
+**FLTK** (`userspace/src/fltk`, pinned at `release-1.3.11`) is a GUI
+toolkit for writing our own apps against this X server, cross-built as a
+shared library by `tools/build-fltk.sh` and installed **into
+`userspace/stage-target` itself** rather than a stage of its own -- it is
+part of that X sysroot, and anything cross-linking against FLTK later
+needs it on the same include/lib path as libX11. Four of its configure
+choices are not guessable (`--x-includes`/`--x-libraries`, an explicit
+`--enable-xft`, system-vs-bundled image libraries, and building only
+`src/` + the image dirs) and it is the only C++ component in the stack,
+so the payload also ships `libstdc++.so.6`.
+
+**`docs/HOWTO-FLTK.md` covers all of it** -- the build, what is
+deliberately turned off, how to test it on the device with `fltktest`,
+the verified cross-compile line for your own apps, and a troubleshooting
+table. Verified on hardware 2026-07-31.
 
 Consider `--enable-pda-folders` for matchbox-common: it swaps the
 11-folder desktop menu layout for a 5-folder handheld one, which suits a
@@ -189,102 +242,91 @@ Start it with:
 built-in trio of `matchbox-desktop`, `matchbox-panel --orientation south`
 and `matchbox-window-manager`. The payload ships
 `modules/x11/matchbox-session` as `/etc/matchbox/session`, so the applet
-list is tracked source -- see below.
+list is tracked source -- see `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
 
 ---
 
 ## Panel applets
 
-`matchbox-panel` does not contain its applets; each is a separate binary
-that docks itself into the panel over XEMBED. The panel starts them, and
-**which** it starts is the part that bites.
+Full detail -- what exists, the four upstream bugs, and why a two-applet
+panel is the default -- lives in `docs/HOWTO-MATCHBOX-PANEL-APPLETS.md`.
+What matters for *building*:
 
-The tree has six applets. Four build with no extra work:
+- `matchbox-panel` needs `--enable-proc-apm` or there is no battery applet.
+  Confirm `Building mb-applet-battery: yes, with /proc/apm`.
+- `tools/build-libiw.sh` must run before configuring, or there is no
+  wireless applet. Confirm `Building mb-applet-wireless: yes`.
+- The applet list is `modules/x11/matchbox-session`, shipped to
+  `/etc/matchbox/session`. `build-matchbox-payload.sh` fails if it names an
+  applet that is not in the payload.
+- Do not drop `--no-session` from that file. A stale
+  `$HOME/.matchbox/mbdock.session` silently overrides `--default-apps`, and
+  the panel rewrites it on every clean exit.
 
-| Applet | Notes |
-|---|---|
-| `mb-applet-menu-launcher` | the app menu |
-| `mb-applet-clock` | clock |
-| `mb-applet-system-monitor` | CPU + memory bars |
-| `mb-applet-launcher` | generic launcher button; instantiate once per app as `-l <icon.png> <command>` |
+---
 
-`mb-applet-battery` needs `--enable-proc-apm` (see above). Upstream offers
-two backends and this board can use neither: `HAVE_APM_H` wants `apm.h`
-plus `-lapm` from Debian's apmd, which we do not cross-build, and
-`USE_ACPI_LINUX` reads `/proc/acpi`, which does not exist here. Without
-the flag, configure just drops the applet from `bin_PROGRAMS` and says
-`Building mb-applet-battery: no ( enable ACPI? )` -- easy to miss. The
-same patch fixes the `.desktop` install, which upstream gates on
-`WANT_APM` alone, so the ACPI backend never installed a menu entry
-either.
+## Wallpaper: modes, formats, and why it's cached raw
 
-Expect a percentage and no time estimate: the provider is `sharpsl_pm`,
-whose `apm_get_power_status` fills in AC status, battery status/flag and
-percentage but leaves `time`/`units` at the kernel's `-1` and `"?"`.
+`matchbox-desktop` already had a background system (`--bg`, XSettings,
+theme `DesktopBgSpec=`); this extends it rather than replacing it.
 
-`mb-applet-wireless` needs libiw in the staging tree first:
+**Modes**, passed as `mode:filename` (or via the picker, see below):
 
-    tools/build-libiw.sh
+    img-mosaic:<filename>       tiles the image (alias: img-tiled:)
+    img-centered:<filename>     centers it, no scaling
+    img-stretched:<filename>    scales to fill, distorts aspect ratio
+    img-filled:<filename>       scales to cover, crops overflow,
+                                 keeps aspect ratio (alias: img-fill:)
 
-That cross-builds the one source file out of the already-vendored
-`userspace/wireless_tools.29` and installs `libiw.a` + `iwlib.h` +
-`wireless.h` into `userspace/stage-target`. Three things about it are not
-obvious:
+**Formats**: PNG, JPEG (if libmb was built `USE_JPG` -- the payload
+here is not, see below), XPM, and now **BMP** -- uncompressed 24/32bpp
+and 8bpp-paletted, decoded by a small loader added directly to
+`libmatchbox/libmb/mbpixbuf.c` with no new library dependency. This
+matters more than it looks: this build's `libmb.so.1` is linked
+against `libpng16` only, not libjpeg, so BMP is the easiest format to
+hand this device a wallpaper in without cross-building libjpeg too.
 
-- It does **not** reuse the `libiw.a` sitting in that vendored tree. Those
-  ARM binaries were built in July 2026 with a different toolchain and
-  statically linked; mixing objects from another libc into a uclibc link
-  invites subtle breakage.
-- It builds against wireless-tools' **own** `wireless.h` (WE21), not the
-  sysroot's `linux/wireless.h` (WE22). `iwlib.c` uses the `IW_MODUL_*`
-  modulation constants, which are a wireless-tools addition the kernel uapi
-  header has never carried — against the sysroot copy the build dies on
-  ~15 undeclared identifiers. The version gap is harmless: the 32-bit ioctl
-  structs are unchanged, iwlib re-checks `we_version_compiled` at runtime,
-  and the `iwconfig` already on the device was built from this same header
-  against this same kernel.
-- It compiles `-DWE_NOLIBM`, which swaps libiw's two frequency helpers off
-  `floor`/`log10`/`pow`. Otherwise libiw drags in libm.
+**Why the result is cached, not just the source image.** Decoding a
+JPEG/PNG and scaling it to 480x640 is real CPU on an unaccelerated
+PXA255, and the original code paid that cost on *every launch* --
+including every boot, for a wallpaper that never changes between
+boots. `mbdesktop_view_init_bg()` now bakes the fully composited,
+already-scaled/cropped/tiled, already-pixel-format-converted result
+(RGB565 on this display) to `~/.matchbox/wallpaper.cache` as a raw
+byte dump the first time a wallpaper is resolved, and every later
+launch is just an `fread()` straight into the image buffer -- no
+decode, no scale, no color conversion. The cache is invalidated
+automatically if the desktop size, the mode+filename, or the source
+file's mtime changes; the write is temp-file-then-`rename()` so a
+power loss mid-boot (this device is fragile) can't leave a half
+written cache behind. Solid colors and gradients are pure in-memory
+math already and are never cached.
 
-Then configure must say `Building mb-applet-wireless: yes`. The applet
-links `libiw` statically and gains **no** new `DT_NEEDED` — `-lm` resolves
-inside libc on this uclibc toolchain, which ships only a static `libm.a`.
+**Setting it.** `mb-wallpaper-picker` is a small standalone touch app
+(built alongside `matchbox-desktop`, same `libmb` dependency, nothing
+extra) that scans `/usr/share/backgrounds` and
+`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files,
+shows a thumbnail grid with a 4-way mode selector, and on tap:
+writes `$HOME/.matchbox/wallpaper` (the file `matchbox-desktop` reads
+at startup, so the choice survives a reboot) and sets the
+`_MB_WALLPAPER_SPEC` property on the root window so an *already
+running* desktop updates immediately. The property exists because
+this device's busybox has no `kill`/`killall`/`pkill` at all -- there
+is no way to signal the running process, so an X property it already
+watches via `PropertyNotify` (the same mechanism `_MB_THEME_NAME`
+already used for live theme switches) is the only avenue. It ships a
+`.desktop` launcher with `Categories=Settings`, so it shows up in the
+desktop's Settings folder automatically via matchbox-common's
+vfolders -- no wiring needed beyond installing the file.
 
-The applet needed three fixes of its own before it would build or run at
-all (`modules/x11/matchbox-panel-wireless-applet.patch`) — see that patch
-and `setup-x11-src.sh`. The headline one: `find_iwface()` passed
-`Mwd.iface`, assigned only at the end of that same function, so on the
-first wireless interface it was still NULL and iwlib's
-`strncpy(ifr_name, NULL, IFNAMSIZ)` segfaulted. Upstream crashes during
-startup enumeration on any machine that actually has a wireless
-interface.
-
-`mb-launcher-term.desktop` is installed but not started -- its wrapper
-execs `rxvt` or `xterm` and the payload ships neither.
-
-### Two applets is the default, not a bug
-
-If the panel only shows a menu and a clock, nothing is broken. With no
-`--default-apps`, `matchbox-panel` uses its compiled-in `DEFAULT_SESSIONS`
-= `"mb-applet-menu-launcher,mb-applet-clock"` (`src/session.c:3`). The
-other applets are installed and working, just never launched.
-
-`/etc/matchbox/session` passes the list we want. It also passes
-**`--no-session`, which is not optional**: if `$HOME/.matchbox/mbdock.session`
-exists, the panel reads it and ignores `--default-apps` entirely
-(`src/session.c:73-99`) -- and the panel *writes* that file on every clean
-exit. So any device that has ever run the panel has a stale two-applet
-list on disk that would silently win. `--no-session` also stops it being
-rewritten, which is what we want on an appliance.
-
-All `--default-apps` entries dock at the same gravity (the right of a
-south-oriented panel) in list order. Per-applet left/right placement needs
-the `mbdock.session` file format instead, which is not worth
-reintroducing the stale-state problem for.
-
-`tools/build-matchbox-payload.sh` fails if the session file names an
-applet that is not in the payload -- otherwise the panel just logs a
-session timeout per missing one and comes up looking half-broken.
+Precedence at startup: `--bg` on the command line wins outright;
+otherwise a live `_MB_WALLPAPER_SPEC` root property (set by the
+picker in the current session) beats the persisted
+`$HOME/.matchbox/wallpaper` file, which beats the theme's
+`DesktopBgSpec=` default. `xsession` exports `HOME=/root` explicitly
+for this to work at all on a real boot -- `init` launches it with
+essentially no environment, so without that, every `$HOME`-based
+lookup here (and in themes) silently fell back to `/tmp`.
 
 ---
 

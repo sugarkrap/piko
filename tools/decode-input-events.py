@@ -12,7 +12,7 @@ Zaurus and decode on the host:
 
 With --calibrate it instead reports the min/max of ABS_X/ABS_Y, which is
 what the touchscreen calibration constants in
-modules/x11/xserver-kdrive-evdev-absolute.patch are derived from. Samples
+the xserver fork's kdrive evdev commit are derived from. Samples
 with pressure 0 are ignored there: pen-up carries stale coordinates and
 would skew the range. See docs/HOWTO-X11-TOUCHSCREEN.md.
 

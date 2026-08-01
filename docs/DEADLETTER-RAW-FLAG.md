@@ -112,7 +112,7 @@ else in this project):
 ## 2026-07-24 follow-up: why in-system smf writes were corrupting cold boot
 
 Later testing on the replacement SL-C760 confirmed the same mechanism from a
-different angle: an in-system writer (`flash/pico-smf-write.c`) initially used
+different angle: an in-system writer (`flash/piko-smf-write.c`) initially used
 raw `MEMERASE` + `write()` against `/dev/mtd0` (mainline names the Sharp FTL
 partition `mtd0`, not `mtd1` as in older recovery environments). That looked
 successful at the character-device level, but it wiped the OOB bytes that store

@@ -30,6 +30,18 @@ board" constraint (scope every flash to only what changed).
 tools/build-and-deploy.sh [user@host]      # defaults to root@10.43.112.72
 ```
 
+To build **without a device** -- CI, or the board is in a drawer -- pass
+`--build-only`. It builds exactly what a real deploy would build (kernel,
+modules, userspace, the X11/Matchbox payload) and then stops: no SSH probe
+up front, no `chunked-deploy.sh` handoff at the end, no target argument
+needed. Use this rather than reimplementing the build order somewhere else
+and letting the two drift.
+
+```sh
+tools/build-and-deploy.sh --build-only
+tools/chunked-deploy.sh root@<ip>          # ship it later, separately
+```
+
 Toolchain selection is automatic: the script first prepends
 `toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin` (this repo's own
 toolchain, built by `tools/build-uclibc-toolchain.sh`) to `PATH` if it

@@ -1,0 +1,15 @@
+#!/bin/sh
+# smfcommit -- write a pending bootstrap (smf) update to NAND.
+#
+# piko-update never flashes the smf partition during a package install. It
+# installs home, reboots, and leaves the bootstrap write for this command,
+# so the new kernel and rootfs have to prove they boot first. Run it only
+# after the device has come back up looking healthy.
+#
+# A single word with no slashes or colons on purpose: this gets typed on
+# the Zaurus keyboard, which cannot produce / : [ ] | (see AGENTS.md).
+#
+# Plug in the AC adapter first -- it refuses on battery, because losing
+# power mid-write leaves a board that does not boot and there is no serial
+# or USB to recover through.
+exec /usr/sbin/piko-update --commit-smf "$@"

@@ -33,10 +33,17 @@ xkb_symbols "basic" {
 
     // Digit row: real Shift legends differ from stock us(basic).
     // Fn row on digits is icon-only (zoom/brightness/IME) except Del.
+    //
+    // 3 and 4 carry the brightness-down/-up icons, confirmed against the
+    // physical keycaps 2026-07-31. They are bound to the standard
+    // XF86MonBrightness{Down,Up} keysyms here; what actually acts on them
+    // is matchbox-window-manager via /etc/matchbox/kbdconfig, which runs
+    // "bright down" / "bright up". Levels 3 and 4 are both set so the
+    // binding survives Fn+Shift, matching how Fn+0=Delete is done below.
     key <AE01> { [        1,     exclam,  NoSymbol,  NoSymbol ] };
     key <AE02> { [        2,   quotedbl,  NoSymbol,  NoSymbol ] };
-    key <AE03> { [        3, numbersign,  NoSymbol,  NoSymbol ] };
-    key <AE04> { [        4,     dollar,  NoSymbol,  NoSymbol ] };
+    key <AE03> { [        3, numbersign,  XF86MonBrightnessDown, XF86MonBrightnessDown ] };
+    key <AE04> { [        4,     dollar,  XF86MonBrightnessUp,   XF86MonBrightnessUp   ] };
     key <AE05> { [        5,    percent,  NoSymbol,  NoSymbol ] };
     key <AE06> { [        6,  ampersand,  NoSymbol,  NoSymbol ] };
     key <AE07> { [        7,  apostrophe, NoSymbol,  NoSymbol ] };

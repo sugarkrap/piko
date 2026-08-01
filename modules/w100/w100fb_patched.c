@@ -44,7 +44,14 @@
  * Prototypes
  */
 static void w100_suspend(u32 mode);
-static int w100_vsync(void);
+/*
+ * tight=false: coarse, cheap poll -- for callers that only need to be woken
+ *              up once per frame (FBIO_WAITFORVSYNC, mode set).
+ * tight=true:  fine poll -- for the flip path, which has to land inside the
+ *              ~182 us vertical blanking window. See w100_vsync_pause().
+ */
+static int w100_vsync(bool tight);
+static void w100_vsync_pause(bool tight);
 static void w100_hw_init(struct w100fb_par*);
 static void w100_soft_reset(void);
 static void w100_pwm_setup(struct w100fb_par*);
@@ -71,6 +78,53 @@ MODULE_PARM_DESC(vsync_mode,
 static bool w100_vsync_debug;
 module_param_named(vsync_debug, w100_vsync_debug, bool, 0644);
 MODULE_PARM_DESC(vsync_debug, "enable extra vsync timeout diagnostics");
+
+/*
+ * How w100fb_pan_display() applies the new scanout address.
+ *
+ * true (default): hand the flip to the CRTC. mmGRAPHIC_OFFSET is written
+ *   into the display double-buffer shadow bank and mmDISP_DB_BUF_CNTL is
+ *   pulsed, so the chip latches the new address at the next vertical blank
+ *   by itself. No software timing, no CPU burned, and the pan is
+ *   non-blocking -- the caller returns immediately instead of losing a
+ *   frame period, which matters a lot to a PXA255 that is also decoding.
+ *
+ * false: the legacy path -- wait for the vline status bit, then write
+ *   mmGRAPHIC_OFFSET directly. This has to hit a ~182 us window (see
+ *   W100_VBLANK_US) and is what the tight poll in w100_vsync_pause()
+ *   exists for.
+ *
+ * VERIFIED ON HARDWARE (Corgi, 2026-07-31). mmGRAPHIC_OFFSET *is* covered
+ * by the display double buffer. Sampled through /dev/mem at 0x08010000
+ * while panning between two buffers (tools/src/fbflip.c hold):
+ *
+ *   yoffset=480 -> GRAPHIC_OFFSET = 0x0092bb00
+ *   yoffset=0   -> GRAPHIC_OFFSET = 0x00895b00
+ *
+ * which are exactly the two addresses w100fb_scanout_offset() computes for
+ * the 90-degree rotated mode, so the scanout base really moves. And
+ * mmDISP_DB_BUF_CNTL goes 0x79 -> 0x7b across the pan: en_db_buf (bit 0)
+ * stays set and update_db_buf_done (bit 1) asserts, i.e. the promotion
+ * completes rather than stranding the write in the shadow bank.
+ *
+ * Cost of each path, 20 flips each, same binary and board:
+ *
+ *   pan_hw_latch=1   mean    95 us   worst    125 us
+ *   pan_hw_latch=0   mean 18126 us   worst  25378 us
+ *
+ * The software path blocks ~18 ms of every 39 ms frame -- half a frame,
+ * which is what waiting on a randomly-phased vblank costs on average. The
+ * latch is ~190x cheaper and hands that time back to the decoder.
+ */
+static bool w100_pan_hw_latch = true;
+module_param_named(pan_hw_latch, w100_pan_hw_latch, bool, 0644);
+MODULE_PARM_DESC(pan_hw_latch,
+	"flip via the CRTC vblank latch (default 1); 0 = software vsync wait then direct write");
+
+static bool w100_pan_verify;
+module_param_named(pan_verify, w100_pan_verify, bool, 0644);
+MODULE_PARM_DESC(pan_verify,
+	"bring-up diagnostic: confirm the vblank latch actually completes (costs one frame per pan)");
 
 /*
  * Force full-rate panel fetch path (disable low-power/request-frequency hints)
@@ -103,6 +157,55 @@ static const struct kernel_param_ops w100_force_fullrate_ops = {
 
 module_param_cb(force_fullrate, &w100_force_fullrate_ops,
 		&w100_force_fullrate, 0644);
+
+/*
+ * Poll interval / budget for the vsync wait.
+ *
+ * MEASURED ON HARDWARE (Corgi, 480x640 mode, 2026-07-30): the vline status
+ * bit re-asserts every ~39 ms (~25.6 Hz), NOT the ~16.8 ms a 60 Hz panel
+ * would give. The old budget was an iteration count -- 30000 x udelay(1) --
+ * commented as "30[ms] > 16.8[ms]". Both halves of that were wrong here:
+ * each iteration also does a readl over the slow external bus, so 30000
+ * iterations actually burned ~61 ms of wall time (measured), and the period
+ * it was being compared against is ~39 ms, not 16.8 ms. The result was a
+ * budget whose real duration depended on bus timing and which sat close
+ * enough to the true period to be luck-of-the-draw under load.
+ *
+ * Use an explicit wall-clock deadline instead, generous enough to cover
+ * ~2.5 frames at the measured rate.
+ */
+#define W100_VSYNC_TIMEOUT_MS	100
+
+/*
+ * How much slack there is between "the vline status bit asserts" and "the
+ * CRTC starts fetching active pixels again" -- i.e. how long we have to get
+ * a new mmGRAPHIC_OFFSET in without tearing.
+ *
+ * It is much narrower than it looks, because on this panel active video ends
+ * exactly at the frame wrap. From corgi_fb_modes[] (480x640, upper_margin=3,
+ * lower_margin=0), w100_set_dispregs() programs:
+ *
+ *   active_v_end = upper_margin + yres         = 3 + 640 = 643
+ *   crtc_v_total = upper_margin + yres + lower = 3 + 640 = 643
+ *
+ * and w100_vsync() arms the vline interrupt at active_v_end. So there is no
+ * front porch at all: the vline fires at v_total, and the only safe window is
+ * the 3 upper-margin lines of the next frame. At the measured 39 ms frame /
+ * 643 lines that is ~60.6 us per line, so:
+ *
+ *   3 lines x 60.6 us ~= 182 us
+ *
+ * The coarse poll sleeps 500-1000 us, which is 3-5x wider than that entire
+ * window -- so the legacy path noticed the vline roughly 8-20 scanlines into
+ * the *next* frame and wrote the register mid-active-video. That is a tear,
+ * and it is the one that survived "vsync works".
+ *
+ * (Note the tear seam is vertical, not horizontal, on this board: the CRTC
+ * scans out rotated 90 degrees -- graphic_ctrl.portrait_mode=1 -- so a
+ * discontinuity along the panel's scan direction maps to a vertical band in
+ * the landscape image.)
+ */
+#define W100_VBLANK_US		182
 
 /* Pseudo palette size */
 #define MAX_PALETTES      16
@@ -475,7 +578,8 @@ static void w100fb_activate_var(struct w100fb_par *par)
 	w100_setup_memory(par);
 	w100_init_clocks(par);
 	w100fb_clear_screen(par);
-	w100_vsync();
+	/* Mode set: nothing here depends on landing inside blanking. */
+	w100_vsync(false);
 
 	w100_update_disable();
 	w100_init_lcd(par);
@@ -596,7 +700,25 @@ static int w100fb_set_par(struct fb_info *info)
 		par->mode = w100fb_get_mode(par, &par->xres, &par->yres, 0);
 
 		info->fix.visual = FB_VISUAL_TRUECOLOR;
-		info->fix.ypanstep = 0;
+		/*
+		 * ypanstep MUST stay 1 here.
+		 *
+		 * w100fb_probe() advertises ypanstep=1, but this function used to
+		 * reset it to 0 on the first mode set -- and it is never restored,
+		 * so 0 was the value userspace actually saw. The fbdev core gates
+		 * panning on it directly (fb_pan_display() in fbmem.c returns
+		 * -EINVAL for any yoffset > 0 when !fix->ypanstep), so every
+		 * FBIOPAN_DISPLAY failed before w100fb_pan_display() was ever
+		 * entered. The driver shipped a fb_pan_display op, and a careful
+		 * vsync wait inside it, that could not run.
+		 *
+		 * That is why "vsync works but it still tears": the wait was fine,
+		 * the flip it was guarding did not exist. Nothing in userspace
+		 * could double-buffer through this driver at all.
+		 *
+		 * ywrapstep stays 0: this driver has no ywrap support, only pan.
+		 */
+		info->fix.ypanstep = 1;
 		info->fix.ywrapstep = 0;
 		info->fix.line_length = par->xres * BITS_PER_PIXEL / 8;
 
@@ -629,6 +751,86 @@ static unsigned long w100fb_scanout_offset(struct w100fb_par *par,
 	return offset + (unsigned long)yoffset * par->xres;
 }
 
+/*
+ * Apply a new scanout address.
+ *
+ * Preferred path: let the CRTC do the flip. The w100 has a display register
+ * double buffer (mmDISP_DB_BUF_CNTL) that the driver previously used only to
+ * bracket mode sets -- w100_update_disable() to write registers through, then
+ * w100_update_enable() to re-arm. With en_db_buf set, a write to
+ * mmGRAPHIC_OFFSET lands in the shadow bank, and pulsing update_db_buf tells
+ * the chip to promote it at the next vertical blank. The hardware then hits
+ * the ~182 us window exactly, every time, with no software timing at all --
+ * and the pan becomes non-blocking, so a decoder no longer forfeits a frame
+ * period per flip just to be told when blanking started.
+ *
+ * Confirmed working on this board -- see the measurements on the
+ * pan_hw_latch parameter above. The fallbacks below are kept anyway,
+ * because this driver also serves the w3200/w3220 (iPAQ hx4700) where none
+ * of that has been checked:
+ *
+ *   - pan_verify=1 reports whether the promotion completes, so the same
+ *     question can be answered on another board in one boot.
+ *   - pan_hw_latch=0 returns to the software-timed write.
+ *   - If en_db_buf is clear the shadow bank is not active, so a raw write
+ *     would take effect immediately and mid-frame; fall back to the timed
+ *     path for that flip rather than tearing.
+ */
+static void w100_pan_flip(unsigned long addr)
+{
+	union disp_db_buf_cntl_rd_u rd;
+	ktime_t deadline;
+
+	if (w100_pan_hw_latch) {
+		rd.val = readl(remapped_regs + mmDISP_DB_BUF_CNTL);
+		if (!rd.f.en_db_buf) {
+			pr_warn_ratelimited("w100fb: pan: en_db_buf is clear, falling back to the timed write\n");
+			goto timed_write;
+		}
+
+		/* Into the shadow bank ... */
+		writel(addr, remapped_regs + mmGRAPHIC_OFFSET);
+		/* ... and ask the CRTC to promote it at the next vblank. */
+		w100_update_enable();
+
+		if (!w100_pan_verify)
+			return;
+
+		/*
+		 * Bring-up only: confirm the promotion actually happens. This
+		 * deliberately blocks for up to a frame, so it costs exactly the
+		 * latency the hardware path exists to avoid -- do not leave it on.
+		 */
+		deadline = ktime_add_ms(ktime_get(), W100_VSYNC_TIMEOUT_MS);
+		while (ktime_before(ktime_get(), deadline)) {
+			rd.val = readl(remapped_regs + mmDISP_DB_BUF_CNTL);
+			if (rd.f.update_db_buf_done) {
+				pr_info_ratelimited("w100fb: pan: vblank latch completed -- pan_hw_latch works on this board\n");
+				return;
+			}
+			w100_vsync_pause(false);
+		}
+
+		pr_warn_ratelimited("w100fb: pan: vblank latch never completed (db_buf_cntl=%#x) -- mmGRAPHIC_OFFSET may not be double-buffered here; try pan_hw_latch=0\n",
+				    readl(remapped_regs + mmDISP_DB_BUF_CNTL));
+		return;
+	}
+
+timed_write:
+	/*
+	 * Legacy path: race the beam. Poll tightly (see w100_vsync_pause) so
+	 * the write lands inside blanking rather than 8-20 scanlines into the
+	 * next frame, which is what the coarse poll used to do.
+	 *
+	 * The return value is deliberately ignored: a failed vsync means
+	 * "possible tearing", not "the pan is impossible". Failing the pan
+	 * would break panning for every userspace consumer for no benefit.
+	 * Any timeout is still reported, rate-limited, inside w100_vsync().
+	 */
+	w100_vsync(true);
+	writel(addr, remapped_regs + mmGRAPHIC_OFFSET);
+}
+
 static int w100fb_pan_display(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
@@ -640,19 +842,19 @@ static int w100fb_pan_display(struct fb_var_screeninfo *var,
 		return -EINVAL;
 
 	/*
-	 * Do NOT fail the pan on a vsync timeout.
+	 * Note on reachability: until fix.ypanstep was corrected in
+	 * w100fb_set_par(), this function could not be called at all for a
+	 * nonzero yoffset -- the fbdev core rejected the ioctl first. Anything
+	 * below this line is newly live code and has not had the years of
+	 * incidental testing the rest of the driver has.
 	 *
-	 * A failed vsync wait means only "we could not sync to the retrace",
-	 * i.e. possible tearing -- not "the pan is impossible". Propagating
-	 * -ETIMEDOUT made pan_display fail outright, which breaks
-	 * double-buffering / panning for every userspace consumer
-	 * (X11/matchbox, quake-fb) even though the pan itself is perfectly
-	 * capable of proceeding. Degrade gracefully: carry on and program the
-	 * new scanout offset. Any timeout is still reported (rate-limited)
-	 * inside w100_vsync(), so it stays visible rather than swallowed.
-	 *
-	 * The mode-set path (w100fb_activate_var) ignores the return value
-	 * for the same reason.
+	 * The scanout offset arithmetic in w100fb_scanout_offset() does check
+	 * out against all four rotations: adding yoffset * xres pixels moves
+	 * the window down by yoffset framebuffer rows in every case, including
+	 * the 90-degree mode Corgi actually uses (base = first pixel of the
+	 * last row, so base + yoffset*xres = first pixel of row yoffset+yres-1,
+	 * which is what a window starting at row yoffset needs). mmGRAPHIC_PITCH
+	 * stays correct too: y-panning does not change the row stride.
 	 *
 	 * CORRECTION (2026-07-30): an earlier version of this comment claimed
 	 * the vline status bit "never asserts" on this hardware and suggested
@@ -661,14 +863,11 @@ static int w100fb_pan_display(struct fb_var_screeninfo *var,
 	 * FBIO_WAITFORVSYNC) at a ~39 ms period, and the only timeout ever
 	 * logged is a single one during the very first mode set at boot,
 	 * before the CRTC is running. vsync_mode=1 is the path that cannot
-	 * work here -- see the note on mmCRTC_FRAME in w100_vsync(). The
-	 * defensive handling below is still correct and is kept.
+	 * work here -- see the note on mmCRTC_FRAME in w100_vsync().
 	 */
-	w100_vsync();
-
 	offset = w100fb_scanout_offset(par, var->yoffset);
-	writel(W100_FB_BASE + ((offset * BITS_PER_PIXEL / 8) & ~0x03UL),
-	       remapped_regs + mmGRAPHIC_OFFSET);
+	w100_pan_flip(W100_FB_BASE + ((offset * BITS_PER_PIXEL / 8) & ~0x03UL));
+
 	info->var.xoffset = var->xoffset;
 	info->var.yoffset = var->yoffset;
 
@@ -679,7 +878,14 @@ static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
 	if (cmd == FBIO_WAITFORVSYNC) {
-		return w100_vsync();
+		/*
+		 * Coarse poll is right here. The caller only wants to be woken
+		 * once per frame and will then go render for tens of ms, so a
+		 * few hundred us of notice latency is invisible to it -- and
+		 * staying coarse keeps the CPU savings. Only the flip itself
+		 * needs to land inside the blanking window.
+		 */
+		return w100_vsync(false);
 	}
 
 	return -EINVAL;
@@ -1779,24 +1985,6 @@ static void w100_suspend(u32 mode)
 }
 
 /*
- * Poll interval / budget for the vsync wait.
- *
- * MEASURED ON HARDWARE (Corgi, 480x640 mode, 2026-07-30): the vline status
- * bit re-asserts every ~39 ms (~25.6 Hz), NOT the ~16.8 ms a 60 Hz panel
- * would give. The old budget was an iteration count -- 30000 x udelay(1) --
- * commented as "30[ms] > 16.8[ms]". Both halves of that were wrong here:
- * each iteration also does a readl over the slow external bus, so 30000
- * iterations actually burned ~61 ms of wall time (measured), and the period
- * it was being compared against is ~39 ms, not 16.8 ms. The result was a
- * budget whose real duration depended on bus timing and which sat close
- * enough to the true period to be luck-of-the-draw under load.
- *
- * Use an explicit wall-clock deadline instead, generous enough to cover
- * ~2.5 frames at the measured rate.
- */
-#define W100_VSYNC_TIMEOUT_MS	100
-
-/*
  * Wait for the vline status bit, sleeping rather than spinning where we
  * are allowed to.
  *
@@ -1816,15 +2004,34 @@ static void w100_suspend(u32 mode)
  * context, so fall back to a (still much coarser) delay when we are not
  * preemptible rather than assuming process context.
  */
-static void w100_vsync_pause(void)
+static void w100_vsync_pause(bool tight)
 {
+	/*
+	 * The flip path cannot use the coarse interval: sleeping 500-1000 us
+	 * while hunting for an event whose usable window is ~182 us wide means
+	 * reliably missing it (see W100_VBLANK_US). Poll well inside the
+	 * window instead so the scanout address lands during blanking.
+	 *
+	 * This is still a sleep, not the udelay(1) spin this code replaced, so
+	 * it does not give back the ~24 ms per frame that the coarse poll
+	 * reclaimed for the decoder -- it only tightens the granularity while
+	 * a flip is actually pending.
+	 */
+	if (tight) {
+		if (preemptible())
+			usleep_range(50, 100);
+		else
+			udelay(20);
+		return;
+	}
+
 	if (preemptible())
 		usleep_range(500, 1000);
 	else
 		udelay(100);
 }
 
-static int w100_vsync(void)
+static int w100_vsync(bool tight)
 {
 	u32 cntl, stat;
 	u32 tmp;
@@ -1857,7 +2064,7 @@ static int w100_vsync(void)
 
 			if (cur != start)
 				return 0;
-			w100_vsync_pause();
+			w100_vsync_pause(tight);
 		}
 
 		if (w100_vsync_debug) {
@@ -1903,7 +2110,7 @@ static int w100_vsync(void)
 		if (!(readl(remapped_regs + mmGEN_INT_STATUS) & 0x00000002))
 			break;
 		writel(0x00000002, remapped_regs + mmGEN_INT_STATUS);
-		w100_vsync_pause();
+		w100_vsync_pause(tight);
 	}
 
 	while (ktime_before(ktime_get(), deadline)) {
@@ -1911,7 +2118,7 @@ static int w100_vsync(void)
 			got_vline = true;
 			break;
 		}
-		w100_vsync_pause();
+		w100_vsync_pause(tight);
 	}
 
 	/* disable vline irq */
