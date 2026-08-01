@@ -216,10 +216,22 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # listed by the picker and then fail to decode. See "Wallpaper: modes,
 # formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# Pre-scaled to exactly 480x640, the panel's own size, so the device never
-# pays for a resize: mbdesktop_view_init_bg() caches the composited result
-# either way, but the first boot after a flash would otherwise spend it
-# scaling a larger image on a 400MHz part.
+# FITTED, not cropped, and pre-rendered to exactly 480x640 -- the panel's
+# size -- with black bars where the aspect ratios disagree. The source is
+# landscape and the panel is portrait, so a fill-and-crop would have thrown
+# away most of the image's width to fill the height; the whole picture
+# visible with bars is the better trade for a wallpaper somebody chose.
+#
+# Because the file is already exactly screen-sized, the spec that goes with
+# it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
+# all: mbdesktop_view_init_bg() caches the composited result either way,
+# but this way even the first boot after a flash does no scaling on a
+# 400MHz part -- it is a straight blit.
+#
+# Regenerate with:
+#   magick <src> -resize 480x640 -background black -gravity center \
+#          -extent 480x640 -alpha off -strip -interlace none \
+#          -define png:compression-level=9 PNG24:piko-default.png
 mkdir -p "$PAYLOAD/usr/share/backgrounds"
 cp "$REPO/userspace/backgrounds/piko-default.png" \
    "$PAYLOAD/usr/share/backgrounds/piko-default.png"

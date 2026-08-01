@@ -521,7 +521,7 @@ fi
 #
 # HOME is /root for the session (rootfs/etc/init.d/xsession sets it
 # explicitly, precisely so this lookup resolves to anything at all).
-ssh_do "mkdir -p /root/.matchbox && echo img-filled:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
+ssh_do "mkdir -p /root/.matchbox && echo img-centered:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
 echo "==> set /root/.matchbox/wallpaper to the shipped default"
 
 # 6b. SD-card software overlay. /etc/zaurus-card.sh puts
