@@ -376,9 +376,11 @@ Two things not to re-litigate when adding more of these:
 
 ## System actions in the menu: Suspend, Reboot, Go to TTY
 
-Three entries in the panel menu's **System** folder that *do* something
-rather than open a window. Each is an ordinary `.desktop` file in
-`userspace/desktop/`, and each `Exec=`s a plain script in `/usr/sbin`:
+Three entries at the **root of the panel menu** that *do* something rather
+than open a window — they sit at the top level alongside the Programs /
+System / Settings folders, not inside one. Each is an ordinary `.desktop`
+file in `userspace/desktop/`, and each `Exec=`s a plain script in
+`/usr/sbin`:
 
 | Menu entry | Exec | What it does |
 |---|---|---|
@@ -388,14 +390,37 @@ rather than open a window. Each is an ordinary `.desktop` file in
 
 Two things about them are easy to get wrong:
 
-**They have no `Type=` line, and that is deliberate.**
-matchbox-desktop-classic's `dotdesktop.c` only draws a desktop icon when
-`Type` is exactly `Application`, so omitting the key keeps these *out* of
-the desktop icon view while `mb-applet-menu-launcher` -- which gates only
-on `Icon`+`Name`+`Exec`, never on `Type` -- still lists them normally. Do
-not reach for `Type=PanelApp` to get the same exclusion: the
-menu-launcher special-cases that exact string and redirects the entry
-into its "Utilities/Panel" applet submenu, which is the wrong folder.
+**`Categories=Action` is what does the work — not `System`.** That one
+word is special-cased by *both* consumers of these files, which is the
+only reason a root-level menu entry is possible at all:
+
+- `mb-applet-menu-launcher.c` tests `Categories` for `Action` **before**
+  any vfolder matching, and on a hit sets `m = mbmenu->rootmenu`. It also
+  emits a separator above the first such entry and passes
+  `MBMENU_NO_SORT`, so the actions stay grouped at the root rather than
+  being alphabetised in among the folders.
+- `matchbox-desktop-classic/modules/dotdesktop.c` opens
+  `add_a_dotdesktop_item()` with `/* We dont want 'action' entrys */` and
+  returns early on the same substring — so they stay off the desktop
+  icon view.
+
+With `Categories=System` they landed in the "System Tools" folder, one
+level down. There is no vfolder you can point at to get root placement:
+`Root.directory` has no `Match=` line, and `mb_dot_desktop_folders_new()`
+only registers folders that have both `Name` and `Match`, so `Root` is
+skipped entirely as a folder. `Action` is the mechanism.
+
+Because the entries are appended `NO_SORT` in `readdir()` order, their
+order relative to *each other* follows the filesystem, not the file
+names.
+
+They also carry no `Type=` line. That is now belt-and-braces rather than
+the mechanism — the `Action` check fires before `dotdesktop.c` ever looks
+at `Type` — but it costs nothing and independently keeps them off the
+desktop, which gates on `Type` being exactly `Application`. Do **not**
+reach for `Type=PanelApp` instead: the menu-launcher special-cases that
+exact string *last*, after the `Action` branch, and would redirect the
+entry into its "Utilities/Panel" applet submenu.
 
 **Go to TTY depends on `pkillx`.** `gototty` is a one-line script and this
 busybox has no `kill`, `killall` or `pkill` applet of its own, so without
