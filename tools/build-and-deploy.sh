@@ -44,7 +44,10 @@ set -eu
 # entirely (a from-scratch X11 build needs the toolchain from
 # tools/build-uclibc-toolchain.sh plus tools/build-thirdparty-deps.sh already
 # staged; skip this if either isn't set up yet, or you just don't want the
-# X11/Matchbox payload rebuilt/redeployed this run).
+# X11/Matchbox payload rebuilt/redeployed this run). Without it, a desktop
+# that fails to build now FAILS THE RUN rather than deploying a kernel and
+# leaving you to notice the missing desktop later -- see the X11 section
+# below for why that changed.
 # --skip-userspace skips building the cross-compiled userspace
 # (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
 # + st + FLTK) and forwards
@@ -52,9 +55,11 @@ set -eu
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
-# --skip-st forwards --skip-st to tools/build-userspace.sh: build every
-# other userspace component as usual, but leave st out. Narrower than
-# --skip-userspace, and the reason it exists is that st is the one
+# --skip-st forwards --skip-st to tools/build-userspace.sh,
+# tools/build-x11-stack.sh AND tools/build-matchbox-payload.sh (all three
+# can build or demand st): build every other component as usual, but leave
+# st out, including out of the X11 payload and its desktop menu. Narrower
+# than --skip-userspace, and the reason it exists is that st is the one
 # component whose source is a submodule of an upstream that is not
 # GitHub (git.suckless.org) -- when that host is down or the submodule
 # was never initialized, userspace/src/st is an empty directory and
@@ -252,27 +257,70 @@ fi
 # the single tar chunked-deploy ships (see section 9 there).
 # See docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# Neither failure is fatal here -- both scripts fail loudly on their own
-# output, but a machine without the X11 toolchain/third-party-deps set up
-# yet (tools/build-thirdparty-deps.sh) should still be able to get a
-# kernel-only or X-less deploy out, which is a perfectly normal thing to
-# want. Use --skip-x11 to silence the attempt entirely.
+# EITHER FAILURE IS FATAL. It did not used to be: the rationale was that a
+# machine without the X11 toolchain provisioned should still get a kernel
+# out. What that actually produced was a deploy which printed one warning
+# line, carried on through several minutes of kernel/module transfers, and
+# ended with chunked-deploy's cheerful
+#
+#     ==> no X11 payload at /tmp/matchbox-payload.tar -- skipping
+#         (build it with tools/build-matchbox-payload.sh)
+#
+# -- which reads like a configuration choice rather than the tail end of a
+# compile error scrolled off the top of the terminal. Reported 2026-08-01
+# by someone who ran a deploy expecting the desktop to be in it, which is
+# the reasonable expectation: "build and deploy" says nothing about doing
+# only part of it.
+#
+# So: you get the payload, or you get an error. --skip-x11 remains the way
+# to ask for a deploy without one, and it is now the ONLY way -- an
+# explicit choice rather than an accident, which is the whole point.
+# --kernel-only skips this section outright, as before.
+X11_PAYLOAD_TAR="${PAYLOAD_TAR:-/tmp/matchbox-payload.tar}"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
-    echo "==> building the X11/Matchbox stack (tools/build-x11-stack.sh)..."
-    if ! sh "$REPO/tools/build-x11-stack.sh" > /tmp/x11-stack-build.log 2>&1; then
-        echo "==> X11 stack build FAILED -- deploying without an X11 payload" >&2
-        echo "    (see /tmp/x11-stack-build.log; pass --skip-x11 to silence)" >&2
-        tail -3 /tmp/x11-stack-build.log >&2
-    else
-        echo "==> repacking the X11/Matchbox payload..."
-        if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
-            echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
-        else
-            echo "==> X11 payload NOT built -- deploying without it" >&2
-            echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
-            tail -3 /tmp/x11-payload-build.log >&2
-        fi
+    X11_ARGS=""
+    if [ "$SKIP_ST" -eq 1 ]; then
+        X11_ARGS="--skip-st"
     fi
+    echo "==> building the X11/Matchbox stack (tools/build-x11-stack.sh)..."
+    # Unquoted on purpose, same as USERSPACE_ARGS above: a quoted "" would
+    # be passed through as a literal empty argument and rejected.
+    # shellcheck disable=SC2086
+    # x11_died STEP LOGFILE -- one exit path for both failures, so they
+    # cannot drift into saying different things about the same situation.
+    x11_died() {
+        echo "" >&2
+        echo "FAILED: $1 -- see $2" >&2
+        echo "" >&2
+        tail -15 "$2" >&2
+        echo "" >&2
+        echo "Not deploying. The desktop is part of what this script builds," >&2
+        echo "so a desktop that did not build is a failed run, not a run that" >&2
+        echo "quietly ships less than you asked for." >&2
+        echo "" >&2
+        echo "  * to deploy the kernel and userspace WITHOUT a desktop," >&2
+        echo "    re-run with --skip-x11 added:" >&2
+        echo "        $0 --skip-x11 ..." >&2
+        echo "  * to deploy only the kernel:  --kernel-only" >&2
+        if [ -f "$X11_PAYLOAD_TAR" ]; then
+            echo "" >&2
+            echo "  Note: $X11_PAYLOAD_TAR exists, left over from an earlier" >&2
+            echo "  run. --skip-x11 will ship THAT, which does not necessarily" >&2
+            echo "  match the tree you just built. Delete it first if you want" >&2
+            echo "  a deploy with no desktop at all." >&2
+        fi
+        exit 1
+    }
+    # shellcheck disable=SC2086
+    if ! sh "$REPO/tools/build-x11-stack.sh" $X11_ARGS > /tmp/x11-stack-build.log 2>&1; then
+        x11_died "the X11/Matchbox stack did not build" /tmp/x11-stack-build.log
+    fi
+    echo "==> repacking the X11/Matchbox payload..."
+    # shellcheck disable=SC2086
+    if ! sh "$REPO/tools/build-matchbox-payload.sh" $X11_ARGS > /tmp/x11-payload-build.log 2>&1; then
+        x11_died "the X11/Matchbox payload could not be assembled" /tmp/x11-payload-build.log
+    fi
+    echo "==> X11 payload OK ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
 fi
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
@@ -284,8 +332,8 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     if [ -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
         echo "    zImage:      $KERNEL_DIR/arch/arm/boot/zImage ($(wc -c < "$KERNEL_DIR/arch/arm/boot/zImage") bytes)"
     fi
-    if [ -f /tmp/matchbox-payload.tar ]; then
-        echo "    X11 payload: /tmp/matchbox-payload.tar ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    if [ -f "$X11_PAYLOAD_TAR" ]; then
+        echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
     echo ""
     echo "    Deploy it later with:  tools/chunked-deploy.sh [user@host]"
@@ -308,5 +356,10 @@ fi
 if [ "$SKIP_USERSPACE" -eq 1 ]; then
     set -- --no-userspace "$@"
 fi
-export REPO KERNEL_DIR
+# The two scripts spell the same file with different variable names --
+# PAYLOAD_TAR when producing it, X11_PAYLOAD when shipping it. Pin them
+# together so overriding the producer cannot leave chunked-deploy sending
+# whatever happens to be at the default path instead.
+X11_PAYLOAD="${X11_PAYLOAD:-$X11_PAYLOAD_TAR}"
+export REPO KERNEL_DIR X11_PAYLOAD
 exec "$REPO/tools/chunked-deploy.sh" "$@"

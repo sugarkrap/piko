@@ -259,18 +259,23 @@ fi
 # device back to a console until someone separately remembered to
 # redeploy the desktop afterward.
 #
-# tools/build-x11-stack.sh and tools/build-st.sh are both idempotent (skip
-# anything already built/staged), so calling them unconditionally is cheap
-# once the stack exists. Not fatal if they fail or their prerequisites
-# (the separate uclibc-for-X11 toolchain, third-party deps) aren't
-# provisioned -- same "still produces a valid, useful package" philosophy
-# as the kernel being optional above. SKIP_X11=1 opts out entirely (e.g. a
-# kernel-only respin where rebuilding/restaging the whole desktop would
-# just add time for no reason).
+# tools/build-x11-stack.sh is idempotent (skips anything already
+# built/staged), so calling it unconditionally is cheap once the stack
+# exists. It builds st and FLTK at its end too, which is why there is no
+# separate tools/build-st.sh call here any more: this script used to make
+# one and still had no FLTK, so tools/build-matchbox-payload.sh below died
+# on the missing fltktest/matchbox-fbrun. Everything the payload needs is
+# now one script's job -- see that script's header.
+#
+# Not fatal if it fails or its prerequisites (the separate uclibc-for-X11
+# toolchain, third-party deps) aren't provisioned -- same "still produces a
+# valid, useful package" philosophy as the kernel being optional above.
+# SKIP_X11=1 opts out entirely (e.g. a kernel-only respin where
+# rebuilding/restaging the whole desktop would just add time for no reason).
 if [ "${SKIP_X11:-0}" -eq 1 ]; then
     echo "==> SKIP_X11=1 -- not including the X11/Matchbox desktop"
     echo "# x11-matchbox-desktop: not included (SKIP_X11=1)" >> "$MANIFEST"
-elif sh "$REPO/tools/build-x11-stack.sh" >&2 && sh "$REPO/tools/build-st.sh" >&2; then
+elif sh "$REPO/tools/build-x11-stack.sh" >&2; then
     PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/mb-payload}"
     if sh "$REPO/tools/build-matchbox-payload.sh" >&2; then
         echo "==> packaging X11/Matchbox payload ($PAYLOAD_DIR) into the update package"
