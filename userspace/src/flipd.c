@@ -5,65 +5,77 @@
  * screen is swivelled and folded flat over the keyboard, so the desktop
  * stays the right way up in both postures.
  *
- * THE ROTATION IS FREE. THIS DAEMON DOES NOT MOVE PIXELS.
- * ------------------------------------------------------
- * The w100's CRTC rotates during scanout -- graphic_ctrl.portrait_mode in
- * w100_set_dispregs() (modules/w100/w100fb_patched.c) -- and this board
- * already relies on it: the panel is physically 480x640 portrait, and the
- * 640x480 landscape framebuffer everything draws into only becomes
- * landscape because the platform data asks for INIT_MODE_ROTATED, i.e.
- * portrait_mode=1 (90 degrees). So rotation on this machine is not a
- * feature to be added, it is a register field that is already in use.
+ * LANDSCAPE <-> PORTRAIT, AND IT COSTS NOTHING
+ * --------------------------------------------
+ * The tablet posture is PORTRAIT: a real 480x640 desktop, not a
+ * turned-around landscape one. That is what the switch means on this
+ * machine, and it is also the cheap direction, which is worth
+ * understanding before anyone "optimises" it.
  *
- * w100fb exposes the other half of that field as a sysfs file:
+ * The panel is PHYSICALLY 480x640 portrait. The 640x480 landscape desktop
+ * this machine normally runs is itself produced by the w100's CRTC
+ * rotating during scanout -- graphic_ctrl.portrait_mode = 1, from
+ * INIT_MODE_ROTATED in the board file (modules/mach-pxa/corgi_patched.c),
+ * programmed by w100_set_dispregs() (modules/w100/w100fb_patched.c). So
+ * portrait is not "landscape plus a rotation". It is one transform FEWER:
  *
- *   /sys/devices/platform/w100fb/flip
+ *               framebuffer   CRTC portrait_mode   pixel clock divider
+ *   landscape    640x480       1  (90 degrees)      6
+ *   portrait     480x640       0  (none)            2
  *
- * With the framebuffer in its rotated (landscape) geometry, flip=0 gives
- * portrait_mode=1 (90 degrees) and flip=1 gives portrait_mode=2 (270) --
- * exactly 180 degrees apart, which is exactly the transform the swivel
- * needs. Writing that file costs one register write plus a mode-register
- * refresh. Nothing re-renders, no pixel is touched, no memory is
- * allocated, and the cost does not depend on what is on screen.
+ * Switching orientation is therefore just a framebuffer mode change; the
+ * CRTC picks up or puts down its rotation for free. No pixel is moved by
+ * the CPU either way. Portrait even clocks the panel three times faster,
+ * because unrotated scanout reads memory linearly -- which is a good
+ * reason to measure the refresh rate in both postures rather than assume
+ * portrait is the expensive one.
  *
- * That is worth stating plainly because the obvious alternative is far
- * worse. Xfbdev CAN rotate (`xrandr -o inverted`): kdrive would set
- * scrpriv->randr and swap shadowUpdatePacked for shadowUpdateRotate16_180
- * in fbdevSetShadow() (hw/kdrive/fbdev/fbdev.c). That turns every damage
- * flush from a per-row memcpy into a reversed per-pixel copy, on a
- * 400MHz PXA255 whose panel already only manages ~26Hz, forever, in
- * exchange for a result the CRTC gives away for nothing. Do not "simplify"
- * this daemon into an xrandr call.
+ * That matters because the obvious implementation is far worse. Xfbdev
+ * CAN rotate (`xrandr -o left`): kdrive would set scrpriv->randr and
+ * fbdevSetShadow() would swap shadowUpdatePacked for
+ * shadowUpdateRotate16_90, turning every damage flush from a per-row
+ * memcpy into a reversed per-pixel copy, on a 400MHz PXA255, forever --
+ * to reproduce a result the CRTC gives away. Do not "simplify" this
+ * daemon into an xrandr call. (There is no xrandr on this rootfs anyway.)
  *
- * WHY 180 AND NOT 90/270
- * ----------------------
- * The C7x0 lid swivels about its own vertical axis and folds back down,
- * so in tablet posture the panel is the same landscape rectangle in the
- * same place, upside down. 180 degrees is the whole correction.
+ * WHO ACTUALLY CHANGES THE MODE
+ * -----------------------------
+ * X does, whenever X is running. The change is a live screen RESIZE, and
+ * the server has to tear down its root clip, redo the shadow and
+ * page-flip buffers at the new stride, resize the root window and tell
+ * every client -- see fbdevSetOrientation() in the xserver fork. Setting
+ * the mode behind its back would leave the whole desktop drawing at the
+ * wrong size. So this daemon writes PORTRAIT or LANDSCAPE to the server's
+ * control FIFO (the channel pikalibrate already uses; see
+ * PikalibrateWakeup() in hw/kdrive/linux/linux.c) and lets it do the work.
  *
- * True portrait (a 480x640 desktop) is a different operation: it needs
- * FBIOPUT_VSCREENINFO with xres/yres swapped, which changes the screen
- * dimensions under a running X server -- and kdrive cannot resize a live
- * screen, so it would mean restarting X and losing the session. Not done
- * here. See docs/HOWTO-SCREEN-ROTATION.md.
+ * With no X running -- before the graphical session starts, or on a
+ * console boot -- there is nothing to coordinate with, so we set the mode
+ * ourselves and the console rotates with it.
+ *
+ * The desktop end of this needs no new code:
+ * matchbox-window-manager has handled root-window resizes since 2005 (the
+ * ConfigureNotify case in wm.c is commented "screen rotation" and adjusts
+ * every client, dialog and docked panel edge by the size delta).
  *
  * THE INPUT HALF
  * --------------
- * Turning the panel around without turning the touchscreen around leaves
- * a display that looks right and taps 180 degrees off, which is worse
- * than not rotating at all. The touchscreen is EVIOCGRAB'd by Xfbdev
- * while X runs, so the correction has to happen inside the server: our
- * xserver fork inverts absolute pointer coordinates in EvdevPtrAbsolute()
- * (hw/kdrive/linux/evdev.c) when the panel is flipped.
+ * The digitiser does not resize. It is bonded to the panel and keeps
+ * reporting in the panel's own axes, so when the screen stops being
+ * rotated the raw-to-screen mapping has to pick up the 90 degrees the
+ * CRTC just put down -- the axes swap. A display that looks right but
+ * taps in the wrong place is worse than one that is the wrong way up.
  *
- * X reads the flip state from the same sysfs file this daemon writes --
- * there is deliberately no second copy of the state to get out of sync.
- * This daemon only has to tell X *when* to look, which it does by writing
- * "ROTATE" to the server's control FIFO (the channel pikalibrate already
- * uses; see PikalibrateWakeup() in hw/kdrive/linux/linux.c). If X is not
- * running there is nothing to notify and the write is skipped; X re-reads
- * the file when it starts and after every resume, so a boot or a wake in
- * tablet posture comes up correct without being told.
+ * The touchscreen is EVIOCGRAB'd by Xfbdev while X runs, so nothing out
+ * here can correct it; the transform lives in EvdevPtrAbsolute()
+ * (hw/kdrive/linux/evdev.c) and is switched by the same FIFO command that
+ * resizes the screen, after the resize, so it is computed against the new
+ * dimensions.
+ *
+ * The 180-degree flip that /usr/sbin/flip drives
+ * (/sys/devices/platform/w100fb/flip) is a SEPARATE, orthogonal thing --
+ * it turns whichever orientation you are in upside down. This daemon does
+ * not touch it.
  *
  * WHY A SEPARATE DAEMON AND NOT PART OF brightd
  * ---------------------------------------------
@@ -83,12 +95,15 @@
  * effect on the next swivel with no restart and no signal (this rootfs's
  * BusyBox has no kill; see NO SIGNAL PROTOCOL in brightd.c).
  *
- *   enabled=1        master switch. 0 means never touch the display --
- *                    and never *un*-touch it either, so a flip set by
- *                    hand with /usr/sbin/flip is left alone.
+ *   enabled=1        master switch. 0 means never change orientation --
+ *                    and never change it back either, so an orientation
+ *                    set by hand is left alone.
  *   switch_invert=0  which way round SW_TABLET_MODE reads. 0 means
  *                    "switch reported as set == tablet posture ==
- *                    flipped". See POLARITY below.
+ *                    portrait". See POLARITY below.
+ *   portrait_invert=x  read by the X server, not by this daemon: which of
+ *                    the two touchscreen axes reverses in portrait. See
+ *                    EvdevSetPortrait() in the xserver fork.
  *
  * POLARITY
  * --------
@@ -97,8 +112,8 @@
  * no .active_low, so the reported value follows the raw GPIO level.
  * Whether that level is high in the swivelled posture or in the clamshell
  * one was NOT verified on hardware when this was written -- the board was
- * not reachable. If the screen turns upside down in the clamshell and
- * correct in tablet mode, that is the entire bug: set switch_invert=1.
+ * not reachable. If the screen goes portrait in the clamshell and
+ * landscape in tablet mode, that is the entire bug: set switch_invert=1.
  * It is a config line rather than a rebuild precisely because it is the
  * one thing here that could not be checked.
  *
@@ -119,10 +134,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <linux/fb.h>
 #include <linux/input.h>
 
-/* The w100 CRTC's other 180 degrees. See the header comment. */
-#define FLIP_SYSFS	"/sys/devices/platform/w100fb/flip"
+/* The framebuffer whose geometry IS the orientation. */
+#define FB_DEV		"/dev/fb0"
 
 /* Xfbdev's control FIFO (hw/kdrive/linux/linux.c). Created by the server;
  * absent, or present with nobody reading, when X is not running. */
@@ -187,82 +203,118 @@ load_config(void)
 }
 
 /*
- * Current CRTC flip state, or -1 if it cannot be read (no w100fb, or a
- * kernel without the sysfs attribute). Read rather than remembered so
- * this daemon and /usr/sbin/flip can both drive the same register
- * without either one holding a stale idea of it.
+ * Current orientation: 1 = portrait, 0 = landscape, -1 = cannot tell.
+ *
+ * Asked of the framebuffer rather than remembered, so this daemon,
+ * /usr/sbin/flip and the X server can never hold three different ideas of
+ * which way round the screen is. "Portrait" is simply the taller of the
+ * two geometries -- derived, not hardcoded, so it stays true if the mode
+ * table ever changes.
  */
 static int
-read_flip(void)
+read_portrait(void)
 {
-	char buf[8];
-	int fd, n;
+	struct fb_var_screeninfo var;
+	int fd, r;
 
-	fd = open(FLIP_SYSFS, O_RDONLY);
+	fd = open(FB_DEV, O_RDONLY);
 	if (fd < 0)
 		return -1;
-	n = read(fd, buf, sizeof(buf) - 1);
+	r = ioctl(fd, FBIOGET_VSCREENINFO, &var);
 	close(fd);
-	if (n <= 0)
+	if (r < 0)
 		return -1;
-	buf[n] = '\0';
-	return atoi(buf) ? 1 : 0;
+	return var.yres > var.xres ? 1 : 0;
 }
 
 /*
- * Writing this file makes w100fb reprogram the graphics controller and
- * reset the scanout base to the front buffer (w100_set_dispregs() ends
- * with a write to mmGRAPHIC_OFFSET). With the fork's double-buffered
- * page flipping running that can cost one stale frame, until X's next
- * paint pans the scanout back where it belongs -- so it matters that we
- * never write a value that is already set, both here and on startup.
+ * Ask a running X server to change orientation. Returns 1 if the command
+ * was delivered, 0 if there is no server listening.
+ *
+ * X has to be the one to do it whenever it is running: the change is a
+ * live screen RESIZE, and the server must tear down its root clip, redo
+ * its shadow and page-flip buffers at the new stride, resize the root
+ * window and tell every client -- see fbdevSetOrientation() in the
+ * xserver fork. Reaching past it to set the mode behind its back would
+ * leave the whole desktop drawing at the wrong size.
+ *
+ * O_NONBLOCK is not optional: opening a FIFO for writing blocks until a
+ * reader appears, so without it this would hang forever on a machine with
+ * no X. No reader means ENXIO, no FIFO means ENOENT, and both simply mean
+ * "X is not running" rather than an error.
  */
-static void
-write_flip(int want)
+static int
+tell_x(int portrait)
 {
-	char c = want ? '1' : '0';
-	int fd;
-
-	if (read_flip() == want)
-		return;
-
-	fd = open(FLIP_SYSFS, O_WRONLY);
-	if (fd < 0) {
-		fprintf(stderr, "flipd: cannot open %s: %s\n",
-			FLIP_SYSFS, strerror(errno));
-		return;
-	}
-	if (write(fd, &c, 1) != 1)
-		fprintf(stderr, "flipd: cannot write %s: %s\n",
-			FLIP_SYSFS, strerror(errno));
-	close(fd);
-	say("flipd: display flip -> %d\n", want);
-}
-
-/*
- * Ask a running X server to re-read the flip state and re-aim the
- * touchscreen. O_NONBLOCK is not optional: opening a FIFO for writing
- * blocks until a reader appears, so without it this would hang forever
- * on a machine with no X. No reader means ENXIO, no FIFO means ENOENT,
- * and both are the normal console-only case rather than errors.
- */
-static void
-notify_x(void)
-{
+	const char *cmd = portrait ? "PORTRAIT\n" : "LANDSCAPE\n";
 	int fd = open(X_CTL_FIFO, O_WRONLY | O_NONBLOCK);
 
 	if (fd < 0)
-		return;
-	if (write(fd, "ROTATE\n", 7) < 0)
-		say("flipd: ROTATE write failed: %s\n", strerror(errno));
-	else
-		say("flipd: told X to re-read the flip state\n");
+		return 0;
+	if (write(fd, cmd, strlen(cmd)) < 0) {
+		say("flipd: %s write failed: %s\n", cmd, strerror(errno));
+		close(fd);
+		return 0;
+	}
 	close(fd);
+	say("flipd: asked X for %s\n", portrait ? "portrait" : "landscape");
+	return 1;
+}
+
+/*
+ * No X: set the mode ourselves so the console rotates too.
+ *
+ * Only reached before the graphical session starts, or on a board booted
+ * to a console. Deliberately does NOT touch xres_virtual: the fbdev core
+ * keeps the existing virtual size if it can, and X re-establishes its own
+ * double buffer when it starts.
+ */
+static int
+set_fb_orientation(int portrait)
+{
+	struct fb_var_screeninfo var;
+	unsigned int lo, hi;
+	int fd;
+
+	fd = open(FB_DEV, O_RDWR);
+	if (fd < 0) {
+		say("flipd: %s: %s\n", FB_DEV, strerror(errno));
+		return 0;
+	}
+	if (ioctl(fd, FBIOGET_VSCREENINFO, &var) < 0) {
+		fprintf(stderr, "flipd: FBIOGET_VSCREENINFO: %s\n",
+			strerror(errno));
+		close(fd);
+		return 0;
+	}
+
+	lo = var.xres < var.yres ? var.xres : var.yres;
+	hi = var.xres < var.yres ? var.yres : var.xres;
+
+	var.xres = portrait ? lo : hi;
+	var.yres = portrait ? hi : lo;
+	var.xres_virtual = var.xres;
+	var.yres_virtual = var.yres;
+	var.xoffset = 0;
+	var.yoffset = 0;
+	var.activate = FB_ACTIVATE_NOW;
+
+	if (ioctl(fd, FBIOPUT_VSCREENINFO, &var) < 0) {
+		fprintf(stderr, "flipd: FBIOPUT_VSCREENINFO %ux%u: %s\n",
+			var.xres, var.yres, strerror(errno));
+		close(fd);
+		return 0;
+	}
+	close(fd);
+	say("flipd: console framebuffer -> %ux%u\n", var.xres, var.yres);
+	return 1;
 }
 
 static void
 apply(int tablet)
 {
+	int want, have;
+
 	load_config();		/* pick up edits without a restart */
 
 	if (!cfg_enabled) {
@@ -273,11 +325,17 @@ apply(int tablet)
 	if (cfg_switch_invert)
 		tablet = !tablet;
 
-	if (read_flip() == tablet)
-		return;		/* already there; do not disturb X */
+	want = tablet ? 1 : 0;	/* tablet posture == portrait */
+	have = read_portrait();
 
-	write_flip(tablet);
-	notify_x();
+	if (have == want) {
+		say("flipd: already %s\n", want ? "portrait" : "landscape");
+		return;
+	}
+
+	/* X first: if it is up, it owns the framebuffer geometry. */
+	if (!tell_x(want))
+		set_fb_orientation(want);
 }
 
 /*
@@ -365,9 +423,9 @@ main(int argc, char **argv)
 		return 1;
 	}
 
-	if (read_flip() < 0) {
-		fprintf(stderr, "flipd: %s missing -- no w100fb, or a kernel "
-			"without the flip attribute; giving up\n", FLIP_SYSFS);
+	if (read_portrait() < 0) {
+		fprintf(stderr, "flipd: cannot read %s geometry -- no "
+			"framebuffer; giving up\n", FB_DEV);
 		close(fd);
 		return 1;
 	}
