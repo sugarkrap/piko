@@ -117,6 +117,7 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/sdapps
 !rootfs/usr/sbin/bright
 !rootfs/usr/sbin/flip
+!rootfs/usr/sbin/settime
 !rootfs/usr/sbin/smfcommit
 !rootfs/usr/sbin/pkgadd
 !rootfs/usr/sbin/pkgdel
