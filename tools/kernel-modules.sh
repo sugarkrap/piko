@@ -11,7 +11,7 @@
 # Every path is relative to $KERNEL_DIR. AUDIO_MODULES paths have no
 # "kernel/" prefix (they're deployed flat, into a side directory
 # /lib/modules/$KVER/zaurus-audio/<basename>, not the real depmod tree);
-# WIFI_MODULES/SPI_MODULES/SD_MODULES paths keep a "kernel/" prefix even
+# WIFI_MODULES/SD_MODULES paths keep a "kernel/" prefix even
 # though it must be stripped to find the file under $KERNEL_DIR, because
 # that prefix is also the real /lib/modules/$KVER/... destination path, and
 # some of these live directly under drivers/ while others (net/wireless,
@@ -61,47 +61,14 @@ kernel/net/wireless/lib80211_crypt_tkip.ko
 kernel/lib/crypto/libarc4.ko
 "
 
-# SPI stack -- needed for the MAX1111 ADC (main battery voltage, see
-# sharpsl-pm's "Cannot read main battery!" warning) which hangs off corgi's
-# SPI1 bus (spi_board_info registered unconditionally in corgi.c, see
-# corgi_init_spi()). CONFIG_SPI_PXA2XX is a module (=m), and until it loads
-# and registers the SPI master, the max1111 device never probes, so
-# sharpsl_pm_pxa_read_max1111()/max1111_read_channel() always fails. These
-# modules were NEVER part of the original mtd3 rootfs build, so modprobe
-# can't find them via modules.dep (no entry exists) -- rcS loads them with
-# insmod + explicit path instead (see rootfs/etc/init.d/rcS).
-#
-# ORDER MATTERS: ssp.ko (drivers/soc/pxa/ssp.c) MUST be loaded before
-# spi-pxa2xx-platform.ko: it exports pxa_ssp_request()/pxa_ssp_free(),
-# which spi-pxa2xx-platform.ko needs at insmod time ("Unknown symbol
-# pxa_ssp_request/pxa_ssp_free" if missing) -- discovered 2026-07-26 after
-# the platform module loaded but the SPI bus/max1111 never registered.
-#
-# ads7846.ko (touchscreen) also hangs off this same SPI1 bus. It was
-# PREVIOUSLY built-in (CONFIG_TOUCHSCREEN_ADS7846=y) in whatever kernel is
-# currently running on-device, so it "just worked" with no explicit load
-# step -- but the current kernel.config-corgi-7.1.4 has it as =m, so a
-# rebuilt kernel produces a standalone ads7846.ko that NOTHING loaded
-# (found 2026-07-27, before it ever got deployed and silently broke the
-# touchscreen). Ship + load it explicitly here like the other SPI modules
-# rather than relying on it being built-in.
-#
-# evdev.ko/mousedev.ko are also =m (CONFIG_INPUT_EVDEV=m,
-# CONFIG_INPUT_MOUSEDEV=m) and NOT SPI devices themselves, but they're the
-# input-core handler modules that actually create /dev/input/eventN
-# (evdev) and /dev/input/mice (mousedev) once ads7846 registers its input
-# device -- without evdev.ko, ads7846 probes fine but no eventN node ever
-# appears, so anything reading raw evdev (e.g. handheldquake's vid_fb.c)
-# would silently see no touchscreen at all. Shipped in this same list for
-# convenience since they're needed by the same touchscreen bring-up.
-SPI_MODULES="
-kernel/drivers/soc/pxa/ssp.ko
-kernel/drivers/spi/spi-pxa2xx-core.ko
-kernel/drivers/spi/spi-pxa2xx-platform.ko
-kernel/drivers/input/touchscreen/ads7846.ko
-kernel/drivers/input/evdev.ko
-kernel/drivers/input/mousedev.ko
-"
+# NOTE: the SPI stack (ssp, spi-pxa2xx-core/platform), ads7846
+# (touchscreen), and evdev/mousedev used to ship here as SPI_MODULES --
+# they're all built into the kernel now (CONFIG_PXA_SSP/CONFIG_SPI_PXA2XX/
+# CONFIG_TOUCHSCREEN_ADS7846/CONFIG_INPUT_EVDEV/CONFIG_INPUT_MOUSEDEV=y),
+# for the same reason MMC was: this is board-soldered hardware that's
+# always present at boot and never unloaded, so there's nothing gained by
+# making it a separately-shipped, separately-insmod'd module, and every
+# device now probes during kernel init instead of racing rcS/mdev.
 
 # VFAT/NLS stack for SD cards. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA
 # are built into the kernel (not modules) specifically so the pxa2xx-mci

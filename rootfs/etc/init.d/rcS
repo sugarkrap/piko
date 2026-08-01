@@ -88,33 +88,19 @@ modprobe pxa2xx_base 2>/dev/null
 modprobe pxa2xx_sharpsl 2>/dev/null
 
 # --- SPI bus (MAX1111 main-battery ADC, ads7846 touchscreen, corgi-lcd) ---
-# corgi.c registers spi_board_info for these unconditionally at boot, but
-# they only actually probe once the SPI_PXA2XX master driver loads and
-# registers the bus. Without it, /sys/bus/spi/devices stays empty and
-# sharpsl-pm logs "Warning: Cannot read main battery!" forever. These
-# modules were never part of the original mtd3 rootfs build, so modules.dep
-# has no entry for them -- modprobe-by-name would fail with "not found".
-# insmod with the explicit path works regardless of modules.dep.
-# ssp.ko MUST load first: spi-pxa2xx-platform.ko needs its exported
-# pxa_ssp_request()/pxa_ssp_free() symbols (insmod fails with "unknown
-# symbol" otherwise -- discovered 2026-07-26, battery ADC silently never
-# came up even though the SPI modules themselves loaded without error).
+# corgi.c registers spi_board_info for these unconditionally at boot. The
+# SSP port driver, the SPI_PXA2XX master driver, the ads7846 touchscreen
+# driver, and the evdev/mousedev input-core handlers that turn its events
+# into /dev/input/eventN + /dev/input/mice are all built into the kernel
+# now (CONFIG_PXA_SSP/CONFIG_SPI_PXA2XX/CONFIG_TOUCHSCREEN_ADS7846/
+# CONFIG_INPUT_EVDEV/CONFIG_INPUT_MOUSEDEV=y), so the SPI bus is already
+# registered and the touchscreen already probed by the time this script
+# runs -- no insmod needed, and no window where /sys/bus/spi/devices is
+# empty (previously: sharpsl-pm logging "Warning: Cannot read main
+# battery!" until these were manually loaded, in dependency order --
+# ssp before spi-pxa2xx-platform -- since insmod does not resolve that
+# automatically the way built-in link order does).
 KVER="$(uname -r)"
-insmod "/lib/modules/$KVER/kernel/drivers/soc/pxa/ssp.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-core.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/spi/spi-pxa2xx-platform.ko" 2>/dev/null
-# ads7846 (touchscreen) is a module (CONFIG_TOUCHSCREEN_ADS7846=m) in the
-# current kernel config -- unlike max1111/corgi-lcd it is NOT built-in, so
-# it must be insmod'd explicitly once the SPI bus above is registered, or
-# the touchscreen silently has no driver at all (found 2026-07-27).
-insmod "/lib/modules/$KVER/kernel/drivers/input/touchscreen/ads7846.ko" 2>/dev/null
-# evdev/mousedev are the input-core handlers that create /dev/input/eventN
-# and /dev/input/mice respectively. Both are modules too
-# (CONFIG_INPUT_EVDEV=m, CONFIG_INPUT_MOUSEDEV=m) -- without evdev.ko in
-# particular, ads7846 registers its input device but no eventN node ever
-# appears, so the touchscreen is invisible to anything reading raw evdev.
-insmod "/lib/modules/$KVER/kernel/drivers/input/evdev.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/drivers/input/mousedev.ko" 2>/dev/null
 
 # --- MMC/SD + VFAT ---
 # MMC core/block and the pxamci host driver are built into the kernel
