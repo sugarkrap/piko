@@ -235,6 +235,27 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1c2. mhz (CPU speed / overclocking) ------------------------------------
+# Single-word name for the same reason as `bright` and `netinfo`: it is typed
+# on the device keyboard, which cannot produce '/' or ':' (AGENTS.md). Drives
+# the cpufreq sysfs and (re)loads pxa2xx-cpufreq at the requested ceiling --
+# see userspace/src/mhz.c and docs/HOWTO-OVERCLOCK.md. Same -static reasoning
+# as md5sum above; links nothing but libc.
+MHZ_SRC="$REPO/userspace/src/mhz.c"
+MHZ_BIN="$REPO/userspace/src/mhz"
+if [ -f "$MHZ_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$MHZ_BIN" ] || [ "$MHZ_SRC" -nt "$MHZ_BIN" ]; then
+        echo "==> building userspace/src/mhz"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$MHZ_BIN" "$MHZ_SRC"
+        "${CROSS_COMPILE}strip" "$MHZ_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/mhz already up to date"
+    fi
+else
+    echo "==> skipping mhz (no $MHZ_SRC)"
+fi
+
 # --- 1c-ter. pkillx (signal a process BY NAME) ------------------------------
 # The companion to kill above: kill needs a PID, and with no ps-parsing
 # tools on this busybox that is the hard part. pkillx walks /proc itself
@@ -289,7 +310,6 @@ for _clock_tool in hwclock ntpsync; do
     fi
 done
 unset _clock_tool
-
 # --- 1d. opkg (package manager) ---------------------------------------------
 # Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
 # in before they were added here: tools/build-opkg.sh existed and worked,

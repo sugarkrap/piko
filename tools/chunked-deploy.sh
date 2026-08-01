@@ -478,6 +478,17 @@ if [ -f "$REPO/userspace/src/brightd" ]; then
 else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
+
+# 6a2. CPU speed / overclocking: the "mhz" helper, single-word for the same
+# typing constraint as "bright" above. It reloads pxa2xx-cpufreq to change
+# the overclock ceiling, so it needs no daemon and nothing at boot -- the
+# board always comes up at the rated 398 MHz. See docs/HOWTO-OVERCLOCK.md.
+if [ -f "$REPO/userspace/src/mhz" ]; then
+    send_file "$REPO/userspace/src/mhz" "/usr/sbin/mhz"
+    ssh_do "chmod 0755 /usr/sbin/mhz"
+else
+    echo "==> skipping mhz (not built -- run tools/build-userspace.sh)"
+fi
 # power-management.cfg is APPLIANCE POLICY and is overwritten every deploy.
 #
 # It used to be sent only when absent, on the reasoning that a device-side
