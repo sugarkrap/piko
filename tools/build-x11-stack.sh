@@ -58,6 +58,14 @@ set -eu
 #                   autotools -- see build_one) and was simply never in
 #                   this list, so $D_CARD never existed and the payload
 #                   died on "missing component DESTDIR" every single run.
+#   mb-volume       same story, same shape -- own repo, own plain
+#                   Makefile, into $D_VOLUME. The one difference: it also
+#                   links libasound, statically, out of userspace/stage-alsa
+#                   -- a SEPARATE staging tree this script does not
+#                   populate (tools/build-alsa.sh does, for the
+#                   MPlayer/zplay audio stack). build_one's mb-volume case
+#                   checks for it explicitly rather than failing on a
+#                   confusing link error.
 #   st              tools/build-st.sh, at the end -- it is an X11 client
 #                   that links libX11/libXft out of the stage this script
 #                   populates, and the payload ships it.
@@ -105,6 +113,7 @@ D_DESKTOP="${D_DESKTOP:-/tmp/mb-stage-desktop}"
 D_PANEL="${D_PANEL:-/tmp/mb-stage-panel}"
 D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
+D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 
 FORCE=0
 SKIP_ST=0
@@ -129,7 +138,7 @@ FULL_BUILD=0
 [ -n "$PKGS" ] || PKGS="xorg-macros xtrans libfontenc libXfont xcb-proto \
 libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
-matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card"
+matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -262,6 +271,7 @@ destdir_for() {
     matchbox-panel)                  echo "$D_PANEL" ;;
     matchbox-common)                 echo "$D_COMMON" ;;
     mb-applet-card)                  echo "$D_CARD" ;;
+    mb-volume)                       echo "$D_VOLUME" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -295,6 +305,7 @@ marker_for() {
     matchbox-panel)           echo "$D_PANEL/usr/bin/matchbox-panel" ;;
     matchbox-common)          echo "$D_COMMON/usr/bin/matchbox-session" ;;
     mb-applet-card)           echo "$D_CARD/usr/bin/mb-applet-card" ;;
+    mb-volume)                echo "$D_VOLUME/usr/bin/mb-volume" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -308,14 +319,15 @@ submodule_dir_for() {
     esac
 }
 
-# uses_autotools NAME -- false only for mb-applet-card, which is one source
-# file against one pkg-config module and deliberately ships a plain Makefile
-# instead of autotools (its own Makefile says why). It has no configure and
-# no autogen.sh, so the generate-and-run-configure step below would fail on
-# it with a bare "no such file or directory".
+# uses_autotools NAME -- false only for mb-applet-card and mb-volume, both
+# one-or-two-source-file packages against a couple of pkg-config modules
+# that deliberately ship a plain Makefile instead of autotools (their own
+# Makefiles say why). Neither has a configure or an autogen.sh, so the
+# generate-and-run-configure step below would fail on them with a bare
+# "no such file or directory".
 uses_autotools() {
     case "$1" in
-    mb-applet-card) return 1 ;;
+    mb-applet-card|mb-volume) return 1 ;;
     *) return 0 ;;
     esac
 }
@@ -499,6 +511,22 @@ build_one() {
           [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
+      mb-volume)
+          # Same shape as mb-applet-card, plus one extra dependency: it
+          # links libasound out of userspace/stage-alsa, a staging tree
+          # THIS script does not populate -- tools/build-alsa.sh does, for
+          # the MPlayer/zplay audio stack (see the header comment). Check
+          # for it explicitly rather than let the link fail on a bare
+          # "-lasound: No such file or directory" with no hint why.
+          alsa_stage="$REPO/userspace/stage-alsa"
+          if [ ! -f "$alsa_stage/usr/lib/libasound.a" ]; then
+              echo "FAILED: alsa-lib not staged at $alsa_stage (no libasound.a)." >&2
+              echo "Run tools/build-alsa.sh first." >&2
+              exit 1
+          fi
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC" ALSA_STAGE="$alsa_stage"
+          ;;
       xserver)
           # CWARNFLAGS override: this 15-year-old codebase is full of
           # warnings modern GCC treats as errors by xserver's own default
@@ -597,5 +625,5 @@ fi
 echo ""
 echo "==> X11/Matchbox stack ready."
 echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/"
-echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD"
+echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME"
 echo "    Package into a payload with:    tools/build-matchbox-payload.sh"
