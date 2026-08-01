@@ -26,14 +26,69 @@ sees instead. See "The big one" below for why that was needed and how
 it works.
 
 Defaults: dim to level 5 after 60s idle, blank after 300s, restore on any
-key or touch. Closing the lid blanks immediately. Change them by editing
-the `brightd` line in `rootfs/etc/init.d/rcS` (`-d`, `-b`, `-l`, `-v`).
+key or touch. Closing the lid blanks immediately.
 
 **Watching a video?** `touch /tmp/brightd.inhibit` suspends dimming and
 blanking (hotkeys and the lid still work); delete it afterwards. MPlayer
 produces no input events, so without this the screen dims mid-film.
 
 To stop the daemon: `pkillx brightd`. There is no `kill` on this rootfs.
+
+## Configuration
+
+`/etc/zaurus/power-management.cfg`, if present, overrides the compiled
+defaults with plain `key=value` lines (same format as matchbox's
+`kbdconfig` — `#` for comments, no quoting):
+
+```
+dim_secs=60
+blank_secs=300
+dim_level=5
+suspend_on_lid=yes
+```
+
+A commented-out copy with the defaults spelled out ships at
+`rootfs/etc/zaurus/power-management.cfg`. `tools/chunked-deploy.sh` sends
+it **only if the device doesn't already have one** — same rule as
+`/etc/piko/touchscreen.cfg` — so a redeploy never clobbers something
+you've edited on the device.
+
+**No restart needed.** `brightd` stat()s the file every time through its
+main loop and reloads whenever the mtime changes — there is no reload
+signal, because this device's BusyBox has no `kill`/`killall`/`pkill` to
+send one with (see "No signal protocol" above). Save the file, wait a
+couple of seconds, done.
+
+`-d`/`-b`/`-l` passed on `brightd`'s command line (the line in
+`rootfs/etc/init.d/rcS`) always win over the config file, even across a
+reload — a manual `brightd -d 5` for testing is never silently
+overridden by whatever the file says. `suspend_on_lid` has no
+command-line equivalent; it's config-only.
+
+### `suspend_on_lid` — real system suspend, off by default
+
+Setting `suspend_on_lid=yes` makes closing the lid do an actual
+`echo mem > /sys/power/state`, not just blank the backlight. This board's
+`cpu_pm_fns.valid` is `suspend_valid_only_mem`
+(`modules/mach-pxa/pxa25x_patched.c`), so `mem` is the only state the
+kernel will accept — this isn't a guess.
+
+**The default is off, and that's deliberate, not caution theatre.** Per
+`AGENTS.md`, this project's board is the *last spare one*, with no serial
+console and no USB — the only way in is WiFi → SSH. A suspend that goes
+to sleep but doesn't come back is not a "power-cycle and try again"
+situation the way it would be on ordinary hardware: it's the one
+remote-access path gone, indefinitely, with nobody local to press
+anything.
+
+**Before setting this to `yes`**, confirm resume actually works, by hand,
+repeatedly, over SSH:
+
+```
+echo mem > /sys/power/state
+```
+
+Only flip it on once that has come back reliably every time.
 
 ## The two traps
 
@@ -137,6 +192,8 @@ byte per message:
 | `a` | input activity (any key or touch). Rate-limit it; this is a wake-up, not an event log. |
 | `u` | brightness up (Fn+4) |
 | `d` | brightness down (Fn+3) |
+| `s` | screen saver ON — sent by `fbdevDPMS()`, see "Wiring X11 DPMS" below. Not activity. |
+| `w` | screen saver OFF — same sender. Counts as activity. |
 
 Unknown bytes are ignored rather than guessed at, so the protocol can
 grow without breaking an older daemon.
@@ -186,6 +243,44 @@ Two bugs only showed up at this stage, both fixed in the same commit:
 Removing the grab instead is the other obvious option and is deliberately
 **not** taken: the grab is what stops keystrokes reaching the kernel VT
 layer underneath X, and this keymap has `KEY_SYSRQ` on it.
+
+## Wiring X11 DPMS through brightd
+
+The end goal past this point is real screensaver *content* (animated
+hacks, not just a blanked panel) — which means an X client using the
+core screensaver machinery, and that machinery has to actually do
+something first. Before this, it didn't: `hw/kdrive/fbdev/fbdev.c`'s
+`fbdevDPMS()` called `FBIOPUT_POWERMODE`/`FBIOBLANK`, which reach
+`w100fb_blank()` (`modules/w100/w100fb.c`) — and that function
+deliberately only tracks a `blanked` flag and skips the real
+`corgi_lcd` suspend/resume, because those SPI calls stall the W100 bus
+when triggered from this path (the same freeze this project already
+routes around elsewhere). So `xset dpms force off`, or X's own
+`-b`-style idle timeout if one were ever configured, would report
+success and change nothing on the panel — worse than doing nothing,
+because `KdSaveScreen` returning `TRUE` also means the DIX screensaver
+core never falls back to painting anything of its own either.
+
+`fbdevDPMS()` now sends `s` / `w` on `brightd`'s FIFO instead (its own
+writer fd — DPMS transitions are unrelated to the input stream and rare,
+so it does not share `evdev.c`'s connection). `brightd` remains the
+single owner of `bl_power`; X only asks. `s` reuses the same `go_blank()`
+the idle timer and lid switch already use, and `w` reuses `go_active()`,
+so a DPMS-driven blank restores to the level the user had, exactly like
+every other path in.
+
+This makes DPMS a real, working backend rather than a silent no-op, which
+is the prerequisite for anything built on top of it later (a screensaver
+client via the `MIT-SCREEN-SAVER` extension, `xset s <timeout>` once
+`xset` is actually built, etc.) — none of that existed as of this
+writing. `brightd`'s own evdev-driven idle detection is unchanged and
+still the primary path; this only makes the X-side entry point that used
+to be a dead end actually reach the panel.
+
+**Not yet verified on hardware** — implemented and reasoned through
+against the same `bl_power` mechanism the rest of this document already
+proved out, but the DPMS call path itself (`xset dpms force off/on`
+against the patched server) has not been run on the device yet.
 
 ## Why the hotkeys are not matchbox keybindings
 

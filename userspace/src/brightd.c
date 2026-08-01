@@ -1,12 +1,15 @@
 /*
  * brightd -- backlight policy daemon for the Sharp Zaurus C7x0 (corgi).
  *
- * Does three things, all of them by watching the evdev nodes directly:
+ * Does four things, all of them by watching the evdev nodes directly:
  *
  *   1. Fn+3 / Fn+4 step the backlight down / up.
  *   2. After an idle period the backlight dims, then blanks; any key or
  *      touch restores it.
  *   3. Closing the lid blanks immediately; opening it restores.
+ *   4. Optionally (suspend_on_lid=yes, off by default), closing the lid
+ *      also suspends the whole system, not just the backlight. See
+ *      SUSPEND ON LID below before turning this on.
  *
  * WHY NOT X
  * ---------
@@ -57,6 +60,45 @@
  * not driven by signals: to suppress dimming temporarily (video playback,
  * which produces no input events for minutes at a time) create the
  * inhibit file instead; see INHIBIT below.
+ *
+ * CONFIGURATION
+ * -------------
+ * /etc/zaurus/power-management.cfg, if present, overrides the DEF_*
+ * defaults below with "key=value" lines -- same format matchbox's
+ * kbdconfig uses (matchbox-window-manager/src/keys.c). Lines starting
+ * with '#' are comments; there is no quoting, escaping, or trailing-
+ * comment support, so keep it to bare key=value per line. Recognised
+ * keys: dim_secs, blank_secs, dim_level, suspend_on_lid.
+ *
+ * Reloaded automatically: the file's mtime is checked once per main-loop
+ * iteration (see load_config()), so a saved edit takes effect within
+ * TICK_SECS with no signal needed -- convenient, since NO SIGNAL PROTOCOL
+ * above means there would be no way to ask for a reload otherwise.
+ * Deleting the file does NOT revert to compiled defaults; whatever was
+ * last loaded stays in effect, since a missing file is not a clear signal
+ * of intent to reset (could just as easily be a botched edit mid-save).
+ *
+ * -d/-b/-l on the command line always win over the config file, even
+ * across a reload -- see dim_secs_cli et al. below -- so a manual test
+ * ("brightd -d 5" while debugging) is never silently overridden by
+ * whatever the file says. suspend_on_lid has no command-line equivalent;
+ * it is config-only, for the reason in SUSPEND ON LID below.
+ *
+ * SUSPEND ON LID (opt-in, default off)
+ * -------------------------------------
+ * suspend_on_lid=yes makes closing the lid do a real system suspend
+ * (echo mem > /sys/power/state), not just blank the backlight. "mem"
+ * specifically: this board's cpu_pm_fns.valid is suspend_valid_only_mem
+ * (modules/mach-pxa/pxa25x_patched.c), the only state the kernel accepts.
+ *
+ * Default OFF is deliberate, not timid. Per AGENTS.md this project's
+ * board is the LAST SPARE ONE, with no serial console and no USB -- the
+ * only way in is WiFi -> SSH. A suspend that goes to sleep but never
+ * wakes (a bad resume path, a wedged driver) is not a "power-cycle and
+ * try again" problem the way it would be on ordinary hardware: it is the
+ * one remote-access path gone, indefinitely, with nobody local to press
+ * anything. Confirm `echo mem > /sys/power/state` resumes reliably by
+ * hand over SSH, repeatedly, before ever setting suspend_on_lid=yes.
  */
 
 #include <errno.h>
@@ -85,6 +127,9 @@
  */
 #define INHIBIT    "/tmp/brightd.inhibit"
 
+/* See CONFIGURATION above. */
+#define CONFIG_PATH "/etc/zaurus/power-management.cfg"
+
 /*
  * Event channel from the X server.
  *
@@ -102,6 +147,15 @@
  *        this is a wake-up, not an event log.
  *   'u'  brightness up   (Fn+4)
  *   'd'  brightness down (Fn+3)
+ *   's'  screen saver ON.  X's own DPMS/screensaver core wants the panel
+ *        blanked -- sent by fbdevDPMS() (hw/kdrive/fbdev/fbdev.c), on a
+ *        writer fd of its own, since real hardware blanking on this board
+ *        stops at bl_power and brightd is the only thing that touches it.
+ *        Must NOT count as activity, or go_blank() would be immediately
+ *        undone by the activity handling below.
+ *   'w'  screen saver OFF. Counts as activity: X only sends this because
+ *        something legitimate happened (DPMSForceLevel, XSetScreenSaver
+ *        reset, a future screensaver client, ...), same as 'u'/'d'.
  *
  * The heartbeat is what makes the grab survivable. Without it we cannot
  * tell "X is grabbing input and forwarding it, and the user really is
@@ -137,6 +191,16 @@ static int dim_secs   = DEF_DIM_SECS;
 static int blank_secs = DEF_BLANK_SECS;
 static int dim_level  = DEF_DIM_LEVEL;
 static int verbose    = 0;
+static int suspend_on_lid = 0;
+
+/* Set when the corresponding value came from the command line, so a
+ * config (re)load never clobbers an explicit manual override. */
+static int dim_secs_cli = 0, blank_secs_cli = 0, dim_level_cli = 0;
+
+/* mtime of CONFIG_PATH as of the last successful load. 0 means "never
+ * loaded" -- distinct from a real mtime of 0, which cannot happen on a
+ * device whose clock is always well past 1970. */
+static time_t cfg_mtime = 0;
 
 /* Backlight state machine. */
 enum { ST_ACTIVE, ST_DIMMED, ST_BLANKED };
@@ -154,6 +218,10 @@ static time_t last_probe = 0;
 /* When we last heard a heartbeat on FIFO_PATH. 0 means never. */
 static time_t last_heartbeat = 0;
 
+/* When the last input activity was seen. File-scope (not a main() local)
+ * because do_suspend() needs to reset it after a resume. */
+static time_t last_activity = 0;
+
 static void
 usage(void)
 {
@@ -165,6 +233,10 @@ usage(void)
 	puts("");
 	puts("Fn+3 / Fn+4 step brightness. Closing the lid blanks.");
 	puts("Create /tmp/brightd.inhibit to suspend dimming (e.g. video).");
+	puts("");
+	puts("/etc/zaurus/power-management.cfg overrides dim_secs/blank_secs/");
+	puts("dim_level above and adds suspend_on_lid=yes; re-read live on change.");
+	puts("-d/-b/-l here always win over the config file.");
 }
 
 static int
@@ -277,6 +349,66 @@ say(const char *msg)
 	}
 }
 
+/*
+ * See CONFIGURATION in the file header. Safe to call every main-loop
+ * iteration: a stat() against an unchanged mtime is the only cost when
+ * nothing has changed, and this daemon has no other way to be told to
+ * reload (NO SIGNAL PROTOCOL above).
+ */
+static void
+load_config(void)
+{
+	struct stat st;
+	FILE *f;
+	char line[256];
+
+	if (stat(CONFIG_PATH, &st) < 0)
+		return;		/* no file: keep whatever is already in effect */
+	if (cfg_mtime && st.st_mtime == cfg_mtime)
+		return;		/* unchanged since last load */
+
+	f = fopen(CONFIG_PATH, "r");
+	if (!f)
+		return;
+
+	while (fgets(line, sizeof(line), f)) {
+		char *nl, *eq, *key, *val;
+
+		if (line[0] == '#' || line[0] == '\n')
+			continue;
+
+		nl = strchr(line, '\n');
+		if (nl)
+			*nl = '\0';
+
+		eq = strchr(line, '=');
+		if (!eq)
+			continue;
+		*eq = '\0';
+		key = line;
+		val = eq + 1;
+
+		if (!strcmp(key, "dim_secs")) {
+			if (!dim_secs_cli)
+				dim_secs = atoi(val);
+		} else if (!strcmp(key, "blank_secs")) {
+			if (!blank_secs_cli)
+				blank_secs = atoi(val);
+		} else if (!strcmp(key, "dim_level")) {
+			if (!dim_level_cli)
+				dim_level = atoi(val);
+		} else if (!strcmp(key, "suspend_on_lid")) {
+			suspend_on_lid = !strcmp(val, "yes") || !strcmp(val, "1");
+		}
+		/* Unrecognised keys are ignored rather than rejected, so the
+		 * file can grow without an old brightd refusing to start. */
+	}
+	fclose(f);
+
+	cfg_mtime = st.st_mtime;
+	say("brightd: loaded " CONFIG_PATH);
+}
+
 static void
 go_dim(void)
 {
@@ -336,6 +468,38 @@ go_active(void)
 	saved_level = -1;
 	state = ST_ACTIVE;
 	say("brightd: active");
+}
+
+/*
+ * See SUSPEND ON LID in the file header. Only called when
+ * suspend_on_lid=yes, from the lid-close edge.
+ *
+ * Blocks for the duration of the sleep -- the CPU is off, so there is
+ * nothing else this process could usefully be doing meanwhile. Whatever
+ * eventually wakes the board is handled by the normal event loop once
+ * this write returns; go_active() here just guarantees the backlight
+ * itself comes back rather than staying at whatever bl_power/brightness
+ * state the kernel happened to resume into.
+ */
+static void
+do_suspend(void)
+{
+	int fd = open("/sys/power/state", O_WRONLY);
+
+	if (fd < 0) {
+		fprintf(stderr, "brightd: cannot open /sys/power/state: %s\n",
+			strerror(errno));
+		return;
+	}
+
+	say("brightd: suspending (echo mem > /sys/power/state)");
+	if (write(fd, "mem", 3) != 3)
+		fprintf(stderr, "brightd: suspend failed: %s\n", strerror(errno));
+	close(fd);
+
+	say("brightd: resumed");
+	go_active();
+	last_activity = now_mono();
 }
 
 /*
@@ -418,17 +582,19 @@ main(int argc, char **argv)
 	int fd_fifo, fd_fifo_w = -1;
 	int fn_held = 0;
 	int lid_closed = 0;
-	time_t last_activity;
 	int i;
 
 	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-d") && i + 1 < argc)
+		if (!strcmp(argv[i], "-d") && i + 1 < argc) {
 			dim_secs = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-b") && i + 1 < argc)
+			dim_secs_cli = 1;
+		} else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
 			blank_secs = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-l") && i + 1 < argc)
+			blank_secs_cli = 1;
+		} else if (!strcmp(argv[i], "-l") && i + 1 < argc) {
 			dim_level = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-v"))
+			dim_level_cli = 1;
+		} else if (!strcmp(argv[i], "-v"))
 			verbose = 1;
 		else {
 			usage();
@@ -459,6 +625,8 @@ main(int argc, char **argv)
 	 * back to the console-only behaviour. */
 	fd_fifo = open_fifo(&fd_fifo_w);
 
+	load_config();
+
 	last_activity = now_mono();
 
 	for (;;) {
@@ -466,6 +634,8 @@ main(int argc, char **argv)
 		fd_set rfds;
 		int activity = 0;
 		int ready;
+
+		load_config();
 
 		FD_ZERO(&rfds);
 		maxfd = -1;
@@ -505,6 +675,8 @@ main(int argc, char **argv)
 						lid_closed = ev.value ? 1 : 0;
 						if (lid_closed) {
 							go_blank();
+							if (suspend_on_lid)
+								do_suspend();
 						} else {
 							go_active();
 							last_activity = now_mono();
@@ -569,6 +741,16 @@ main(int argc, char **argv)
 						case 'd':
 							go_active();
 							run_bright(buf[k] == 'u' ? "up" : "down");
+							activity = 1;
+							break;
+						case 's':
+							/* Not activity -- see the
+							 * protocol comment above. */
+							if (state != ST_BLANKED)
+								go_blank();
+							break;
+						case 'w':
+							go_active();
 							activity = 1;
 							break;
 						default:
