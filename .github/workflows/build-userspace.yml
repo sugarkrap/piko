@@ -20,9 +20,9 @@ name: Build userspace (ALSA, SDL, pikalibrate)
 # unrelated to the touchscreen calibration work this job exists to
 # compile-check. Drop the flag if MPlayer coverage is ever wanted here.
 #
-# st and FLTK are skipped automatically (not an error) by
-# tools/build-userspace.sh itself: both need userspace/stage-target (the
-# X11/Matchbox sysroot), which this job does not build.
+# st, FLTK and toasters are skipped automatically (not an error) by
+# tools/build-userspace.sh itself: all three need userspace/stage-target
+# (the X11/Matchbox sysroot), which this job does not build.
 
 on:
   workflow_dispatch: {}

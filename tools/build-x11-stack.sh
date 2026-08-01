@@ -569,6 +569,17 @@ if [ "$FULL_BUILD" -eq 1 ]; then
     [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
     # shellcheck disable=SC2086
     sh "$REPO/tools/build-fltk.sh" $FORCE_ARG
+
+    # The flying-toasters screensaver brightd launches on its idle timer.
+    # Same shape as st: one Xlib client against this stage, shipped in the
+    # payload, so it belongs to the same "build what the payload needs"
+    # rule rather than being each caller's job to remember.
+    echo ""
+    echo "==> building the toasters screensaver (tools/build-toasters.sh)"
+    FORCE_ARG=""
+    [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
+    # shellcheck disable=SC2086
+    sh "$REPO/tools/build-toasters.sh" $FORCE_ARG
 fi
 
 echo ""

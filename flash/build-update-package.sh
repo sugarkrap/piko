@@ -13,8 +13,8 @@ set -eu
 #     there is what gets shipped, so this can't drift from a hand-picked
 #     file list the way two independent lists would)
 #   - the X11/Matchbox desktop (libX11/libXft/fontconfig/freetype, the
-#     four Matchbox apps, st) -- only if tools/build-x11-stack.sh's own
-#     prerequisites (a separate uclibc-for-X11 toolchain, third-party
+#     four Matchbox apps, st, toasters) -- only if tools/build-x11-stack.sh's
+#     own prerequisites (a separate uclibc-for-X11 toolchain, third-party
 #     deps) are available locally; see "X11/Matchbox desktop" below
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
 #     and usr/sbin/piko-smf-write, the NAND writer it drives
@@ -49,8 +49,9 @@ set -eu
 # which mode it ran in.
 #
 # X11/Matchbox desktop: folded in via tools/build-x11-stack.sh +
-# tools/build-st.sh + tools/build-matchbox-payload.sh (same idempotent
-# build tools tools/build-and-deploy.sh uses for the live path), then every
+# tools/build-st.sh + tools/build-toasters.sh + tools/build-matchbox-
+# payload.sh (same idempotent build tools tools/build-and-deploy.sh uses
+# for the live path), then every
 # file in the resulting payload is added to MANIFEST individually --
 # regular files via manifest_add, symlinks (shared-library SONAME aliases)
 # via manifest_add_symlink, matching the SYMLINK line format
@@ -261,11 +262,12 @@ fi
 #
 # tools/build-x11-stack.sh is idempotent (skips anything already
 # built/staged), so calling it unconditionally is cheap once the stack
-# exists. It builds st and FLTK at its end too, which is why there is no
-# separate tools/build-st.sh call here any more: this script used to make
-# one and still had no FLTK, so tools/build-matchbox-payload.sh below died
-# on the missing fltktest/matchbox-fbrun. Everything the payload needs is
-# now one script's job -- see that script's header.
+# exists. It builds st, FLTK and toasters at its end too, which is why
+# there are no separate build-st.sh/build-toasters.sh calls here any more:
+# this script used to make one and still had no FLTK, so
+# tools/build-matchbox-payload.sh below died on the missing
+# fltktest/matchbox-fbrun. Everything the payload needs is now one
+# script's job -- see that script's header.
 #
 # Not fatal if it fails or its prerequisites (the separate uclibc-for-X11
 # toolchain, third-party deps) aren't provisioned -- same "still produces a

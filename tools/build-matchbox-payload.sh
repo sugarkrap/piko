@@ -96,6 +96,9 @@ XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
+# The flying-toasters idle screensaver brightd launches -- see brightd.c's
+# "SCREENSAVER CONTENT" header comment. Built by tools/build-toasters.sh.
+TOASTERS_BIN="${TOASTERS_BIN:-$REPO/userspace/src/toasters}"
 # fltktest is the FLTK equivalent of sdltest: proof on real hardware that
 # the shared libfltk we just shipped loads and can draw. tools/build-fltk.sh
 # puts it in the staging tree's own bindir rather than a component DESTDIR.
@@ -162,6 +165,7 @@ mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin" "$PAYLOAD/usr/sbin"
 BINS="$XSERVER_BIN:usr/local/bin/Xfbdev \
 $XKBCOMP_BIN:usr/bin/xkbcomp \
 $XEV_BIN:usr/local/bin/xev \
+$TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
@@ -269,6 +273,13 @@ if [ "$SKIP_ST" -eq 0 ]; then
 else
     echo "    --skip-st: leaving out xev.desktop too (its Exec runs st)"
 fi
+
+# toasters' menu launcher + icon, also Categories=System. Like xev the
+# binary ships from this payload (see TOASTERS_BIN above); the launcher is
+# a manual preview -- brightd is what normally runs it, on the idle timer
+# described in its "SCREENSAVER CONTENT" header comment.
+cp "$REPO/userspace/desktop/toasters.desktop" "$PAYLOAD/usr/share/applications/toasters.desktop"
+cp "$REPO/userspace/desktop/toasters.png" "$PAYLOAD/usr/share/pixmaps/toasters.png"
 
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths

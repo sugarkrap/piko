@@ -811,7 +811,7 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
     # read out of ps with the shell; `kill` is our own static one from
     # userspace/src/kill.c, since this busybox has no kill applet either.
     echo "==> stopping any running graphical session"
-    ssh_do "for p in \$(ps | grep -E 'matchbox|xev' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
+    ssh_do "for p in \$(ps | grep -E 'matchbox|xev|toasters' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "for p in \$(ps | grep Xfbdev | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "/usr/local/bin/untar /tmp/x11-payload.tar / && rm -f /tmp/x11-payload.tar"
     echo "==> X11/Matchbox stack unpacked"
