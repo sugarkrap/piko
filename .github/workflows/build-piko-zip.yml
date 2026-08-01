@@ -104,7 +104,10 @@ on:
       - "tools/build-thirdparty-deps.sh"
       - "tools/setup-x11-src.sh"
       - "tools/build-x11-stack.sh"
+      - "tools/build-fltk.sh"
       - "tools/build-matchbox-payload.sh"
+      # matchbox-fbrun is built by build-fltk.sh and shipped in the payload.
+      - "userspace/src/**"
       - "modules/x11/**"
       - ".gitmodules"
       - ".github/workflows/build-piko-zip.yml"

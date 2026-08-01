@@ -82,7 +82,12 @@ on:
       - "tools/build-x11-stack.sh"
       - "tools/build-st.sh"
       - "tools/build-libiw.sh"
+      - "tools/build-fltk.sh"
       - "tools/build-matchbox-payload.sh"
+      # matchbox-fbrun lives under userspace/src and is built by
+      # build-fltk.sh, so a change to it has to rebuild the payload that
+      # ships it -- otherwise the update package keeps the stale binary.
+      - "userspace/src/**"
       - "flash/qemu-smoke-test.sh"
       - "modules/**"
       - "modules/x11/**"

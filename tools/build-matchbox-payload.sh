@@ -89,6 +89,11 @@ ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
 # the shared libfltk we just shipped loads and can draw. tools/build-fltk.sh
 # puts it in the staging tree's own bindir rather than a component DESTDIR.
 FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
+# matchbox-fbrun hands the whole machine to a framebuffer application and
+# takes it back afterwards. It ships here rather than with the rootfs
+# because it is an FLTK client: it needs the libfltk and libstdc++ that this
+# payload carries, and would be a dangling binary without them.
+FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -139,12 +144,16 @@ done
 # Xfbdev goes to /usr/local/bin to match where it has always lived here;
 # xkbcomp must be on the default PATH because the server execs it by name,
 # and PATH on this device is only /usr/sbin:/usr/bin:/sbin:/bin.
-mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin"
+mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin" "$PAYLOAD/usr/sbin"
+# matchbox-fbrun goes to /usr/sbin, not /usr/local/bin: matchbox-desktop
+# execs it by name for any .desktop marked X-Piko-Heavy, and /usr/local/bin
+# is not on this device's PATH.
 for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
             "$XKBCOMP_BIN:usr/bin/xkbcomp" \
             "$XEV_BIN:usr/local/bin/xev" \
             "$ST_BIN:usr/local/bin/st" \
-            "$FLTKTEST_BIN:usr/local/bin/fltktest"; do
+            "$FLTKTEST_BIN:usr/local/bin/fltktest" \
+            "$FBRUN_BIN:usr/sbin/matchbox-fbrun"; do
     src="${spec%:*}"; dst="${spec##*:}"
     if [ ! -f "$src" ]; then
         echo "FAILED: missing $src -- build that component first" >&2
