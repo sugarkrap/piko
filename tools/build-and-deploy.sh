@@ -52,9 +52,11 @@ set -eu
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
-# --skip-st forwards --skip-st to tools/build-userspace.sh: build every
-# other userspace component as usual, but leave st out. Narrower than
-# --skip-userspace, and the reason it exists is that st is the one
+# --skip-st forwards --skip-st to tools/build-userspace.sh,
+# tools/build-x11-stack.sh AND tools/build-matchbox-payload.sh (all three
+# can build or demand st): build every other component as usual, but leave
+# st out, including out of the X11 payload and its desktop menu. Narrower
+# than --skip-userspace, and the reason it exists is that st is the one
 # component whose source is a submodule of an upstream that is not
 # GitHub (git.suckless.org) -- when that host is down or the submodule
 # was never initialized, userspace/src/st is an empty directory and
@@ -257,21 +259,47 @@ fi
 # yet (tools/build-thirdparty-deps.sh) should still be able to get a
 # kernel-only or X-less deploy out, which is a perfectly normal thing to
 # want. Use --skip-x11 to silence the attempt entirely.
+X11_PAYLOAD_TAR="${PAYLOAD_TAR:-/tmp/matchbox-payload.tar}"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
+    X11_ARGS=""
+    if [ "$SKIP_ST" -eq 1 ]; then
+        X11_ARGS="--skip-st"
+    fi
     echo "==> building the X11/Matchbox stack (tools/build-x11-stack.sh)..."
-    if ! sh "$REPO/tools/build-x11-stack.sh" > /tmp/x11-stack-build.log 2>&1; then
-        echo "==> X11 stack build FAILED -- deploying without an X11 payload" >&2
+    # Unquoted on purpose, same as USERSPACE_ARGS above: a quoted "" would
+    # be passed through as a literal empty argument and rejected.
+    # shellcheck disable=SC2086
+    if ! sh "$REPO/tools/build-x11-stack.sh" $X11_ARGS > /tmp/x11-stack-build.log 2>&1; then
+        echo "==> X11 stack build FAILED -- deploying without a FRESH X11 payload" >&2
         echo "    (see /tmp/x11-stack-build.log; pass --skip-x11 to silence)" >&2
         tail -3 /tmp/x11-stack-build.log >&2
+        warn_stale_payload=1
     else
         echo "==> repacking the X11/Matchbox payload..."
-        if sh "$REPO/tools/build-matchbox-payload.sh" > /tmp/x11-payload-build.log 2>&1; then
-            echo "==> X11 payload OK ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+        # shellcheck disable=SC2086
+        if sh "$REPO/tools/build-matchbox-payload.sh" $X11_ARGS > /tmp/x11-payload-build.log 2>&1; then
+            echo "==> X11 payload OK ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
         else
-            echo "==> X11 payload NOT built -- deploying without it" >&2
+            echo "==> X11 payload NOT built -- deploying without a fresh one" >&2
             echo "    (see /tmp/x11-payload-build.log; pass --skip-x11 to silence)" >&2
             tail -3 /tmp/x11-payload-build.log >&2
+            warn_stale_payload=1
         fi
+    fi
+    # chunked-deploy.sh section 8 ships whatever tar is at that path,
+    # without knowing whether this run produced it. So when this run did
+    # NOT, say so here rather than letting a "==> X11/Matchbox payload
+    # (N bytes)" line further down read as proof the desktop being deployed
+    # is the one just built. Not deleted: an older payload is still better
+    # than none on a machine where the X11 toolchain simply is not set up,
+    # and that call is the operator's to make, not this script's.
+    if [ "${warn_stale_payload:-0}" -eq 1 ] && [ -f "$X11_PAYLOAD_TAR" ]; then
+        echo "" >&2
+        echo "WARNING: $X11_PAYLOAD_TAR is left over from an EARLIER run and" >&2
+        echo "         will be deployed as-is. It does not necessarily match" >&2
+        echo "         the source tree you just built. Delete it to deploy no" >&2
+        echo "         desktop at all, or fix the failure above." >&2
+        echo "" >&2
     fi
 fi
 
@@ -284,8 +312,8 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     if [ -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
         echo "    zImage:      $KERNEL_DIR/arch/arm/boot/zImage ($(wc -c < "$KERNEL_DIR/arch/arm/boot/zImage") bytes)"
     fi
-    if [ -f /tmp/matchbox-payload.tar ]; then
-        echo "    X11 payload: /tmp/matchbox-payload.tar ($(wc -c < /tmp/matchbox-payload.tar) bytes)"
+    if [ -f "$X11_PAYLOAD_TAR" ]; then
+        echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
     echo ""
     echo "    Deploy it later with:  tools/chunked-deploy.sh [user@host]"
@@ -308,5 +336,10 @@ fi
 if [ "$SKIP_USERSPACE" -eq 1 ]; then
     set -- --no-userspace "$@"
 fi
-export REPO KERNEL_DIR
+# The two scripts spell the same file with different variable names --
+# PAYLOAD_TAR when producing it, X11_PAYLOAD when shipping it. Pin them
+# together so overriding the producer cannot leave chunked-deploy sending
+# whatever happens to be at the default path instead.
+X11_PAYLOAD="${X11_PAYLOAD:-$X11_PAYLOAD_TAR}"
+export REPO KERNEL_DIR X11_PAYLOAD
 exec "$REPO/tools/chunked-deploy.sh" "$@"

@@ -12,16 +12,25 @@ set -eu
 # Prerequisites -- this script only *collects*, it does not build:
 #   tools/build-thirdparty-deps.sh      zlib expat libpng freetype
 #                                       fontconfig + the DejaVu faces
-#   tools/setup-x11-src.sh              verify the X submodules are the forks
-#   tools/build-fltk.sh                 libfltk*.so.1.3 + fltktest, into the
-#                                       same staging tree
-#   then configure+make, per component, into the DESTDIRs listed below.
+#   tools/build-x11-stack.sh            everything else: the X.Org and
+#                                       Matchbox packages into the DESTDIRs
+#                                       listed below, and (at its end) st
+#                                       and FLTK -- libfltk*.so.1.3,
+#                                       fltktest, matchbox-fbrun -- into the
+#                                       staging tree. It also runs
+#                                       setup-x11-src.sh and build-libiw.sh,
+#                                       so those are not separate steps.
 # See docs/HOWTO-MATCHBOX-DESKTOP.md for the per-component configure
 # lines, which are NOT all obvious (matchbox-desktop in particular needs
 # --sysconfdir=/etc and a forced -DUSE_XSETTINGS).
 #
 # Usage:
-#   tools/build-matchbox-payload.sh [--deploy [user@host]] [--adapter IFACE]
+#   tools/build-matchbox-payload.sh [--skip-st] [--deploy [user@host]] [--adapter IFACE]
+#
+# --skip-st leaves st, its menu entry and its icon out of the payload
+# rather than failing on the missing binary. Pair it with the same flag to
+# tools/build-x11-stack.sh; that script's header explains when st is
+# unbuildable and why that should not cost you the rest of the desktop.
 #
 # Without --deploy it just writes the tar and stops, so you can inspect it.
 # tools/chunked-deploy.sh (section 9) also ships this same tar, chunked and
@@ -52,12 +61,14 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 DEPLOY=0
 TARGET=""
 ADAPTER=""
+SKIP_ST=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --deploy)  DEPLOY=1; shift
                    case "${1:-}" in -*|"") ;; *) TARGET="$1"; shift ;; esac ;;
         --adapter) ADAPTER="${2:?--adapter needs an interface}"; shift 2 ;;
-        -h|--help) sed -n '3,30p' "$0"; exit 0 ;;
+        --skip-st) SKIP_ST=1; shift ;;
+        -h|--help) sed -n '3,40p' "$0"; exit 0 ;;
         *) echo "FAILED: unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -148,15 +159,22 @@ mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin" "$PAYLOAD/usr/sbin"
 # matchbox-fbrun goes to /usr/sbin, not /usr/local/bin: matchbox-desktop
 # execs it by name for any .desktop marked X-Piko-Heavy, and /usr/local/bin
 # is not on this device's PATH.
-for spec in "$XSERVER_BIN:usr/local/bin/Xfbdev" \
-            "$XKBCOMP_BIN:usr/bin/xkbcomp" \
-            "$XEV_BIN:usr/local/bin/xev" \
-            "$ST_BIN:usr/local/bin/st" \
-            "$FLTKTEST_BIN:usr/local/bin/fltktest" \
-            "$FBRUN_BIN:usr/sbin/matchbox-fbrun"; do
+BINS="$XSERVER_BIN:usr/local/bin/Xfbdev \
+$XKBCOMP_BIN:usr/bin/xkbcomp \
+$XEV_BIN:usr/local/bin/xev \
+$FLTKTEST_BIN:usr/local/bin/fltktest \
+$FBRUN_BIN:usr/sbin/matchbox-fbrun"
+if [ "$SKIP_ST" -eq 0 ]; then
+    BINS="$BINS $ST_BIN:usr/local/bin/st"
+else
+    echo "    --skip-st: leaving st out of the payload"
+fi
+for spec in $BINS; do
     src="${spec%:*}"; dst="${spec##*:}"
     if [ ! -f "$src" ]; then
         echo "FAILED: missing $src -- build that component first" >&2
+        echo "tools/build-x11-stack.sh builds every one of these; if it ran" >&2
+        echo "and this is still missing, that is the bug, not your setup." >&2
         exit 1
     fi
     cp "$src" "$PAYLOAD/$dst"
@@ -218,9 +236,14 @@ done
 # st's menu launcher + icon. Categories=Development matches the vfolder
 # whose displayed Name is "Programming" (data/vfolders-desktop/Development.directory
 # in matchbox-common), which is how it lands in that app-folder on the desktop.
+# Both are skipped along with the binary under --skip-st: a .desktop whose
+# Exec is not in the image is a menu entry that does nothing when tapped,
+# which is worse than no entry.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
-cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
+if [ "$SKIP_ST" -eq 0 ]; then
+    cp "$REPO/userspace/desktop/st.desktop" "$PAYLOAD/usr/share/applications/st.desktop"
+    cp "$REPO/userspace/desktop/st.png" "$PAYLOAD/usr/share/pixmaps/st.png"
+fi
 
 # pikalibrate's menu launcher + icon (Categories=System, alongside the
 # vfolder named "System Tools"). The binary itself ships separately, via
@@ -234,8 +257,18 @@ cp "$REPO/userspace/desktop/pikalibrate.png" "$PAYLOAD/usr/share/pixmaps/pikalib
 # xev's menu launcher + icon, also Categories=System. Unlike pikalibrate
 # the binary does ship from this payload (see XEV_BIN above) -- it is part
 # of the X11 stack proper.
-cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
-cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
+#
+# Its Exec is "st -e xev" (xev writes to stdout and is useless without a
+# terminal -- see the .desktop's own comments), so under --skip-st this
+# entry is just as dead as st's own and goes with it. The xev BINARY still
+# ships: it is perfectly usable from a shell over SSH, which is the other
+# way anyone runs it.
+if [ "$SKIP_ST" -eq 0 ]; then
+    cp "$REPO/userspace/desktop/xev.desktop" "$PAYLOAD/usr/share/applications/xev.desktop"
+    cp "$REPO/userspace/desktop/xev.png" "$PAYLOAD/usr/share/pixmaps/xev.png"
+else
+    echo "    --skip-st: leaving out xev.desktop too (its Exec runs st)"
+fi
 
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths

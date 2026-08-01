@@ -51,12 +51,23 @@ As of 2026-07-31 this is automated end to end:
     tools/build-x11-stack.sh            # everything below, in order
 
 `tools/build-x11-stack.sh` runs `tools/setup-x11-src.sh`'s verification
-itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox
-and the four Matchbox apps, idempotently (skips anything already built --
-safe to re-run, and cheap once everything exists). It is wired into
-`tools/build-and-deploy.sh` (the live-SSH redeploy path) and
-`flash/build-mtd3-jffs2.sh` (the SD-card flash-image path), so under
-normal use nothing below needs to be run by hand at all.
+itself, then builds xtrans through xserver/xkbcomp/xev, then libmatchbox,
+the four Matchbox apps and `mb-applet-card`, and finally `st` and FLTK --
+idempotently (skips anything already built -- safe to re-run, and cheap
+once everything exists). It is wired into `tools/build-and-deploy.sh` (the
+live-SSH redeploy path) and `flash/build-mtd3-jffs2.sh` (the SD-card
+flash-image path), so under normal use nothing below needs to be run by
+hand at all.
+
+The rule that script follows, and the reason its list is longer than "the
+X.Org and Matchbox packages": **whatever
+`tools/build-matchbox-payload.sh` requires, `build-x11-stack.sh` builds.**
+Those two are only ever used together, and while each caller of the pair
+was responsible for the leftovers -- `mb-applet-card`, `st`, FLTK -- every
+caller forgot a different one, so packaging failed for all of them. `st`
+and FLTK are also built by `tools/build-userspace.sh`, which skips both
+when this stage is not populated yet; whichever of the two runs second
+finds them current and does nothing.
 
 **What follows is the reference this script was built from and is
 verified against** -- read it when a single component needs debugging,
@@ -69,13 +80,19 @@ not a reason to trust it over this.
     # then, in userspace/src/: libXrender, libXft, libmatchbox,
     # matchbox-window-manager, matchbox-desktop-classic,
     # matchbox-panel, matchbox-common
+    # then mb-applet-card -- plain `make` + `make install DESTDIR=`, no
+    # configure; see docs/HOWTO-MATCHBOX-PANEL-APPLETS.md
+    tools/build-st.sh                   # st -- needs libXft staged first
     tools/build-fltk.sh                 # FLTK 1.3, shared -- needs libXft
                                         # and libXrender staged first
 
-The last four are independent of each other once libmatchbox exists and
-*could* be built in parallel -- `tools/build-x11-stack.sh` builds them
-sequentially for determinism, but give each its own `DESTDIR` regardless,
-because they would otherwise race installing into one tree.
+The four Matchbox apps are independent of each other once libmatchbox
+exists and *could* be built in parallel -- `tools/build-x11-stack.sh`
+builds them sequentially for determinism, but give each its own `DESTDIR`
+regardless, because they would otherwise race installing into one tree.
+`mb-applet-card` needs libmatchbox too and gets its own `DESTDIR`
+(`D_CARD`) for the same reason; `st` and FLTK install into the shared
+staging tree rather than a `DESTDIR`, like the libraries do.
 
 One thing worth knowing if you ever touch the automation itself: X.Org's
 per-component `autogen.sh` scripts are not uniform. Roughly half honour
