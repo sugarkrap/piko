@@ -235,6 +235,61 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1c-ter. pkillx (signal a process BY NAME) ------------------------------
+# The companion to kill above: kill needs a PID, and with no ps-parsing
+# tools on this busybox that is the hard part. pkillx walks /proc itself
+# and matches on the process basename, which is what makes it usable from
+# a script that cannot know a PID in advance.
+#
+# It was in exactly the hole kill was: userspace/src/pkillx.c has been in
+# the tree since e348909 and three separate places already tell you to run
+# it -- rcS's comment ("Stop it with pkillx brightd"), docs/HOWTO-
+# BRIGHTNESS.md, docs/HOWTO-FLTK.md -- but nothing ever built it, so it
+# only existed on boards where it had been hand-fed a copy. It became load
+# bearing with /usr/sbin/gototty, whose entire body is "pkillx Xfbdev":
+# without this, the Go to TTY menu entry silently does nothing.
+#
+# Same -static reasoning as md5sum above.
+PKILLX_SRC="$REPO/userspace/src/pkillx.c"
+PKILLX_BIN="$REPO/userspace/src/pkillx"
+if [ -f "$PKILLX_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$PKILLX_BIN" ] || [ "$PKILLX_SRC" -nt "$PKILLX_BIN" ]; then
+        echo "==> building userspace/src/pkillx"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$PKILLX_BIN" "$PKILLX_SRC"
+        "${CROSS_COMPILE}strip" "$PKILLX_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/pkillx already up to date"
+    fi
+else
+    echo "==> skipping pkillx (no $PKILLX_SRC)"
+fi
+
+# --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
+# This busybox has no hwclock, no ntpd and no rdate applet, so with the
+# kernel RTC driver alone there was still no way to persist a time change
+# or to fetch an accurate one. Same -static reasoning as md5sum above.
+#
+# ntpsync execs /usr/sbin/hwclock to write the RTC, so the two ship together
+# or neither is much use -- built in one loop for exactly that reason.
+for _clock_tool in hwclock ntpsync; do
+    CLOCK_SRC="$REPO/userspace/src/$_clock_tool.c"
+    CLOCK_BIN="$REPO/userspace/src/$_clock_tool"
+    if [ -f "$CLOCK_SRC" ]; then
+        if [ "$FORCE" -eq 1 ] || [ ! -f "$CLOCK_BIN" ] || [ "$CLOCK_SRC" -nt "$CLOCK_BIN" ]; then
+            echo "==> building userspace/src/$_clock_tool"
+            "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+                -o "$CLOCK_BIN" "$CLOCK_SRC"
+            "${CROSS_COMPILE}strip" "$CLOCK_BIN" 2>/dev/null || true
+        else
+            echo "==> userspace/src/$_clock_tool already up to date"
+        fi
+    else
+        echo "==> skipping $_clock_tool (no $CLOCK_SRC)"
+    fi
+done
+unset _clock_tool
+
 # --- 1d. opkg (package manager) ---------------------------------------------
 # Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
 # in before they were added here: tools/build-opkg.sh existed and worked,

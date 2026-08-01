@@ -49,9 +49,10 @@ set -eu
 # which mode it ran in.
 #
 # X11/Matchbox desktop: folded in via tools/build-x11-stack.sh +
-# tools/build-st.sh + tools/build-toasters.sh + tools/build-matchbox-
-# payload.sh (same idempotent build tools tools/build-and-deploy.sh uses
-# for the live path), then every
+# tools/build-matchbox-payload.sh (same idempotent build tools
+# tools/build-and-deploy.sh uses for the live path -- build-x11-stack.sh
+# is what runs build-st.sh, build-fltk.sh and build-toasters.sh now, so
+# they are not separate calls here), then every
 # file in the resulting payload is added to MANIFEST individually --
 # regular files via manifest_add, symlinks (shared-library SONAME aliases)
 # via manifest_add_symlink, matching the SYMLINK line format
@@ -208,6 +209,15 @@ else
     echo "==> no $SSH_STAGE -- package will have no scp/sftp-server"
     echo "    (run tools/build-ssh.sh first if that is not intended)"
 fi
+# The ROM manifest is GENERATED per build, so it cannot live in rootfs/ the
+# way every other config file does -- a tracked copy would be stale the
+# moment it was committed. It is what pikostore's System Update tab reads
+# to name the running ROM, and what piko-update records in the update
+# history after installing this package.
+echo "==> generating ROM manifest (etc/zaurus/manifest)"
+"$REPO/tools/gen-rom-manifest.sh" "$STAGE/manifest"
+manifest_add "$STAGE/manifest" "etc/zaurus/manifest" 644
+sed -n '2p' "$STAGE/manifest" | sed 's/^/    /'
 
 if [ -d "$KERNEL_DIR" ]; then
     echo "==> KERNEL_DIR present ($KERNEL_DIR) -- including kernel + modules"
