@@ -184,6 +184,9 @@ userspace/src/md5sum
 # tracked source is brightd.c and tools/build-userspace.sh rebuilds it.
 userspace/src/brightd
 userspace/src/kill
+# toasters is an ARM target binary too, same rule -- tracked source is
+# toasters.c, tools/build-toasters.sh (via tools/build-userspace.sh) rebuilds it.
+userspace/src/toasters
 # xsha1-compat: sha1.c/sha1.h are tracked source, libmd.* + sha1.o are
 # build output from compiling them
 userspace/src/xsha1-compat/*.o

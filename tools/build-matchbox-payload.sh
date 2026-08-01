@@ -84,7 +84,9 @@ STRIP="$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip"
 #
 # Bare names here; the version suffix is discovered below, so a rebuilt
 # library cannot silently keep shipping the old one.
-LIBS="libX11 libXext libxcb libXau libXdmcp libz libexpat libpng16 \
+# libXpm is here for exactly one consumer, the toasters screensaver, which
+# decodes its vendored XPM sprite sheets with XpmCreateImageFromData().
+LIBS="libX11 libXext libXpm libxcb libXau libXdmcp libz libexpat libpng16 \
 libfreetype libfontconfig libXrender libXft libmb libpixman-1 libXfont \
 libfontenc libxkbfile libmd libfltk libfltk_images libfltk_forms"
 
@@ -96,6 +98,9 @@ XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
+# The flying-toasters idle screensaver brightd launches -- see brightd.c's
+# "SCREENSAVER CONTENT" header comment. Built by tools/build-toasters.sh.
+TOASTERS_BIN="${TOASTERS_BIN:-$REPO/userspace/src/toasters}"
 # fltktest is the FLTK equivalent of sdltest: proof on real hardware that
 # the shared libfltk we just shipped loads and can draw. tools/build-fltk.sh
 # puts it in the staging tree's own bindir rather than a component DESTDIR.
@@ -162,6 +167,7 @@ mkdir -p "$PAYLOAD/usr/local/bin" "$PAYLOAD/usr/bin" "$PAYLOAD/usr/sbin"
 BINS="$XSERVER_BIN:usr/local/bin/Xfbdev \
 $XKBCOMP_BIN:usr/bin/xkbcomp \
 $XEV_BIN:usr/local/bin/xev \
+$TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
@@ -198,6 +204,47 @@ mkdir -p "$PAYLOAD/usr/share/fonts/truetype/dejavu"
 cp "$STAGE"/usr/share/fonts/truetype/dejavu/*.ttf \
    "$PAYLOAD/usr/share/fonts/truetype/dejavu/"
 cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
+
+# Wallpaper. /usr/share/backgrounds is one of the two directories
+# mb-wallpaper-picker scans (the other is $HOME/.matchbox/backgrounds), so
+# an image here is what makes the picker show anything at all -- until now
+# it opened on an empty grid, because the whole wallpaper system shipped
+# without a single image to point it at.
+#
+# PNG, not JPEG, and that is not a preference: this build's libmb.so.1 is
+# linked against libpng16 only -- no libjpeg -- so a .jpg here would be
+# listed by the picker and then fail to decode. See "Wallpaper: modes,
+# formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
+#
+# FITTED, not cropped, and pre-rendered to exactly 640x480 -- the panel's
+# size -- with black bars where the aspect ratios disagree. Fitted rather
+# than filled so the whole picture is visible; with a landscape source on
+# this landscape panel the bars are 7px a side and it covers 97.7% of the
+# screen anyway.
+#
+# 640x480 LANDSCAPE. Getting this wrong is not subtle but it IS ambiguous
+# from the outside: /sys/class/graphics/fb0/modes says U:640x480p and the
+# stride is 1280 bytes (640px x 2), while the archived hardware notes call
+# the panel "physically portrait: 480x640 fb" -- both true, describing
+# different things. A 480x640 build of this file put 480x368 of picture in
+# the middle of the screen, 57.5% of it, and read on the device as "really
+# small". The composited cache is 480*640*2 == 640*480*2, so its size
+# cannot tell the two apart either. Trust fb0/modes.
+#
+# Because the file is already exactly screen-sized, the spec that goes with
+# it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
+# all: mbdesktop_view_init_bg() caches the composited result either way,
+# but this way even the first boot after a flash does no scaling on a
+# 400MHz part -- it is a straight blit.
+#
+# Regenerate with:
+#   magick <src> -resize 640x480 -background black -gravity center \
+#          -extent 640x480 -alpha off -strip -interlace none \
+#          -define png:exclude-chunk=all -define png:compression-level=9 \
+#          PNG24:piko-default.png
+mkdir -p "$PAYLOAD/usr/share/backgrounds"
+cp "$REPO/userspace/backgrounds/piko-default.png" \
+   "$PAYLOAD/usr/share/backgrounds/piko-default.png"
 
 # The session file decides which panel applets actually run. Without it
 # matchbox-session falls through to its built-in default, which starts
@@ -269,6 +316,13 @@ if [ "$SKIP_ST" -eq 0 ]; then
 else
     echo "    --skip-st: leaving out xev.desktop too (its Exec runs st)"
 fi
+
+# toasters' menu launcher + icon, also Categories=System. Like xev the
+# binary ships from this payload (see TOASTERS_BIN above); the launcher is
+# a manual preview -- brightd is what normally runs it, on the idle timer
+# described in its "SCREENSAVER CONTENT" header comment.
+cp "$REPO/userspace/desktop/toasters.desktop" "$PAYLOAD/usr/share/applications/toasters.desktop"
+cp "$REPO/userspace/desktop/toasters.png" "$PAYLOAD/usr/share/pixmaps/toasters.png"
 
 echo "==> pruning"
 # .la files are dead weight on flash AND leak absolute host build paths

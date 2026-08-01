@@ -68,6 +68,15 @@ set -eu
 #                                   anything cross-linking against FLTK
 #                                   later needs it on the same include/lib
 #                                   path as libX11.
+#   8. tools/build-toasters.sh      toasters (the flying-toasters idle
+#                                   screensaver, launched by brightd -- see
+#                                   its "SCREENSAVER CONTENT" header
+#                                   comment). Same "needs the X11 stack
+#                                   staged" situation as st, and skipped the
+#                                   same way when it isn't -- it is a single
+#                                   file with no Makefile of its own, so
+#                                   unlike st this is one gcc invocation
+#                                   rather than a `make`.
 #
 # NOT BUILT HERE: the X11/matchbox stack (userspace/src/libX11, xserver,
 # matchbox-window-manager, pixman, ...). tools/build-x11-stack.sh now
@@ -81,11 +90,12 @@ set -eu
 # Everything produced is a build artifact and is gitignored: the staging
 # trees (userspace/stage-alsa, stage-alsa-runtime, stage-mplayer,
 # stage-sdl, stage-sdl-runtime, stage-ssh), the vendored upstream source
-# trees under userspace/src/, userspace/src/md5sum, userspace/src/st/st, and everything
-# tools/build-fltk.sh installs into userspace/stage-target.
+# trees under userspace/src/, userspace/src/md5sum, userspace/src/st/st,
+# userspace/src/toasters, and everything tools/build-fltk.sh installs into
+# userspace/stage-target.
 #
 # Usage:
-#   tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk]
+#   tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk] [--skip-toasters]
 #
 # --force        rebuild every component from scratch (re-extract sources,
 #                reconfigure). Slow: MPlayer alone is a ~15 MiB static binary
@@ -100,6 +110,7 @@ set -eu
 # --skip-sdl     don't build SDL 1.2 / sdltest.
 # --skip-st      don't build st.
 # --skip-fltk    don't build FLTK / fltktest.
+# --skip-toasters don't build the toasters screensaver.
 #
 # Env overrides are passed straight through to the per-component scripts;
 # see those for the full list. The common ones:
@@ -121,22 +132,24 @@ SKIP_MPLAYER=0
 SKIP_SDL=0
 SKIP_ST=0
 SKIP_FLTK=0
+SKIP_TOASTERS=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --force)        FORCE=1;        shift ;;
-        --skip-ssh)     SKIP_SSH=1;     shift ;;
-        --skip-alsa)    SKIP_ALSA=1;    shift ;;
-        --skip-mplayer) SKIP_MPLAYER=1; shift ;;
-        --skip-sdl)     SKIP_SDL=1;     shift ;;
-        --skip-st)      SKIP_ST=1;      shift ;;
-        --skip-fltk)    SKIP_FLTK=1;    shift ;;
+        --force)          FORCE=1;          shift ;;
+        --skip-ssh)       SKIP_SSH=1;       shift ;;
+        --skip-alsa)      SKIP_ALSA=1;      shift ;;
+        --skip-mplayer)   SKIP_MPLAYER=1;   shift ;;
+        --skip-sdl)       SKIP_SDL=1;       shift ;;
+        --skip-st)        SKIP_ST=1;        shift ;;
+        --skip-fltk)      SKIP_FLTK=1;      shift ;;
+        --skip-toasters)  SKIP_TOASTERS=1;  shift ;;
         -h|--help)
             sed -n '3,101p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
             echo "tools/build-userspace.sh: unknown argument: $1" >&2
-            echo "Usage: tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk]" >&2
+            echo "Usage: tools/build-userspace.sh [--force] [--skip-ssh] [--skip-alsa] [--skip-mplayer] [--skip-sdl] [--skip-st] [--skip-fltk] [--skip-toasters]" >&2
             exit 1
             ;;
     esac
@@ -222,6 +235,29 @@ else
     echo "==> skipping kill (no $KILL_SRC)"
 fi
 
+# --- 1d. opkg (package manager) ---------------------------------------------
+# Exactly the same hole tools/build-toasters.sh and userspace/src/kill were
+# in before they were added here: tools/build-opkg.sh existed and worked,
+# tools/chunked-deploy.sh section 6d already deployed its output -- but
+# nothing ever CALLED it, so userspace/stage-target/usr/bin/opkg never
+# appeared, the deploy's `if [ -x ... ]` gate never fired, and every run
+# printed "no staged opkg -- skipping" as though that were a setting. The
+# package manager has simply never been on the device.
+#
+# Not gated behind a --skip flag: the build is a single static ~520KB
+# binary and the script skips itself once staged, so it costs nothing on
+# any subsequent run. Not fatal either -- it needs libarchive from
+# tools/build-thirdparty-deps.sh, and a machine without that staged should
+# still get the rest of userspace built rather than stopping here.
+if [ -x "$REPO/tools/build-opkg.sh" ]; then
+    echo "==> building opkg (tools/build-opkg.sh)"
+    if ! sh "$REPO/tools/build-opkg.sh" $FORCE_ARG; then
+        echo "==> opkg build FAILED -- continuing without a package manager" >&2
+        echo "    (it needs libarchive staged by tools/build-thirdparty-deps.sh;" >&2
+        echo "     re-run tools/build-opkg.sh directly to see the full output)" >&2
+    fi
+fi
+
 # --- 2. SSH file transfer (scp + sftp-server, and a reproducible dropbear) --
 # Deliberately early and unconditional: this is the transport everything
 # else in this list is delivered over (AGENTS.md -- no USB, no serial), so
@@ -283,6 +319,18 @@ else
     echo "==> --skip-fltk: not building FLTK"
 fi
 
+# --- 8. toasters (needs the X11 stack already staged -- see header) --------
+if [ "$SKIP_TOASTERS" -eq 0 ]; then
+    if [ -f "$REPO/userspace/stage-target/usr/include/X11/Xlib.h" ]; then
+        echo "==> building toasters"
+        sh "$REPO/tools/build-toasters.sh" $FORCE_ARG
+    else
+        echo "==> skipping toasters (userspace/stage-target has no X11 stack staged yet)"
+    fi
+else
+    echo "==> --skip-toasters: not building toasters"
+fi
+
 echo ""
 echo "==> userspace build complete"
 # Explicit ifs rather than `[ ... ] && echo`: a false test on the last such
@@ -314,6 +362,9 @@ if [ -f "$REPO/userspace/src/st/st" ]; then
 fi
 if [ -f "$REPO/userspace/stage-target/usr/lib/libfltk.so.1.3" ]; then
     echo "    fltk:    $REPO/userspace/stage-target/usr/lib/libfltk.so.1.3 ($(du -h "$REPO/userspace/stage-target/usr/lib/libfltk.so.1.3" 2>/dev/null | cut -f1))"
+fi
+if [ -f "$REPO/userspace/src/toasters" ]; then
+    echo "    toasters: $REPO/userspace/src/toasters ($(du -h "$REPO/userspace/src/toasters" 2>/dev/null | cut -f1))"
 fi
 echo ""
 echo "    Deploy with tools/build-and-deploy.sh (or tools/chunked-deploy.sh)."

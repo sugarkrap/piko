@@ -39,9 +39,9 @@ name: Build piko-update package
 # changed restores instantly instead of re-downloading from kernel.org.
 #
 # The package also carries the X11/Matchbox desktop (libX11/libXft/
-# fontconfig/freetype, the four Matchbox apps, st) via
-# tools/build-x11-stack.sh + tools/build-st.sh + tools/build-matchbox-
-# payload.sh -- see flash/build-update-package.sh's own header for how
+# fontconfig/freetype, the four Matchbox apps, st, toasters) via
+# tools/build-x11-stack.sh + tools/build-st.sh + tools/build-toasters.sh +
+# tools/build-matchbox-payload.sh -- see flash/build-update-package.sh's own header for how
 # that gets folded into MANIFEST. This needs a THIRD toolchain, entirely
 # separate from the gcc-arm-linux-gnueabi used for the kernel/piko-update
 # above: the X11 stack needs uClibc-ng, built by
@@ -81,6 +81,7 @@ on:
       - "tools/setup-x11-src.sh"
       - "tools/build-x11-stack.sh"
       - "tools/build-st.sh"
+      - "tools/build-toasters.sh"
       - "tools/build-libiw.sh"
       - "tools/build-fltk.sh"
       - "tools/build-matchbox-payload.sh"

@@ -1,13 +1,15 @@
 /*
  * brightd -- backlight policy daemon for the Sharp Zaurus C7x0 (corgi).
  *
- * Does four things, all of them by watching the evdev nodes directly:
+ * Does five things, all of them by watching the evdev nodes directly:
  *
  *   1. Fn+3 / Fn+4 step the backlight down / up.
  *   2. After an idle period the backlight dims, then blanks; any key or
  *      touch restores it.
- *   3. Closing the lid blanks immediately; opening it restores.
- *   4. Optionally (suspend_on_lid=yes, off by default), closing the lid
+ *   3. Between dim and blank, shows a screensaver (see SCREENSAVER CONTENT
+ *      below) so the panel is not just sitting dim before it goes dark.
+ *   4. Closing the lid blanks immediately; opening it restores.
+ *   5. Optionally (suspend_on_lid=yes, off by default), closing the lid
  *      also suspends the whole system, not just the backlight. See
  *      SUSPEND ON LID below before turning this on.
  *
@@ -68,7 +70,7 @@
  * kbdconfig uses (matchbox-window-manager/src/keys.c). Lines starting
  * with '#' are comments; there is no quoting, escaping, or trailing-
  * comment support, so keep it to bare key=value per line. Recognised
- * keys: dim_secs, blank_secs, dim_level, suspend_on_lid.
+ * keys: dim_secs, toast_secs, blank_secs, dim_level, suspend_on_lid.
  *
  * Reloaded automatically: the file's mtime is checked once per main-loop
  * iteration (see load_config()), so a saved edit takes effect within
@@ -99,6 +101,22 @@
  * one remote-access path gone, indefinitely, with nobody local to press
  * anything. Confirm `echo mem > /sys/power/state` resumes reliably by
  * hand over SSH, repeatedly, before ever setting suspend_on_lid=yes.
+ *
+ * SCREENSAVER CONTENT (toast_secs, default 120)
+ * ----------------------------------------------
+ * Between dim and blank, once idle >= toast_secs, brightd forks/execs
+ * /usr/local/bin/toasters (userspace/src/toasters.c -- a small Xlib
+ * "flying toasters" animation) so the panel shows something before it
+ * actually goes dark. Killed with SIGTERM the instant there is activity
+ * (go_active()) or it is time to really blank the backlight (go_blank()):
+ * this is content on top of the existing idle timer, not a new state to
+ * track, and brightd still does not link X (see WHY NOT X above) -- it
+ * only forks a binary and checks for /tmp/.X11-unix/X0 first, the same
+ * marker rootfs/etc/init.d/xsession itself waits on at startup.
+ *
+ * 0 disables it, same convention as dim_secs/blank_secs. Expected ordering
+ * is dim_secs <= toast_secs <= blank_secs, but nothing enforces that --
+ * set it outside that range and you get exactly what the numbers say.
  */
 
 #include <errno.h>
@@ -113,10 +131,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <linux/input.h>
 
 #define BL_DIR     "/sys/class/backlight/corgi_bl"
 #define BRIGHT_CMD "/usr/sbin/bright"
+#define TOASTERS_BIN "/usr/local/bin/toasters"
 
 /*
  * Presence of this file suspends dimming and blanking entirely (the
@@ -171,6 +191,7 @@
 
 /* Defaults, all overridable from the command line -- see usage(). */
 #define DEF_DIM_SECS    60
+#define DEF_TOAST_SECS  120
 #define DEF_BLANK_SECS  300
 #define DEF_DIM_LEVEL   5
 
@@ -188,6 +209,7 @@ static const char *dev_keys   = "/dev/input/event1";  /* matrix-keypad          
 static const char *dev_touch  = "/dev/input/event2";  /* ADS7846 touchscreen       */
 
 static int dim_secs   = DEF_DIM_SECS;
+static int toast_secs = DEF_TOAST_SECS;
 static int blank_secs = DEF_BLANK_SECS;
 static int dim_level  = DEF_DIM_LEVEL;
 static int verbose    = 0;
@@ -195,7 +217,12 @@ static int suspend_on_lid = 0;
 
 /* Set when the corresponding value came from the command line, so a
  * config (re)load never clobbers an explicit manual override. */
-static int dim_secs_cli = 0, blank_secs_cli = 0, dim_level_cli = 0;
+static int dim_secs_cli = 0, blank_secs_cli = 0, dim_level_cli = 0,
+	toast_secs_cli = 0;
+
+/* pid of a running userspace/src/toasters.c, or -1 if none. See
+ * start_toaster()/stop_toaster() and SCREENSAVER CONTENT above. */
+static pid_t toaster_pid = -1;
 
 /* mtime of CONFIG_PATH as of the last successful load. 0 means "never
  * loaded" -- distinct from a real mtime of 0, which cannot happen on a
@@ -227,6 +254,8 @@ usage(void)
 {
 	puts("brightd -- backlight policy daemon");
 	puts("  -d SECS   idle seconds before dimming   (0 disables, default 60)");
+	puts("  -t SECS   idle seconds before the toasters screensaver");
+	puts("                                           (0 disables, default 120)");
 	puts("  -b SECS   idle seconds before blanking  (0 disables, default 300)");
 	puts("  -l LEVEL  level to dim to               (default 5)");
 	puts("  -v        log transitions to stdout");
@@ -397,6 +426,9 @@ load_config(void)
 		} else if (!strcmp(key, "dim_level")) {
 			if (!dim_level_cli)
 				dim_level = atoi(val);
+		} else if (!strcmp(key, "toast_secs")) {
+			if (!toast_secs_cli)
+				toast_secs = atoi(val);
 		} else if (!strcmp(key, "suspend_on_lid")) {
 			suspend_on_lid = !strcmp(val, "yes") || !strcmp(val, "1");
 		}
@@ -407,6 +439,57 @@ load_config(void)
 
 	cfg_mtime = st.st_mtime;
 	say("brightd: loaded " CONFIG_PATH);
+}
+
+/*
+ * See SCREENSAVER CONTENT in the file header.
+ *
+ * Checks for the X socket rather than trying and swallowing a failure:
+ * toasters itself would just exit(1) with nothing to connect to, but
+ * that would mean forking a doomed child every TICK_SECS for as long as
+ * the machine sits idle at the console with no X running at all.
+ */
+static void
+start_toaster(void)
+{
+	struct stat st;
+
+	if (toaster_pid > 0)
+		return;
+	if (stat("/tmp/.X11-unix/X0", &st) < 0)
+		return;
+
+	toaster_pid = fork();
+	if (toaster_pid < 0) {
+		toaster_pid = -1;
+		return;
+	}
+	if (toaster_pid == 0) {
+		setenv("DISPLAY", ":0", 1);
+		execl(TOASTERS_BIN, "toasters", (char *)NULL);
+		_exit(127);
+	}
+	say("brightd: toasters started");
+}
+
+/*
+ * SIGTERM, not the FIFO/signal-free approach used everywhere else in this
+ * file: toasters is a child *this process* forked, so kill(2) here is a
+ * plain libc call, not the "no kill applet on this rootfs" problem NO
+ * SIGNAL PROTOCOL above is about -- that is about signalling some *other*
+ * process from the shell. Blocking on waitpid() is fine: an Xlib client
+ * gets no chance to ignore SIGTERM's default disposition, so this returns
+ * about as fast as the X server processes the connection closing.
+ */
+static void
+stop_toaster(void)
+{
+	if (toaster_pid <= 0)
+		return;
+	kill(toaster_pid, SIGTERM);
+	waitpid(toaster_pid, NULL, 0);
+	toaster_pid = -1;
+	say("brightd: toasters stopped");
 }
 
 static void
@@ -433,6 +516,8 @@ go_dim(void)
 static void
 go_blank(void)
 {
+	stop_toaster();
+
 	/* Only capture the level if we did not already do so on the way
 	 * through ST_DIMMED, otherwise we would save the dim level and
 	 * restore to that. */
@@ -456,6 +541,8 @@ go_blank(void)
 static void
 go_active(void)
 {
+	stop_toaster();
+
 	if (state == ST_ACTIVE)
 		return;
 
@@ -588,6 +675,9 @@ main(int argc, char **argv)
 		if (!strcmp(argv[i], "-d") && i + 1 < argc) {
 			dim_secs = atoi(argv[++i]);
 			dim_secs_cli = 1;
+		} else if (!strcmp(argv[i], "-t") && i + 1 < argc) {
+			toast_secs = atoi(argv[++i]);
+			toast_secs_cli = 1;
 		} else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
 			blank_secs = atoi(argv[++i]);
 			blank_secs_cli = 1;
@@ -831,6 +921,13 @@ main(int argc, char **argv)
 				if (state == ST_ACTIVE)
 					go_dim();
 			}
+
+			/* Independent of the state machine above (not a new
+			 * ST_* value): go_blank() already stops this on the
+			 * way to ST_BLANKED, and go_active() stops it on any
+			 * activity, so this only needs to start it. */
+			if (toast_secs > 0 && idle >= toast_secs)
+				start_toaster();
 		}
 	}
 

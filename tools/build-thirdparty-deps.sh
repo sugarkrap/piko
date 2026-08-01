@@ -54,7 +54,15 @@ for arg in "$@"; do
         *) PKGS="$PKGS $arg" ;;
     esac
 done
-[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig xkeyboard-config dejavu"
+# libarchive is in the DEFAULT set, not just available on request. It was
+# only ever built by naming it explicitly, which meant tools/build-opkg.sh
+# -- its sole consumer -- died on "libarchive is not staged" on every
+# machine that had not been hand-fed it, so opkg was never staged, so
+# tools/chunked-deploy.sh section 6d never fired, so the package manager
+# has never been on the device. Three gates in a row, each quietly
+# reporting the previous one's absence as a choice. It costs one static
+# library nothing else links.
+[ -n "$PKGS" ] || PKGS="zlib expat libpng freetype fontconfig xkeyboard-config dejavu libarchive"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
