@@ -76,4 +76,13 @@ matchbox-panel --orientation south --no-session --default-apps "$APPLETS" &
 # purpose. matchbox-window-manager already supports hiding it natively
 # (wm_set_cursor_visibility() in src/wm.c) -- no Xfixes needed, it just
 # swaps the root window's cursor for a 1x1 transparent pixmap one.
-exec matchbox-window-manager -use_cursor no "$@"
+#
+# -theme Piko: the stock Default theme puts a 16x20 close button in the
+# extreme top-right corner of the screen, which is the worst place to put a
+# small target on a resistive digitiser -- the corners are where it is least
+# linear, so taps read a few pixels inward and miss the button entirely.
+# That is why closing a window "sometimes did nothing". Piko is Default with
+# a 36px titlebar (the height matchbox-panel gives itself here, see
+# panel.c:1766) and 48x36 buttons flush against the screen edges, so a tap
+# anywhere in the corner block lands on the button. Same colours and fonts.
+exec matchbox-window-manager -use_cursor no -theme Piko "$@"
