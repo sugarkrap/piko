@@ -222,3 +222,6 @@ userspace/.thirdparty-cache/
 # -- they use mb_tray_app_new()'s result without a NULL check, unlike
 # clock/launcher; see docs/HOWTO-MATCHBOX-DESKTOP.md)
 *.core
+
+# tools/build-pikoxfer.sh's default --out is the repo root
+/*.ipk
