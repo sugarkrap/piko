@@ -17,6 +17,7 @@ set -eu
 # Usage:
 #   tools/zgrab.sh [--target user@host] [-o out.png] [--crop X,Y,W,H]
 #                  [--scale N] [--raw out.raw] [--no-copy] [--dev /dev/fb0]
+#                  [--fbgrab /usr/local/bin/fbgrab]
 #                  [--adapter IFACE] [--width W] [--height H] [--bpp N]
 #                  [user@host]
 # Examples:
@@ -35,6 +36,7 @@ RAW_OUT=""
 CROP=""
 SCALE=""
 FBDEV=""
+FBGRAB="fbgrab"
 NO_COPY=0
 WIDTH=""
 HEIGHT=""
@@ -47,6 +49,7 @@ Grab the Zaurus framebuffer and put the PNG on the Wayland clipboard.
 Usage:
   tools/zgrab.sh [--target user@host] [-o out.png] [--crop X,Y,W,H]
                  [--scale N] [--raw out.raw] [--no-copy] [--dev /dev/fb0]
+                 [--fbgrab /usr/local/bin/fbgrab]
                  [--adapter IFACE] [--width W] [--height H] [--bpp N]
                  [user@host]
 
@@ -58,6 +61,8 @@ Usage:
   -c, --crop X,Y,W,H  Extract a region (see tools/decode-fb.py).
   -s, --scale N       Integer upscale, for reading small UI.
   --dev PATH          Framebuffer device on the target (default /dev/fb0).
+  --fbgrab PATH       fbgrab binary on the target (default: "fbgrab", found
+                      via PATH with /usr/local/bin prepended).
   --width/--height/--bpp
                       Override the geometry fbgrab reports on stderr.
   --no-copy           Skip the clipboard; requires -o.
@@ -96,6 +101,9 @@ while [ $# -gt 0 ]; do
         --dev)
             [ $# -ge 2 ] || { echo "FAILED: --dev needs a value" >&2; exit 2; }
             FBDEV="$2"; shift 2 ;;
+        --fbgrab)
+            [ $# -ge 2 ] || { echo "FAILED: --fbgrab needs a value" >&2; exit 2; }
+            FBGRAB="$2"; shift 2 ;;
         --width)
             [ $# -ge 2 ] || { echo "FAILED: --width needs a value" >&2; exit 2; }
             WIDTH="$2"; shift 2 ;;
@@ -142,12 +150,19 @@ RAW="$WORK/screen.raw"
 ERRLOG="$WORK/fbgrab.err"
 PNG="${OUTPUT:-$WORK/screen.png}"
 
+# fbgrab lives in /usr/local/bin, which is NOT in the PATH a non-interactive
+# ssh session gets on this device (/usr/sbin:/usr/bin:/sbin:/bin) -- a bare
+# "fbgrab" exits 127 even when the binary is installed and executable. Prepend
+# it rather than hardcoding the full path, so a copy in /usr/bin still wins if
+# that is where it ends up. $PATH is escaped to expand on the device, not here.
+REMOTE_CMD="PATH=/usr/local/bin:\$PATH $FBGRAB${FBDEV:+ $FBDEV}"
+
 # fbgrab writes the pixels to stdout and the geometry to stderr; keep the two
 # apart so the binary stream stays clean.
 echo "Grabbing framebuffer from $TARGET ..." >&2
 set +e
 # shellcheck disable=SC2086
-ssh $SSH_OPTS "$TARGET" "fbgrab${FBDEV:+ $FBDEV}" >"$RAW" 2>"$ERRLOG"
+ssh $SSH_OPTS "$TARGET" "$REMOTE_CMD" >"$RAW" 2>"$ERRLOG"
 rc=$?
 set -e
 
@@ -155,8 +170,13 @@ if [ "$rc" -ne 0 ] || [ ! -s "$RAW" ]; then
     echo "FAILED: fbgrab on $TARGET exited $rc and produced $(wc -c <"$RAW") bytes" >&2
     [ -s "$ERRLOG" ] && sed 's/^/  remote: /' "$ERRLOG" >&2
     if grep -qi 'not found' "$ERRLOG" 2>/dev/null; then
-        echo "  fbgrab is not deployed by default. Cross-build" >&2
-        echo "  userspace/src/fbgrab.c and ship it to /usr/local/bin/fbgrab." >&2
+        echo "  fbgrab is not deployed by default. Cross-build it with the" >&2
+        echo "  toolchain build-userspace.sh uses and install it:" >&2
+        echo "    \$CROSS-gcc -march=armv5te -O2 -static -o fbgrab \\" >&2
+        echo "        userspace/src/fbgrab.c && \$CROSS-strip fbgrab" >&2
+        echo "    ssh $TARGET 'cat > /usr/local/bin/fbgrab' < fbgrab" >&2
+        echo "    ssh $TARGET 'chmod 755 /usr/local/bin/fbgrab'" >&2
+        echo "  If it is installed somewhere else, pass --fbgrab /path/to/fbgrab." >&2
     fi
     exit 1
 fi
