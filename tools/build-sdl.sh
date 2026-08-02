@@ -36,6 +36,16 @@ set -eu
 # rebuild). Deferred to when something actually needs SDL_mixer/audio;
 # --disable-audio keeps this build's scope to video only.
 #
+# WHY JOYSTICK IS ON despite this board having no joystick: the symbol
+# table matters more than the hardware here. SDL_Init(SDL_INIT_JOYSTICK)
+# and the SDL_Joystick* calls are things application code (e.g. gmenunx's
+# InputManager) links against unconditionally, gated at runtime, not link
+# time, by whether it finds any device. A libSDL built --disable-joystick
+# simply doesn't export those symbols at all, so any such app fails to
+# link, not just to detect a joystick. Enabled = SDL_NumJoysticks() returns
+# 0 and everything else no-ops; disabled = a hard link error for every
+# consumer that touches the joystick API, whether or not it's ever called.
+#
 # Cross-compile notes:
 #   - Toolchain defaults already target -march=armv5tej -mfloat-abi=soft
 #     (matching the PXA255 exactly, confirmed via `gcc -Q --help=target`
@@ -134,6 +144,10 @@ if [ ! -f "$SDL_SRC_DIR/configure" ]; then
     exit 1
 fi
 
+# NOTE: this wipes the whole of $STAGE_DIR, not just libSDL's own files.
+# tools/build-sdl-image.sh and tools/build-sdl-ttf.sh install into this
+# same directory (see their own headers for why) -- after rebuilding SDL
+# here, re-run those two as well, or their libraries/headers are gone.
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
@@ -170,7 +184,7 @@ echo "==> configuring SDL $SDL_VERSION"
         --enable-video-fbcon \
         --disable-video-opengl \
         --disable-cdrom \
-        --disable-joystick \
+        --enable-joystick \
         --enable-threads \
         --disable-nasm \
         --disable-oss \
