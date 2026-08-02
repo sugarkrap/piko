@@ -47,6 +47,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/kd.h>
+#include <linux/vt.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,6 +97,7 @@ static pid_t child_pid;
 static int   session_was_stopped;
 static int   lock_held;
 static int   cleaned_up;
+static int   original_vt;   /* the VT that was active before handoff, or -1 */
 
 /* ── /proc scanning ─────────────────────────────────────────────────────── */
 
@@ -178,6 +180,21 @@ static int process_alive(pid_t pid)
  * SIGKILL, a crash or an OOM kill cannot be caught by anything, and leave the
  * console stuck with no visible shell. Doing it here unconditionally is the
  * safety net the standalone fbtext used to provide.
+ *
+ * This also switches back to whichever VT was active before the handoff
+ * (see remember_original_vt()). SDL's fbcon backend does not reuse the
+ * caller's VT -- it opens a fresh one with VT_OPENQRY (tty2, tty3, ...) and
+ * VT_ACTIVATEs into it, so that on ordinary exit is where the desktop's VT
+ * gets handed back too. But that restore lives entirely in the child's own
+ * shutdown path (SDL_Quit()), and GMenuNX's signal handler -- SIGTERM being
+ * exactly what session_stop()/sig_handler() below send -- skips straight to
+ * exit() without ever calling it. The result is not a crash: the child dies
+ * cleanly, Xfbdev comes back up as a process, and the whole desktop is
+ * simply never shown again, because the kernel's active VT is still the
+ * child's now-empty one. A reboot was the only way out of that. Restoring
+ * the VT here, unconditionally, closes that gap the same way KD_TEXT above
+ * already does for graphics mode -- it does not depend on the child having
+ * cleaned up anything.
  */
 static void console_text_mode(void)
 {
@@ -188,6 +205,34 @@ static void console_text_mode(void)
     if (fd < 0)
         return;
     ioctl(fd, KDSETMODE, KD_TEXT);
+
+    if (original_vt > 0) {
+        ioctl(fd, VT_ACTIVATE, original_vt);
+        ioctl(fd, VT_WAITACTIVE, original_vt);
+    }
+
+    close(fd);
+}
+
+/*
+ * Called once, before anything is touched, so cleanup() knows what to switch
+ * back to no matter which VT the handed-off program ends up on. Best-effort:
+ * if this fails, original_vt stays -1 and console_text_mode() simply skips
+ * the VT_ACTIVATE, same as it always did before this existed.
+ */
+static void remember_original_vt(void)
+{
+    int fd = open("/dev/tty0", O_RDWR);
+    struct vt_stat vt;
+
+    original_vt = -1;
+
+    if (fd < 0)
+        fd = open("/dev/console", O_RDWR);
+    if (fd < 0)
+        return;
+    if (ioctl(fd, VT_GETSTATE, &vt) == 0)
+        original_vt = vt.v_active;
     close(fd);
 }
 
@@ -465,6 +510,7 @@ int main(int argc, char **argv)
 
     install_handlers();
     atexit(cleanup);
+    remember_original_vt();
 
     /*
      * Only ask when there is a session to lose. Run from a console -- no X,
