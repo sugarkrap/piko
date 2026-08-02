@@ -70,8 +70,8 @@ set -eu
 #                   that links libX11/libXft out of the stage this script
 #                   populates, and the payload ships it.
 #   FLTK            tools/build-fltk.sh, at the end -- libfltk*.so.1.3
-#                   plus fltktest and matchbox-fbrun, likewise X11
-#                   clients of this stage, likewise shipped.
+#                   plus fltktest, matchbox-fbrun and mb-wallpaper-picker,
+#                   likewise X11 clients of this stage, likewise shipped.
 #
 # st and FLTK are also built by tools/build-userspace.sh, which skips both
 # when the stage is not populated yet. That skip is what made the ordering
@@ -637,8 +637,9 @@ done
 # --- X11 clients that are not X.Org/Matchbox packages ---------------------
 # st and FLTK link against the stage the loop above just populated, and
 # tools/build-matchbox-payload.sh ships everything they produce: st, the
-# libfltk*.so trio, fltktest and matchbox-fbrun. See this script's header
-# for why they live here rather than being every caller's problem.
+# libfltk*.so trio, fltktest, matchbox-fbrun and mb-wallpaper-picker. See
+# this script's header for why they live here rather than being every
+# caller's problem.
 #
 # Both are idempotent and exit 0 when already current, so this costs a pair
 # of marker checks on every subsequent run. Skipped entirely for an explicit
@@ -659,7 +660,7 @@ if [ "$FULL_BUILD" -eq 1 ]; then
     fi
 
     echo ""
-    echo "==> building FLTK + fltktest + matchbox-fbrun (tools/build-fltk.sh)"
+    echo "==> building FLTK + fltktest + matchbox-fbrun + mb-wallpaper-picker (tools/build-fltk.sh)"
     FORCE_ARG=""
     [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
     # shellcheck disable=SC2086

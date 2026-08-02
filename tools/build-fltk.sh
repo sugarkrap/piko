@@ -313,6 +313,49 @@ else
     echo "==> skipping matchbox-fbrun (no $FBRUN_SRC)"
 fi
 
+# --- mb-wallpaper-picker -------------------------------------------------
+# The desktop's wallpaper setter (see userspace/src/mb-wallpaper-picker.cxx).
+# It ships to /usr/local/bin, same as pikostore -- see that binary's own
+# comment in tools/build-matchbox-payload.sh for why that is on the device's
+# PATH for desktop-launched apps despite matchbox-fbrun needing /usr/sbin.
+#
+# Unlike fltktest/matchbox-fbrun this one decodes PNG/JPEG/BMP thumbnails,
+# so it needs libfltk_images and its own dependencies (-lpng -lz) ahead of
+# -lfltk -- see docs/HOWTO-FLTK.md, "Add image loading".
+WALLPAPER_PICKER_SRC="$SRC/mb-wallpaper-picker.cxx"
+if [ -f "$WALLPAPER_PICKER_SRC" ]; then
+    echo "==> building mb-wallpaper-picker"
+    fbrun_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -o "$STAGE/usr/bin/mb-wallpaper-picker" \
+        "$WALLPAPER_PICKER_SRC" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk_images -lpng -lz -lfltk $fbrun_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/mb-wallpaper-picker" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: mb-wallpaper-picker does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+    case " $needed " in
+        *" libfltk_images.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: mb-wallpaper-picker does not NEED libfltk_images.so.$FL_DSO_VERSION" >&2
+            echo "-- thumbnails would fail to decode on the device." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping mb-wallpaper-picker (no $WALLPAPER_PICKER_SRC)"
+fi
+
 echo ""
 echo "==> done: FLTK staged in $STAGE"
 for f in "$STAGE"/usr/lib/libfltk*.so."$FL_DSO_VERSION"; do
