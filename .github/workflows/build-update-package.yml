@@ -265,6 +265,22 @@ jobs:
             echo "kernel-src reconstruction failed (exit $rc) -- building a rootfs-only package instead." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Discard cached build objects (keep source/config, not stale .o/.ko)
+        # The kernel-src cache above is keyed on config/patches, not on build
+        # state, and is saved unconditionally (save-always) even from a
+        # failed run -- so any .o/.ko left in the tree from a previous,
+        # possibly-interrupted build gets silently reused next time `make`
+        # sees it as up to date. That's exactly how a corrupted
+        # snd-ac97-codec.ko survived multiple CI runs with an identical size
+        # each time (make relinked the .ko/.mod.o but never recompiled the
+        # object underneath it -- there was no CC line for it in the build
+        # log at all): not a packaging bug, a poisoned incremental build.
+        # `make clean` drops generated objects but keeps .config and the
+        # downloaded/patched source, so the expensive part of the cache
+        # (network fetch + patching + oldconfig) is still preserved.
+        if: steps.kernel_src.outputs.rc == '0'
+        run: make -C kernel-src/linux-7.1.4 ARCH=arm clean
+
       - name: Build kernel (zImage + modules)
         if: steps.kernel_src.outputs.rc == '0'
         run: |
@@ -316,7 +332,16 @@ jobs:
           exit "$rc"
 
       - name: Summarize package contents
+        if: always()
         run: |
+          # Also to plain stdout, not just $GITHUB_STEP_SUMMARY -- the
+          # latter is only rendered client-side in the Actions UI and
+          # isn't reachable through the job-logs API at all, so a listing
+          # that only went there was invisible while diagnosing a real
+          # failure (had to guess at file sizes/contents from CI log
+          # excerpts instead of just reading them).
+          echo "==> update.tar contents (sizes, perms):"
+          tar tvf update.tar
           {
             echo "### piko-update package"
             echo
@@ -337,3 +362,17 @@ jobs:
           name: piko-update-package
           path: update.tar
           if-no-files-found: error
+
+      - name: Upload update.tar (debug, smoke test failed -- NOT validated)
+        # A package that fails the smoke test is never uploaded as the
+        # real "piko-update-package" artifact above -- that invariant
+        # stays. This is a separate, clearly-labeled debug copy purely so
+        # a failure can actually be diagnosed (file sizes/checksums
+        # inspected directly) without re-deriving them from CI log
+        # excerpts -- never treat this one as a validated package.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: piko-update-package-DEBUG-UNVALIDATED
+          path: update.tar
+          if-no-files-found: ignore

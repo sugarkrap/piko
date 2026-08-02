@@ -97,7 +97,21 @@ manifest_add() {
     cp "$src" "$stage_dest"
     chmod "$mode" "$stage_dest"
 
-    md5="$(md5sum "$src" | cut -d' ' -f1)"
+    # Kernel modules are built with full DWARF debug info (CONFIG_DEBUG_INFO=y
+    # -- useful during kernel development, dead weight in what actually ships
+    # to this resource-constrained device). --strip-debug drops only that:
+    # unlike a full strip, it keeps every section insmod actually needs
+    # (.modinfo, __ksymtab, symbol versioning), so loadability is unaffected.
+    # Same principle as piko-update's own strip a few lines up -- just
+    # applied to the staged copy so MANIFEST's md5 matches what's actually
+    # shipped.
+    case "$dest" in
+        *.ko)
+            command -v "$STRIP" >/dev/null 2>&1 && "$STRIP" --strip-debug "$stage_dest"
+            ;;
+    esac
+
+    md5="$(md5sum "$stage_dest" | cut -d' ' -f1)"
     echo "$md5 $dest" >> "$MANIFEST"
     echo "$dest" >> "$FILES_LIST"
 }

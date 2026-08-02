@@ -83,7 +83,7 @@ cp "$KERNEL_DIR/arch/arm/boot/zImage" "$STAGE/zImage-qemu-variant"
 cp "$STAGE/config.real-device" "$CONFIG"
 
 echo "==> assembling smoke-test initramfs (piko-smoke-init + the actual update.tar payload)"
-mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/lib/modules"
+mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/lib/modules" "$STAGE/root/tmp"
 cp "$STAGE/piko-smoke-init" "$STAGE/root/init"
 chmod 755 "$STAGE/root/init"
 
@@ -102,10 +102,31 @@ if tar tf "$UPDATE_TAR" | grep -q '^lib/modules/'; then
 fi
 cp "$UPDATE_TAR" "$STAGE/root/update.tar"
 
+echo "==> staged initramfs tree (host side, before cpio archival):"
+ls -la "$STAGE/root/usr/sbin/piko-update" 2>&1
+find "$STAGE/root/lib/modules" -name '*.ko' -exec ls -la {} + 2>&1
+echo "==> total staged size (this is what has to fit in the guest's fixed 64M):"
+du -sb "$STAGE/root" 2>&1
+
 ( cd "$STAGE/root" && find . -mindepth 1 | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$STAGE/initramfs.cpio.gz"
+
+echo "==> initramfs contents after cpio archival (re-read back, host side):"
+zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|\.ko$'
 
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"
+# -M spitz hard-codes 64M of guest RAM (matching real Corgi/Husky hardware)
+# and ignores -m entirely -- confirmed in CI: "Memory: 21160K/65536K
+# available" was identical whether or not -m was passed. Real hardware's
+# /tmp (where piko-update stages a verify copy of every file before
+# installing anything, see piko-update.c's own safety-model comment) lives
+# on the flash-backed "home" partition, not RAM -- but this test's
+# initramfs puts everything, including where /tmp ends up, into that same
+# fixed 64M. So the actual fix is keeping what has to fit there small, not
+# fighting the RAM ceiling: build-update-package.sh now strips debug info
+# from shipped .ko files (CONFIG_DEBUG_INFO=y bloats them well past what a
+# loadable module needs), which was the real excess, not tar/cpio
+# packaging corruption -- host-side sizes always matched at every stage.
 timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
