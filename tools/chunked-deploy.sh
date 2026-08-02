@@ -190,8 +190,48 @@ cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
 ssh_do() {
-    # shellcheck disable=SC2029
-    ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1"
+    # Retries internally so every caller gets link resilience for free,
+    # not just the ones that happen to wrap their call in `if`. Found
+    # 2026-08-02: send_file()'s per-chunk loop calls
+    # `existing=$(remote_size "$remote_part")` as a bare assignment at
+    # the TOP of every iteration, including the retry after a failed
+    # attempt -- under `set -eu`, remote_size's own ssh_do timing out
+    # (OpenSSH's "Timeout, server ... not responding", from
+    # ServerAliveCountMax) killed the ENTIRE deploy right there, with no
+    # message from this script and no further retry, on a link this
+    # script's whole premise is "known-flaky". A handful of other
+    # call sites (KVER_REMOTE, the md5sum/untar presence checks, the
+    # free-space check, ...) have the identical unguarded shape. Fixing
+    # every call site individually would be fixing the symptom in N
+    # places; this fixes the one function they all go through.
+    #
+    # Safe to retry blindly: every ssh_do command here is a fast,
+    # idempotent status check or `mkdir -p` -- never the bulk chunk
+    # transfer itself, which has its own retry loop around a raw `ssh`
+    # invocation for exactly this reason (see send_file). A failed
+    # attempt's timeout is reported on stderr, not stdout, so retrying
+    # cannot turn into printing a partial/garbled result to the caller.
+    # ssh_do_attempt, not `attempt`: this script has no `local` anywhere
+    # (not just here -- nowhere in the file), and send_file()'s own
+    # per-chunk retry loop already owns a global variable named
+    # `attempt`. ssh_do() is called FROM INSIDE that loop (via
+    # remote_size()) -- reusing the same name would have this retry
+    # counter silently clobber that outer one on every status check,
+    # corrupting its attempt count.
+    ssh_do_attempt=1
+    while :; do
+        # shellcheck disable=SC2029
+        if ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1"; then
+            return 0
+        fi
+        if [ "$ssh_do_attempt" -ge "$MAX_ATTEMPTS" ]; then
+            echo "FAILED: ssh command did not succeed after $MAX_ATTEMPTS attempts: $1" >&2
+            return 1
+        fi
+        echo "  (ssh_do: connection problem, retrying in ${RETRY_DELAY}s: $1)" >&2
+        ssh_do_attempt=$((ssh_do_attempt + 1))
+        sleep "$RETRY_DELAY"
+    done
 }
 
 remote_size() {
