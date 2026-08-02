@@ -44,8 +44,27 @@ xkb_symbols "basic" {
     key <AE02> { [        2,   quotedbl,  NoSymbol,  NoSymbol ] };
     key <AE03> { [        3, numbersign,  XF86MonBrightnessDown, XF86MonBrightnessDown ] };
     key <AE04> { [        4,     dollar,  XF86MonBrightnessUp,   XF86MonBrightnessUp   ] };
-    key <AE05> { [        5,    percent,  NoSymbol,  NoSymbol ] };
-    key <AE06> { [        6,  ampersand,  NoSymbol,  NoSymbol ] };
+    // 5 and 6 are volume down/up, by this project's choice -- and unlike
+    // 3/4 above that is NOT what the keycaps say. The digit row's Fn
+    // legends are zoom/brightness/IME icons; there is no volume icon
+    // anywhere on this keyboard, and no dedicated volume key either, so
+    // the pair had to be picked rather than read off. 5/6 were taken
+    // because they sit immediately beside the brightness pair, which
+    // makes the two hardware ladders adjacent and consistent to reach.
+    //
+    // As with 3/4, the keysyms here are documentary rather than load
+    // bearing: the chord is consumed at the evdev layer in the X server
+    // fork (HotkeyChord(), hw/kdrive/linux/evdev.c) and never reaches an
+    // X client, for the modifier-mask reasons docs/HOWTO-BRIGHTNESS.md
+    // works through. They are set anyway so anything that does look at
+    // the layout sees something meaningful. Nothing grabs them, so there
+    // is no double-stepping. Retargeting the volume keys means changing
+    // the two KEY_n constants in HotkeyChord() and these two lines.
+    //
+    // Both levels 3 and 4 are set so the binding survives Fn+Shift, the
+    // same way Fn+0=Delete is done below.
+    key <AE05> { [        5,    percent,  XF86AudioLowerVolume, XF86AudioLowerVolume ] };
+    key <AE06> { [        6,  ampersand,  XF86AudioRaiseVolume, XF86AudioRaiseVolume ] };
     key <AE07> { [        7,  apostrophe, NoSymbol,  NoSymbol ] };
     key <AE08> { [        8,  parenleft,  NoSymbol,  NoSymbol ] };
     key <AE09> { [        9, parenright,  NoSymbol,  NoSymbol ] };
