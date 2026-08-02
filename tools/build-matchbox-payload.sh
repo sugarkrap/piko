@@ -60,6 +60,9 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 # Same story for mb-volume: userspace/src/mb-volume, not part of
 # matchbox-panel proper.
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
+# And for mb-brightness (userspace/src/mb-brightness), the applet that
+# docks no icon and exists only to draw the backlight OSD.
+D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 
 DEPLOY=0
 TARGET=""
@@ -152,7 +155,8 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
+         "$D_BRIGHT"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2

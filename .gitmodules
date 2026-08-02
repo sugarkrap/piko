@@ -96,3 +96,7 @@
 [submodule "libXpm"]
 	path = userspace/src/libXpm
 	url = https://gitlab.freedesktop.org/xorg/lib/libxpm.git
+[submodule "mb-brightness"]
+	path = userspace/src/mb-brightness
+	url = https://github.com/sugarkrap/mb-brightness.git
+	branch = main
