@@ -474,22 +474,32 @@ power loss mid-boot (this device is fragile) can't leave a half
 written cache behind. Solid colors and gradients are pure in-memory
 math already and are never cached.
 
-**Setting it.** `mb-wallpaper-picker` is a small standalone touch app
-(built alongside `matchbox-desktop`, same `libmb` dependency, nothing
-extra) that scans `/usr/share/backgrounds` and
-`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files,
-shows a thumbnail grid with a 4-way mode selector, and on tap:
-writes `$HOME/.matchbox/wallpaper` (the file `matchbox-desktop` reads
-at startup, so the choice survives a reboot) and sets the
-`_MB_WALLPAPER_SPEC` property on the root window so an *already
-running* desktop updates immediately. The property exists because
-this device's busybox has no `kill`/`killall`/`pkill` at all -- there
-is no way to signal the running process, so an X property it already
-watches via `PropertyNotify` (the same mechanism `_MB_THEME_NAME`
-already used for live theme switches) is the only avenue. It ships a
-`.desktop` launcher with `Categories=Settings`, so it shows up in the
-desktop's Settings folder automatically via matchbox-common's
-vfolders -- no wiring needed beyond installing the file.
+**Setting it.** `mb-wallpaper-picker` (`userspace/src/
+mb-wallpaper-picker.cxx`) is an FLTK app, built and shipped the way
+`matchbox-fbrun` and `pikostore` are (see `docs/HOWTO-FLTK.md`) rather
+than compiled into the `matchbox-desktop` autotools tree -- it no
+longer touches `libmb` at all. It scans `/usr/share/backgrounds` and
+`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files
+and shows them as a tap-to-apply thumbnail grid (a real `Fl_Scroll`,
+not hand-rolled scroll buttons), next to a 4-way mode selector and a
+small preview swatch that shows what the selected mode is about to be
+applied to. A Browse button opens FLTK's own file chooser so a
+wallpaper does not have to live in either scanned directory. On tap
+(from the grid, or after Browse) it: writes `$HOME/.matchbox/wallpaper`
+(the file `matchbox-desktop` reads at startup, so the choice survives a
+reboot) and sets the `_MB_WALLPAPER_SPEC` property on the root window
+so an *already running* desktop updates immediately. The property
+exists because this device's busybox has no `kill`/`killall`/`pkill`
+at all -- there is no way to signal the running process, so an X
+property it already watches via `PropertyNotify` (the same mechanism
+`_MB_THEME_NAME` already used for live theme switches) is the only
+avenue. On launch it also reads that same file back, so opening the
+picker preselects the mode and shows the currently-set wallpaper in
+the preview instead of a blank slate. It ships a `.desktop` launcher
+(`userspace/desktop/mb-wallpaper-picker.desktop`) with
+`Categories=Settings`, so it shows up in the desktop's Settings folder
+automatically via matchbox-common's vfolders -- no wiring needed beyond
+installing the file.
 
 Precedence at startup: `--bg` on the command line wins outright;
 otherwise a live `_MB_WALLPAPER_SPEC` root property (set by the
@@ -539,22 +549,32 @@ power loss mid-boot (this device is fragile) can't leave a half
 written cache behind. Solid colors and gradients are pure in-memory
 math already and are never cached.
 
-**Setting it.** `mb-wallpaper-picker` is a small standalone touch app
-(built alongside `matchbox-desktop`, same `libmb` dependency, nothing
-extra) that scans `/usr/share/backgrounds` and
-`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files,
-shows a thumbnail grid with a 4-way mode selector, and on tap:
-writes `$HOME/.matchbox/wallpaper` (the file `matchbox-desktop` reads
-at startup, so the choice survives a reboot) and sets the
-`_MB_WALLPAPER_SPEC` property on the root window so an *already
-running* desktop updates immediately. The property exists because
-this device's busybox has no `kill`/`killall`/`pkill` at all -- there
-is no way to signal the running process, so an X property it already
-watches via `PropertyNotify` (the same mechanism `_MB_THEME_NAME`
-already used for live theme switches) is the only avenue. It ships a
-`.desktop` launcher with `Categories=Settings`, so it shows up in the
-desktop's Settings folder automatically via matchbox-common's
-vfolders -- no wiring needed beyond installing the file.
+**Setting it.** `mb-wallpaper-picker` (`userspace/src/
+mb-wallpaper-picker.cxx`) is an FLTK app, built and shipped the way
+`matchbox-fbrun` and `pikostore` are (see `docs/HOWTO-FLTK.md`) rather
+than compiled into the `matchbox-desktop` autotools tree -- it no
+longer touches `libmb` at all. It scans `/usr/share/backgrounds` and
+`$HOME/.matchbox/backgrounds` for `.png`/`.jpg`/`.jpeg`/`.bmp` files
+and shows them as a tap-to-apply thumbnail grid (a real `Fl_Scroll`,
+not hand-rolled scroll buttons), next to a 4-way mode selector and a
+small preview swatch that shows what the selected mode is about to be
+applied to. A Browse button opens FLTK's own file chooser so a
+wallpaper does not have to live in either scanned directory. On tap
+(from the grid, or after Browse) it: writes `$HOME/.matchbox/wallpaper`
+(the file `matchbox-desktop` reads at startup, so the choice survives a
+reboot) and sets the `_MB_WALLPAPER_SPEC` property on the root window
+so an *already running* desktop updates immediately. The property
+exists because this device's busybox has no `kill`/`killall`/`pkill`
+at all -- there is no way to signal the running process, so an X
+property it already watches via `PropertyNotify` (the same mechanism
+`_MB_THEME_NAME` already used for live theme switches) is the only
+avenue. On launch it also reads that same file back, so opening the
+picker preselects the mode and shows the currently-set wallpaper in
+the preview instead of a blank slate. It ships a `.desktop` launcher
+(`userspace/desktop/mb-wallpaper-picker.desktop`) with
+`Categories=Settings`, so it shows up in the desktop's Settings folder
+automatically via matchbox-common's vfolders -- no wiring needed beyond
+installing the file.
 
 Precedence at startup: `--bg` on the command line wins outright;
 otherwise a live `_MB_WALLPAPER_SPEC` root property (set by the
