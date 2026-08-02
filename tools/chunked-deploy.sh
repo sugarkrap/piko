@@ -625,6 +625,14 @@ ssh_do "chmod 0755 /usr/sbin/sdapps"
 send_file "$REPO/rootfs/usr/sbin/sdcard"  "/usr/sbin/sdcard"
 ssh_do "chmod 0755 /usr/sbin/sdcard"
 
+if [ -x "$REPO/userspace/src/cardswap" ]; then
+    send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
+    ssh_do "chmod 0755 /usr/sbin/cardswap"
+else
+    echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
+    echo "    without it an inserted card mounts, but gets no swap area"
+fi
+
 # /etc/mdev.conf is what actually invokes that hook, and until now nothing
 # deployed it -- it only ever arrived with a flashed image. That was not
 # academic: the rule's owner field was `root:disk` until 2026-07-31, this
@@ -640,13 +648,6 @@ ssh_do "chmod 0755 /usr/sbin/sdcard"
 # event, so this takes effect on the next hotplug with nothing to restart.
 send_file "$REPO/rootfs/etc/mdev.conf" "/etc/mdev.conf"
 ssh_do "chmod 0644 /etc/mdev.conf"
-if [ -x "$REPO/userspace/src/cardswap" ]; then
-    send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
-    ssh_do "chmod 0755 /usr/sbin/cardswap"
-else
-    echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
-    echo "    without it an inserted card mounts, but gets no swap area"
-fi
 
 # 6c. SSH file transfer: scp + sftp-server (+ dbclient/dropbearkey).
 #
