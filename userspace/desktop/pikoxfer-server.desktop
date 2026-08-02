@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=pikoxfer
+Comment=Receive files sent from a computer
+Exec=pikoxfer-server
+Icon=pikoxfer-server
+Terminal=false
+Categories=System;
