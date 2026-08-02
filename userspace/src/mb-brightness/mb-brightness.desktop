@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Brightness
+Comment=On-screen display for the backlight level
+Exec=mb-brightness
+Type=PanelApp
+Icon=mb-brightness.png
+Categories=Panel;Utility;MB

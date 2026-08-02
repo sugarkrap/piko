@@ -76,6 +76,17 @@ startup:
 | `d` | volume down one step |
 | `m` | toggle mute |
 | `s` | show the OSD, change nothing |
+| `h` | hide the OSD now — sent by `mb-brightness`'s OSD |
+
+`mb-brightness` (see [`HOWTO-BRIGHTNESS.md`](HOWTO-BRIGHTNESS.md)) draws an
+identical bar in the identical place for the backlight, so the two would
+sit exactly on top of each other. Before showing, each writes `'h'` to the
+other's FIFO. One non-blocking open that fails harmlessly when the other
+applet is not running, it cannot ping-pong (hiding never notifies
+anybody), and it needs no shared state. An X selection would be the
+textbook answer to "only one of these at a time", but `mb-brightness` is a
+hidden applet and hidden applets receive no X events — so `SelectionClear`
+would never arrive. That constraint is written up in `HOWTO-BRIGHTNESS.md`.
 
 Unknown bytes are ignored rather than guessed at, so the protocol can
 grow without breaking an older applet — the rule `brightd`'s FIFO already
