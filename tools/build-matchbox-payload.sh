@@ -238,11 +238,14 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # listed by the picker and then fail to decode. See "Wallpaper: modes,
 # formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# FITTED, not cropped, and pre-rendered to exactly 640x480 -- the panel's
-# size -- with black bars where the aspect ratios disagree. Fitted rather
-# than filled so the whole picture is visible; with a landscape source on
-# this landscape panel the bars are 7px a side and it covers 97.7% of the
-# screen anyway.
+# FILLED, not fitted, and pre-rendered to exactly 640x480 -- the panel's
+# size -- with the overflow cropped off rather than padded with black bars.
+# Source (userspace/backgrounds/../../../wallpaper.jpg equivalent, 1200x921)
+# is landscape and so is this panel, so the aspect ratios are close (1.303
+# vs 1.333) and filling only crops ~2.3% off the top and bottom -- unlike
+# the fit-vs-fill tradeoff this repo hit earlier when the panel was
+# (wrongly) assumed portrait, cropping here is cheap enough that showing
+# the full screen wins over showing a hair more of the picture with bars.
 #
 # 640x480 LANDSCAPE. Getting this wrong is not subtle but it IS ambiguous
 # from the outside: /sys/class/graphics/fb0/modes says U:640x480p and the
@@ -257,11 +260,13 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
 # all: mbdesktop_view_init_bg() caches the composited result either way,
 # but this way even the first boot after a flash does no scaling on a
-# 400MHz part -- it is a straight blit.
+# 400MHz part -- it is a straight blit. img-centered still applies to a
+# filled file: the mode only controls how a mis-sized image would be
+# resolved, and this one never is.
 #
 # Regenerate with:
-#   magick <src> -resize 640x480 -background black -gravity center \
-#          -extent 640x480 -alpha off -strip -interlace none \
+#   magick <src> -resize 640x480^ -gravity center -extent 640x480 \
+#          -alpha off -strip -interlace none \
 #          -define png:exclude-chunk=all -define png:compression-level=9 \
 #          PNG24:piko-default.png
 mkdir -p "$PAYLOAD/usr/share/backgrounds"
