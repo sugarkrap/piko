@@ -19,6 +19,9 @@ set -eu
 #   - a freshly cross-compiled usr/sbin/piko-update itself (self-update)
 #     and usr/sbin/piko-smf-write, the NAND writer it drives
 #   - boot/zImage-smf, the mtd1 bootstrap kernel, when one is present
+#   - the standalone tools tools/build-userspace.sh cross-compiles straight
+#     into userspace/src/ (md5sum, kill, pkillx, brightd, flipd, mhz,
+#     cardswap, hwclock, ntpsync) -- see "Standalone userspace tools" below
 #
 # One package covers the whole ROM, but the smf/mtd1 half is never written
 # as part of applying it -- piko-update skips it entirely unless it really
@@ -223,6 +226,44 @@ else
     echo "==> no $SSH_STAGE -- package will have no scp/sftp-server"
     echo "    (run tools/build-ssh.sh first if that is not intended)"
 fi
+
+# Standalone userspace tools (md5sum, kill, pkillx, ...): the small static
+# binaries tools/build-userspace.sh cross-compiles straight into
+# userspace/src/ rather than into a stage-* tree (see that script's header,
+# steps 1/1b/1b2/1c/1c2/1c-ter/1c-quater/1c-bis). Until now this offline
+# package never carried any of them -- only tools/chunked-deploy.sh (live
+# over SSH) shipped them -- so a device updated purely from an SD card kept
+# none of the tools its own rootfs already assumes exist: no md5sum, no way
+# to signal a process at all (this busybox has no kill/killall/pkill
+# applet), no way to persist a clock change, no swap.
+#
+# NAME:DEST:MODE, dest paths matching exactly what tools/chunked-deploy.sh
+# sends each one to -- keep the two in sync if either list changes.
+STANDALONE_TOOLS="
+md5sum:usr/bin/md5sum:755
+brightd:usr/sbin/brightd:755
+flipd:usr/sbin/flipd:755
+kill:usr/local/bin/kill:755
+mhz:usr/sbin/mhz:755
+pkillx:usr/sbin/pkillx:755
+cardswap:usr/sbin/cardswap:755
+hwclock:usr/sbin/hwclock:755
+ntpsync:usr/sbin/ntpsync:755
+"
+for entry in $STANDALONE_TOOLS; do
+    name="${entry%%:*}"
+    rest="${entry#*:}"
+    dest="${rest%%:*}"
+    mode="${rest#*:}"
+    src="$REPO/userspace/src/$name"
+    if [ -x "$src" ]; then
+        manifest_add "$src" "$dest" "$mode"
+        echo "    standalone tool: $name"
+    else
+        echo "==> skipping $name (not built -- run tools/build-userspace.sh)"
+    fi
+done
+
 # The ROM manifest is GENERATED per build, so it cannot live in rootfs/ the
 # way every other config file does -- a tracked copy would be stale the
 # moment it was committed. It is what pikostore's System Update tab reads
