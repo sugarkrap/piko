@@ -36,6 +36,131 @@ produces no input events, so without this the screen dims mid-film.
 
 To stop the daemon: `pkillx brightd`. There is no `kill` on this rootfs.
 
+## The on-screen display
+
+`mb-brightness` (`userspace/src/mb-brightness`) draws a bar at the top of
+the screen showing the backlight level: the `video-display` monitor icon
+on the left, a progress bar, the percentage on the right. Styled from the
+theme's `PanelBgColor`/`PanelFgColor` and given the same height the panel
+gives itself, so it reads as a piece of the panel that has floated to the
+top of the screen. It sits 10px in from the top and both side edges and
+hides itself 1.5s after the last change.
+
+**It is an applet that docks nothing.** `mb_tray_app_hide()` is called
+*before* `mb_tray_app_main()`, which makes `_init_docking()` early-return
+— so no tray window is ever created and the panel reserves no space for
+it. Same trick `mb-applet-card` uses to start with an empty slot; the
+difference is that this one never unhides. It is in the panel's applet
+list (`modules/x11/matchbox-session`) purely so it starts and stops with
+the session.
+
+That has one consequence worth knowing before changing anything in it:
+
+> **A hidden applet receives no X events.**
+> `mb_tray_handle_xevent()` guards the whole dispatch on
+> `win_tray != None && !is_hidden`, so `xevent_cb` — and with it every
+> Expose, ConfigureNotify and theme change — is never delivered. Only the
+> poll callback still runs, because `get_xevent_timed()` sits below that
+> guard. Everything in `mb-brightness` is therefore driven from
+> `poll_callback()` and nothing waits on an X event.
+
+**It owns none of the backlight.** `brightd` pokes it with one byte and it
+then reads `/sys/class/backlight/corgi_bl` itself, so it cannot disagree
+with what actually happened. Same one-owner rule `bright`/`brightd`
+already follow — and it reads `brightness`, never `actual_brightness`, for
+the measured reason in "The two traps" below.
+
+```
+/tmp/mb-brightness.fifo
+  's'  show the OSD, re-reading the level from sysfs
+  'h'  hide it now — sent by mb-volume's OSD when it wants the space
+```
+
+**Only explicit changes pop it up.** The poke lives in `run_bright()`,
+which is called from exactly the two hotkey paths (evdev directly on the
+console, and `'u'`/`'d'` over `/tmp/brightd.fifo` from the X server).
+Idle dimming, lid blanking and the DPMS path call
+`go_dim()`/`go_blank()`/`go_active()`, which write sysfs directly and
+never go through `run_bright()` — an OSD lighting the screen up as it dims
+to save power would be both absurd and self-defeating.
+
+**`bright up` typed at a shell does not show it.** `bright` is a shell
+script and cannot safely write to a FIFO (see the same trap under `vol` in
+[`HOWTO-VOLUME.md`](HOWTO-VOLUME.md) — the open blocks forever when
+nothing is reading, and `/tmp` here is jffs2 so a stale FIFO survives a
+reboot). Only the hotkeys and anything that goes through `brightd` pop the
+OSD.
+
+`mb-volume` draws an identical bar in the identical place for volume, so
+before showing, each writes `'h'` to the other's FIFO. One non-blocking
+open that fails harmlessly when the other applet is not running, it cannot
+ping-pong (hiding never notifies anybody), and it needs no shared state.
+An X selection would be the textbook answer, but `SelectionClear` is an X
+event — see the box above.
+
+### Verified on hardware 2026-08-02, and one thing that went wrong
+
+Working, confirmed by framebuffer grab: with the backlight at 24 of 47,
+the OSD read **51%** — which is `24/47`, and the proof it read the right
+sysfs file. Had it read `actual_brightness` (which the driver inflates to
+40 at that setting) it would have shown 85%. Stepping via
+`echo u > /tmp/brightd.fifo` — exactly what the X server sends on Fn+4 —
+moved the level and popped the OSD each time.
+
+**Then the whole X session died.** Every client went down at once with
+
+```
+XIO: fatal IO error 11 (Resource temporarily unavailable) on X server ":0"
+```
+
+including `matchbox-panel` and `matchbox-desktop`, neither of which this
+work had touched. `xfbdev.log` recorded nothing at all.
+
+**The likely cause is another process taking the VT, and it is almost
+certainly the same thing behind the unexplained deaths recorded under
+"The screensaver: toasters" below.** It happened a second time during the
+same session, and that time the evidence was still on the box:
+
+```
+Fatal server error: LinuxInit: VT_WAITACTIVE failed      # /tmp/xfbdev.log
+
+4188 root  matchbox-fbrun -y -n GMenuNX -- ./gmenunx     # ps
+4206 root  ./gmenunx
+```
+
+`gmenunx` is an SDL program drawing straight to the framebuffer, so it
+takes the VT. Its PIDs are *higher* than the session that had just been
+restarted, i.e. it started afterwards and pulled the VT out from under a
+running X server — which kills every client at once with exactly the
+`XIO` above, and then stops the next `Xfbdev` from starting at all.
+
+**This board is shared between working sessions.** Before concluding that
+an X death is a bug in whatever you just deployed, run `ps` and look for
+another framebuffer program. Note the shape of the evidence: *every*
+client dying simultaneously, including ones you never touched, points at
+the server or the VT, not at your client.
+
+One change was made anyway, as the cheapest suspect to remove before the
+VT contention was spotted: the first version of `mb-brightness` repainted
+the OSD on every 150ms tick, to stand in for the Expose a hidden applet
+can never receive. That meant a full image rebuild, an Xft text render and
+an `XCopyArea` about seven times per appearance for a picture that had not
+changed — a steady stream of requests at an unaccelerated server, bought
+for nothing. It now paints only when the level changes. On the evidence
+above that was **not** the cause; it was pointless traffic and is better
+gone regardless.
+
+Recovery. If `Xfbdev` survived, the session comes back without a reboot:
+
+```
+DISPLAY=:0 HOME=/root PATH=/usr/local/bin:$PATH setsid /etc/matchbox/session &
+```
+
+If it did not, check for the VT holder first — starting X under it just
+fails with `VT_WAITACTIVE` again. And check the backlight: a board left
+with no X and no input looks dead but is usually just blanked, so
+`bright 20` before assuming anything worse.
+
 ## Configuration
 
 `/etc/zaurus/power-management.cfg`, if present, overrides the compiled

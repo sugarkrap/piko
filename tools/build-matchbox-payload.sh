@@ -60,6 +60,9 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 # Same story for mb-volume: userspace/src/mb-volume, not part of
 # matchbox-panel proper.
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
+# And for mb-brightness (userspace/src/mb-brightness), the applet that
+# docks no icon and exists only to draw the backlight OSD.
+D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 
 DEPLOY=0
 TARGET=""
@@ -121,6 +124,10 @@ PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
 # build-fltk.sh dependency as pikostore, put there by
 # tools/build-found-file-browser.sh.
 FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
+# mb-wallpaper-picker: the desktop's wallpaper setter. Same staging location
+# as fltktest/pikostore -- put there by tools/build-fltk.sh, which also
+# builds fltktest and matchbox-fbrun.
+WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -156,7 +163,8 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
+         "$D_BRIGHT"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
@@ -182,6 +190,7 @@ $TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FOUND_BIN:usr/local/bin/found-file-browser \
+$WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -297,8 +306,9 @@ done
 # desktop at all -- matchbox-desktop only reads the /usr/share/applications
 # this payload deploys. That is independent of where the BINARY comes from:
 # pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
-# libSDL, not this X11 stack), while st, xev, toasters and pikostore ship
-# from this payload. Only the launcher and icon belong here either way.
+# libSDL, not this X11 stack), while st, xev, toasters, pikostore and
+# mb-wallpaper-picker ship from this payload. Only the launcher and icon
+# belong here either way.
 #
 # The Categories= line in each file picks which app-folder it lands in:
 # Development matches the vfolder displayed as "Programming", System
@@ -309,6 +319,10 @@ done
 # pikostore needs a launcher more than most: it is the GUI for updating the
 # ROM, and expecting the user to open a terminal and type its name to reach
 # it would defeat the point (this keyboard cannot even produce a slash).
+#
+# mb-wallpaper-picker's Categories=Settings lands it in the Settings folder
+# instead of a launcher-worthy top-level folder -- same as the libmb/Xlib
+# version it replaces.
 #
 # st and xev are the conditional pair. Under --skip-st there is no st
 # binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
@@ -326,7 +340,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikalibrate pikostore found-file-browser toasters suspend reboot gototty"
+LAUNCHERS="pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else

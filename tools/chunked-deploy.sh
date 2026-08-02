@@ -787,6 +787,16 @@ else
     echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
 fi
 
+# vol: the volume counterpart of /usr/sbin/bright. Guarded the same way --
+# it only pokes mb-volume's control FIFO, so a board without it just has
+# no shell path to the volume, and everything else still works.
+if [ -x "$REPO/userspace/src/vol" ]; then
+    send_file "$REPO/userspace/src/vol" "/usr/sbin/vol"
+    ssh_do "chmod 0755 /usr/sbin/vol"
+else
+    echo "==> no built vol -- skipping (run tools/build-userspace.sh)"
+fi
+
 # 7. Userspace media payload: MPlayer + the ALSA runtime config tree + SDL.
 #
 # Skipped entirely with --no-userspace (or when the staged trees are absent,
@@ -1025,6 +1035,9 @@ if [ -x "$REPO/userspace/src/pkillx" ]; then
     echo "  /usr/sbin/pkillx         (gototty needs it)"
 fi
 echo "  /usr/sbin/sdcard         (mdev hook: mounts the card, and its swapfile)"
+if [ -x "$REPO/userspace/src/vol" ]; then
+    echo "  /usr/sbin/vol            (volume: vol up / vol down / vol mute)"
+fi
 if [ -x "$REPO/userspace/src/cardswap" ]; then
     echo "  /usr/sbin/cardswap       (64 MiB swap at /mnt/card/.zaurus/swap)"
 fi

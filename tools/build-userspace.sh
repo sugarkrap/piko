@@ -336,6 +336,38 @@ else
     echo "==> skipping cardswap (no $CARDSWAP_SRC)"
 fi
 
+# --- 1c-quinquies. vol (one-word volume control) ----------------------------
+# The companion to /usr/sbin/bright, and the same shape: a short typable
+# name for something the device keyboard cannot otherwise reach (AGENTS.md,
+# "The device keyboard cannot type many characters").
+#
+# It does not touch the mixer itself -- it writes one byte to mb-volume's
+# control FIFO and lets the applet, which owns ALSA and /etc/zaurus/volumed,
+# do the work. Same one-owner rule bright/brightd follow.
+#
+# It is a C program rather than the obvious two-line shell script because
+# opening a FIFO for writing BLOCKS until there is a reader, and this
+# device's /tmp is jffs2 rather than tmpfs -- so a stale FIFO from a dead
+# session survives a reboot and would hang the shell with no ^C on the
+# framebuffer console and no kill applet to escape with. O_NONBLOCK turns
+# that into an error message, and there is no way to ask ash for it.
+#
+# Same -static reasoning as md5sum above.
+VOL_SRC="$REPO/userspace/src/vol.c"
+VOL_BIN="$REPO/userspace/src/vol"
+if [ -f "$VOL_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$VOL_BIN" ] || [ "$VOL_SRC" -nt "$VOL_BIN" ]; then
+        echo "==> building userspace/src/vol"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$VOL_BIN" "$VOL_SRC"
+        "${CROSS_COMPILE}strip" "$VOL_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/vol already up to date"
+    fi
+else
+    echo "==> skipping vol (no $VOL_SRC)"
+fi
+
 # --- 1c-bis. hwclock + ntpsync (the clock) ----------------------------------
 # This busybox has no hwclock, no ntpd and no rdate applet, so with the
 # kernel RTC driver alone there was still no way to persist a time change

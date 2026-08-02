@@ -49,6 +49,14 @@ APPLETS="$APPLETS,mb-applet-wireless"
 # Self-hiding: mb-applet-card shows a tray icon only while an SD or CF
 # card is actually inserted, so it costs nothing to always start it.
 APPLETS="$APPLETS,mb-applet-card"
+# mb-brightness docks NOTHING -- ever. It hides itself before the main
+# loop starts (the same trick mb-applet-card uses for an empty slot, but
+# permanent), so the panel never creates a window or reserves a pixel for
+# it. Its only job is to draw the backlight OSD at the top of the screen
+# when brightd pokes it on Fn+3/Fn+4. Its position in this list is
+# therefore irrelevant to the panel layout -- it is here purely so it
+# starts and stops with the session. See docs/HOWTO-BRIGHTNESS.md.
+APPLETS="$APPLETS,mb-brightness"
 APPLETS="$APPLETS,mb-applet-menu-launcher"
 # The taskbar: one button per running application, with its icon, its name
 # and a count when it has several windows. Also self-hiding -- with nothing

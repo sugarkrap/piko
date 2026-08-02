@@ -185,6 +185,33 @@
  */
 #define FIFO_PATH  "/tmp/brightd.fifo"
 
+/*
+ * THE ON-SCREEN DISPLAY
+ *
+ * mb-brightness (a hidden panel applet -- it docks no icon and exists
+ * only to draw) shows a bar at the top of the screen with the backlight
+ * level in it. It owns none of the backlight: we poke it with one byte
+ * and it then READS /sys/class/backlight itself, so it can never
+ * disagree with what actually happened here. Same one-owner rule this
+ * daemon already has with /usr/sbin/bright.
+ *
+ *   's'  show the OSD, re-reading the level from sysfs
+ *
+ * Poked from run_bright() and nowhere else, which is exactly the set of
+ * EXPLICIT user changes -- Fn+3/Fn+4, whether they arrive from evdev
+ * directly (console) or over FIFO_PATH from the X server. Idle dimming,
+ * lid blanking and the DPMS path deliberately do NOT poke it: they call
+ * go_dim()/go_blank()/go_active(), which write sysfs directly and never
+ * go through run_bright(). An OSD lighting the screen up as it dims to
+ * save power would be both absurd and self-defeating.
+ *
+ * Opened per poke rather than held open like our own FIFO above: the
+ * applet comes and goes with the X session, so a cached descriptor would
+ * spend most of its life stale. At autorepeat rates the open/write/close
+ * is lost in the noise next to the fork+exec run_bright() already does.
+ */
+#define OSD_FIFO   "/tmp/mb-brightness.fifo"
+
 /* How long a heartbeat vouches for the X event source. Must be
  * comfortably longer than the sender's heartbeat interval. */
 #define HEARTBEAT_TTL 30
@@ -595,6 +622,27 @@ do_suspend(void)
  * a step is. Waits for the child so two fast presses cannot race each
  * other's read-modify-write of the sysfs value.
  */
+/*
+ * Tell mb-brightness to show the OSD (see OSD_FIFO above). Entirely
+ * best-effort and silent: ENOENT means the applet has never run and
+ * ENXIO means it is not running now, both of which are the ordinary
+ * state of affairs on a console-only boot. O_NONBLOCK is what keeps
+ * those from becoming a blocking open, and SIGPIPE is already SIG_IGN
+ * here so a vanished reader gives EPIPE rather than killing us.
+ */
+static void
+notify_osd(void)
+{
+	int fd = open(OSD_FIFO, O_WRONLY | O_NONBLOCK);
+
+	if (fd < 0)
+		return;
+
+	/* Droppable by design -- a missed poke costs one un-drawn OSD. */
+	(void)write(fd, "s", 1);
+	close(fd);
+}
+
 static void
 run_bright(const char *arg)
 {
@@ -617,6 +665,11 @@ run_bright(const char *arg)
 
 	while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
 		;
+
+	/* After the wait, never before: the applet reads the level out of
+	 * sysfs for itself, so it has to be poked once the child has
+	 * actually written it or it would draw the previous step. */
+	notify_osd();
 }
 
 /*
