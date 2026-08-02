@@ -18,26 +18,15 @@
 # lib/crypto, fs/nls, fs/fat) don't -- the prefix has to travel with each
 # entry rather than being reconstructed from a shorter name.
 
-# Sound/ALSA stack. Order doesn't matter for deployment; flash/*/audioon
-# (generated in tools/chunked-deploy.sh) loads them in dependency order at
-# insmod time separately from this list.
+# Sound/ALSA stack used to ship here as insmod'd .ko's, loaded in dependency
+# order by /usr/sbin/audioon. Now built into the kernel (CONFIG_SOUND/
+# CONFIG_SND*/CONFIG_AC97_BUS=y etc.) for the same reason SPI/touchscreen
+# were: the WM8731 codec is board-soldered and always present at boot, so
+# there was nothing gained by shipping it as a separately-insmod'd module,
+# and building it in closes off the same kernel/module ABI-drift risk called
+# out below for WIFI_MODULES. Kept as an empty var (not deleted) because
+# every consumer of this file runs under `set -eu`.
 AUDIO_MODULES="
-sound/soundcore.ko
-sound/core/snd.ko
-sound/core/snd-timer.ko
-sound/core/snd-pcm.ko
-sound/core/snd-pcm-dmaengine.ko
-sound/arm/snd-pxa2xx-lib.ko
-sound/ac97_bus.ko
-sound/pci/ac97/snd-ac97-codec.ko
-sound/soc/snd-soc-core.ko
-sound/soc/pxa/snd-soc-pxa2xx.ko
-sound/soc/pxa/snd-soc-pxa2xx-i2s.ko
-sound/soc/codecs/snd-soc-wm8731.ko
-sound/soc/codecs/snd-soc-wm8731-i2c.ko
-sound/soc/pxa/snd-soc-corgi.ko
-sound/core/oss/snd-mixer-oss.ko
-sound/core/oss/snd-pcm-oss.ko
 "
 
 # WiFi/PCMCIA stack -- MUST be redeployed in lockstep with every kernel
@@ -45,6 +34,15 @@ sound/core/oss/snd-pcm-oss.ko
 # these leaves stale .ko's whose struct-module ABI no longer matches the
 # new kernel, so insmod fails with "section size must match", PCMCIA never
 # comes up, and the device becomes unreachable over WiFi/SSH).
+#
+# libarc4.ko (CONFIG_CRYPTO_LIB_ARC4) used to ship here too, but the kernel
+# config already carries it as CONFIG_CRYPTO_LIB_ARC4=y -- no .ko is built
+# for it anymore, so the entry was stale (found while cross-checking this
+# list against kernel.config-corgi-7.1.4 for the audio/NLS built-in
+# change): the next WiFi-affecting redeploy would have hard-failed here
+# with "missing module", the exact failure mode the paragraph above exists
+# to prevent, just via a different mechanism (stale list vs. mismatched
+# ABI).
 WIFI_MODULES="
 kernel/drivers/pcmcia/pcmcia_core.ko
 kernel/drivers/pcmcia/pcmcia_rsrc.ko
@@ -58,7 +56,6 @@ kernel/net/wireless/lib80211.ko
 kernel/net/wireless/lib80211_crypt_wep.ko
 kernel/net/wireless/lib80211_crypt_ccmp.ko
 kernel/net/wireless/lib80211_crypt_tkip.ko
-kernel/lib/crypto/libarc4.ko
 "
 
 # NOTE: the SPI stack (ssp, spi-pxa2xx-core/platform), ads7846
@@ -70,16 +67,15 @@ kernel/lib/crypto/libarc4.ko
 # making it a separately-shipped, separately-insmod'd module, and every
 # device now probes during kernel init instead of racing rcS/mdev.
 
-# VFAT/NLS stack for SD cards. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA
-# are built into the kernel (not modules) specifically so the pxa2xx-mci
-# platform device probes and the block device appears during kernel init,
-# before rcS's mdev daemon is even running -- see rcS's mdev-coldplug
-# comment for the race this avoids. VFAT/NLS covers the usual
-# Cacko-formatted SD cards; ext4 support is built into the kernel too.
+# VFAT/NLS/FAT for SD cards used to ship here too. CONFIG_MMC/
+# CONFIG_MMC_BLOCK/CONFIG_MMC_PXA are built into the kernel (not modules)
+# specifically so the pxa2xx-mci platform device probes and the block
+# device appears during kernel init, before rcS's mdev daemon is even
+# running -- see rcS's mdev-coldplug comment for the race this avoids.
+# CONFIG_FAT_FS/CONFIG_VFAT_FS/the NLS codepages (Cacko-formatted SD cards
+# use cp437/cp850/iso8859-15) are all built in now too, for the same
+# reason; ext4 support is built into the kernel as well. Kept as an empty
+# var (not deleted) because every consumer of this file runs under
+# `set -eu`.
 SD_MODULES="
-kernel/fs/nls/nls_cp437.ko
-kernel/fs/nls/nls_cp850.ko
-kernel/fs/nls/nls_iso8859-15.ko
-kernel/fs/fat/fat.ko
-kernel/fs/fat/vfat.ko
 "
