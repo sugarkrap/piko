@@ -448,6 +448,28 @@ static int w100fb_sync(struct fb_info *info)
 
 static int w100fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
+	/*
+	 * Map the framebuffer write-combining, not uncached-unbuffered.
+	 *
+	 * Neither the fbdev core nor this driver used to touch vm_page_prot, so
+	 * userspace got the default L_PTE_MT_UNCACHED (C=0,B=0): every store is
+	 * its own bus transaction and the write buffer cannot merge any of them.
+	 * Profiling otQuake's software blit measured ~69 cycles per 32-bit store
+	 * that way -- 60% of its frame time went on pushing pixels here, and
+	 * batching the stores into LDM/STM bursts barely helped because the
+	 * bottleneck was the bus, not the instruction count.
+	 *
+	 * L_PTE_MT_BUFFERABLE (C=0,B=1) keeps the mapping uncached -- so there is
+	 * still no stale-data problem and no flushing to do -- while letting the
+	 * write buffer coalesce sequential stores into bursts.
+	 *
+	 * Ordering: a buffered write may still be in flight when userspace asks
+	 * for a page flip, but FBIOPAN_DISPLAY reaches the hardware through
+	 * writel() in w100fb_pan_display(), which carries its own barrier, so the
+	 * pixels land before the flip takes effect.
+	 */
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
 	return vm_iomap_memory(vma, info->fix.smem_start, info->fix.smem_len);
 }
 
@@ -1048,8 +1070,19 @@ static int w100fb_probe(struct platform_device *pdev)
 	}
 	printk(" at 0x%08lx.\n", (unsigned long) mem->start+W100_CFG_BASE);
 
-	/* Remap the framebuffer */
-	remapped_fbuf = ioremap(mem->start+MEM_WINDOW_BASE, MEM_WINDOW_SIZE);
+	/*
+	 * Remap the framebuffer write-combining, matching what w100fb_mmap()
+	 * hands userspace. The register windows above stay plain ioremap(): those
+	 * are real registers, where buffering writes would reorder them.
+	 *
+	 * Both mappings must agree. ARM leaves the behaviour of two mappings of
+	 * the same physical memory with different memory types UNPREDICTABLE, so
+	 * making userspace bufferable while the kernel's own view stayed uncached
+	 * would be a latent bug even where it appeared to work. Every access
+	 * through this pointer already goes via memset_io/memcpy_*io, which are
+	 * fine on Normal-NC memory.
+	 */
+	remapped_fbuf = ioremap_wc(mem->start+MEM_WINDOW_BASE, MEM_WINDOW_SIZE);
 	if (remapped_fbuf == NULL)
 		goto out;
 
