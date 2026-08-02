@@ -114,26 +114,52 @@ XIO: fatal IO error 11 (Resource temporarily unavailable) on X server ":0"
 ```
 
 including `matchbox-panel` and `matchbox-desktop`, neither of which this
-work had touched. `xfbdev.log` recorded nothing at all. **This was not
-root-caused.** The same failure, equally unexplained, is already recorded
-under "The screensaver: toasters" below ("the X session twice ended up
-dead after a manual launch") — so it predates the OSD.
+work had touched. `xfbdev.log` recorded nothing at all.
 
-One change was made anyway, as the cheapest suspect to remove: the first
-version of `mb-brightness` repainted the OSD on every 150ms tick, to stand
-in for the Expose a hidden applet can never receive. That meant a full
-image rebuild, an Xft text render and an `XCopyArea` about seven times per
-appearance for a picture that had not changed — a steady stream of
-requests at an unaccelerated server, bought for nothing. It now paints
-only when the level changes. That is **not** a proven fix for the IO
-error; it is pointless traffic removed while the real cause is still open.
+**The likely cause is another process taking the VT, and it is almost
+certainly the same thing behind the unexplained deaths recorded under
+"The screensaver: toasters" below.** It happened a second time during the
+same session, and that time the evidence was still on the box:
 
-Recovery, for the next person who hits it: `Xfbdev` itself survived, so
-the session can be brought back without a reboot —
+```
+Fatal server error: LinuxInit: VT_WAITACTIVE failed      # /tmp/xfbdev.log
+
+4188 root  matchbox-fbrun -y -n GMenuNX -- ./gmenunx     # ps
+4206 root  ./gmenunx
+```
+
+`gmenunx` is an SDL program drawing straight to the framebuffer, so it
+takes the VT. Its PIDs are *higher* than the session that had just been
+restarted, i.e. it started afterwards and pulled the VT out from under a
+running X server — which kills every client at once with exactly the
+`XIO` above, and then stops the next `Xfbdev` from starting at all.
+
+**This board is shared between working sessions.** Before concluding that
+an X death is a bug in whatever you just deployed, run `ps` and look for
+another framebuffer program. Note the shape of the evidence: *every*
+client dying simultaneously, including ones you never touched, points at
+the server or the VT, not at your client.
+
+One change was made anyway, as the cheapest suspect to remove before the
+VT contention was spotted: the first version of `mb-brightness` repainted
+the OSD on every 150ms tick, to stand in for the Expose a hidden applet
+can never receive. That meant a full image rebuild, an Xft text render and
+an `XCopyArea` about seven times per appearance for a picture that had not
+changed — a steady stream of requests at an unaccelerated server, bought
+for nothing. It now paints only when the level changes. On the evidence
+above that was **not** the cause; it was pointless traffic and is better
+gone regardless.
+
+Recovery. If `Xfbdev` survived, the session comes back without a reboot:
 
 ```
 DISPLAY=:0 HOME=/root PATH=/usr/local/bin:$PATH setsid /etc/matchbox/session &
 ```
+
+If it did not, check for the VT holder first — starting X under it just
+fails with `VT_WAITACTIVE` again. And check the backlight: a board left
+with no X and no input looks dead but is usually just blanked, so
+`bright 20` before assuming anything worse.
 
 ## Configuration
 
