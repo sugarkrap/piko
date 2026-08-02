@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Found
+Comment=Browse files
+Exec=found-file-browser
+Icon=found-file-browser
+Terminal=false
+Categories=Utility;
