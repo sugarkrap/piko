@@ -120,6 +120,10 @@ FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
 # opposed to a smoke test. Same staging location as fltktest -- put there
 # by tools/build-pikostore.sh, which must run after tools/build-fltk.sh.
 PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
+# found-file-browser ("Found") -- same staging location and build-after-
+# build-fltk.sh dependency as pikostore, put there by
+# tools/build-found-file-browser.sh.
+FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
 # mb-wallpaper-picker: the desktop's wallpaper setter. Same staging location
 # as fltktest/pikostore -- put there by tools/build-fltk.sh, which also
 # builds fltktest and matchbox-fbrun.
@@ -185,6 +189,7 @@ $XEV_BIN:usr/local/bin/xev \
 $TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $PIKOSTORE_BIN:usr/local/bin/pikostore \
+$FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
@@ -335,7 +340,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikalibrate pikostore mb-wallpaper-picker toasters suspend reboot gototty"
+LAUNCHERS="pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else
