@@ -200,6 +200,11 @@ static void test_deploy_message_roundtrips()
     FreeSpaceAckMsg fs2;
     check(decode_free_space_ack(encode(fs), fs2), "free_space_ack decodes");
     check_u64(fs2.free_bytes, 18364ull * 1024, "free_space_ack free_bytes");
+
+    DeployBeginMsg db; db.total_bytes = 24117248; /* ~23 MiB */
+    DeployBeginMsg db2;
+    check(decode_deploy_begin(encode(db), db2), "deploy_begin decodes");
+    check_u64(db2.total_bytes, 24117248, "deploy_begin total_bytes");
 }
 
 static void test_decode_rejects_truncated()
@@ -450,6 +455,61 @@ static void test_queue_empty_aggregate_is_zero_not_nan()
     check(q.aggregate_percent() == 0.0, "empty queue");
 }
 
+static void test_queue_find_or_add_reuses_row_on_retry()
+{
+    printf("transfer_queue: a repeated name reuses its row instead of duplicating\n");
+    TransferQueue q;
+    int a = q.find_or_add("/boot/zImage-full", 1000);
+    q.set_status(a, XFER_TRANSFERRING);
+    q.set_progress(a, 400);
+
+    /* connection dropped, client reconnects and re-offers the same path */
+    int b = q.find_or_add("/boot/zImage-full", 1000);
+    check(a == b, "reconnect for the same name reuses the same row");
+    check(q.count() == 1, "no duplicate row was appended");
+    check_u64(q.row(b).bytes_done, 0, "reused row resets progress until the next set_progress");
+
+    q.set_status(b, XFER_TRANSFERRING);
+    q.set_progress(b, 1000);
+    check(q.count() == 1, "still one row after the successful retry");
+    double pct = q.aggregate_percent();
+    check(pct > 99.9 && pct < 100.1, "aggregate reaches 100%, not diluted by the dropped attempt");
+}
+
+static void test_deploy_session_tracks_whole_run()
+{
+    printf("deploy_session: tracks progress across the whole deploy, not just files seen so far\n");
+    DeploySession d;
+    check(!d.active(), "not active before begin()");
+    check(d.percent() == 0.0, "0%% before begin()");
+
+    d.begin(1000);
+    check(d.active(), "active after begin()");
+    check(d.percent() == 0.0, "0%% right after begin()");
+
+    /* first file: already satisfied, credited in one shot, no chunks */
+    d.add_bytes(200);
+    /* second file: 300 bytes, streamed as two chunks */
+    d.add_bytes(150);
+    d.add_bytes(150);
+    double pct = d.percent();
+    check(pct > 49.9 && pct < 50.1, "500/1000 bytes in -> 50%%, even though only 2 of many files landed");
+
+    d.add_bytes(500);
+    check(d.percent() == 100.0, "reaches exactly 100%% once every declared byte is in");
+
+    d.add_bytes(999999); /* a bug that double-counts must not read over 100% */
+    check(d.percent() == 100.0, "clamped at 100%% even if something double-counts");
+}
+
+static void test_deploy_session_noop_when_inactive()
+{
+    printf("deploy_session: add_bytes before begin() is a harmless no-op (plain, non-deploy transfers)\n");
+    DeploySession d;
+    d.add_bytes(12345);
+    check(d.percent() == 0.0, "no session means no bogus progress");
+}
+
 /* ---------------------------------------------------------------- */
 
 int main()
@@ -477,6 +537,10 @@ int main()
     test_queue_aggregate_percent();
     test_queue_unsized_row_excluded_from_aggregate();
     test_queue_empty_aggregate_is_zero_not_nan();
+    test_queue_find_or_add_reuses_row_on_retry();
+
+    test_deploy_session_tracks_whole_run();
+    test_deploy_session_noop_when_inactive();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {

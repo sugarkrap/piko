@@ -580,19 +580,24 @@ void ClientApp::do_retry_failed()
  * Build & Deploy tab: a GUI front end for tools/build-and-deploy.sh.       *
  * ---------------------------------------------------------------------- */
 
-struct Milestone { const char *substr; int percent; };
+/* `phase` drives status_label_, the one-line "what's happening right now"
+ * above the percent bar -- distinct from the bar's own "N%"/"done"/
+ * "FAILED" label. Data-driven for the same reason MILESTONES itself is:
+ * adding or reordering a milestone should not require hunting down a
+ * separate if/else chain to keep the phase text in sync. */
+struct Milestone { const char *substr; int percent; const char *phase; };
 
 static const Milestone MILESTONES[] = {
-    { "checking ",                              5 },
-    { "reconstructing kernel-src",              10 },
-    { "building zImage",                        20 },
-    { "build OK",                                45 },
-    { "building userspace",                      55 },
-    { "userspace build OK",                      70 },
-    { "building the X11/Matchbox stack",         80 },
-    { "repacking the X11/Matchbox payload",      90 },
-    { "X11 payload OK",                          95 },
-    { "deploying to",                            98 },
+    { "checking ",                              5, "Checking..."  },
+    { "reconstructing kernel-src",              10, "Building..." },
+    { "building zImage",                        20, "Building..." },
+    { "build OK",                                45, "Building..." },
+    { "building userspace",                      55, "Building..." },
+    { "userspace build OK",                      70, "Building..." },
+    { "building the X11/Matchbox stack",         80, "Building..." },
+    { "repacking the X11/Matchbox payload",      90, "Building..." },
+    { "X11 payload OK",                          95, "Building..." },
+    { "deploying to",                            98, "Deploying..." },
 };
 static const int MILESTONE_COUNT = sizeof(MILESTONES) / sizeof(MILESTONES[0]);
 
@@ -634,6 +639,7 @@ private:
     Fl_Check_Button *no_backup_;
     Fl_Choice *destination_;
     Fl_Button *run_btn_;
+    Fl_Box *status_label_;
     Fl_Progress *bar_;
     Fl_Text_Buffer *log_buf_;
     Fl_Text_Display *log_;
@@ -708,6 +714,16 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     settings_btn_ = new Fl_Button(X + m + 150, y, 100, 26, "Settings...");
     settings_btn_->callback(settings_cb, this);
     y += 34;
+
+    /* What this run is doing right now -- "Building.../Deploying..." --
+     * distinct from bar_'s own label, which is a percentage (or "done"/
+     * "FAILED (exit N)" once it stops), not a description. */
+    status_label_ = new Fl_Box(X + m, y, W - 2 * m, 16);
+    status_label_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    status_label_->labelfont(FL_HELVETICA_ITALIC);
+    status_label_->labelsize(12);
+    status_label_->label("");
+    y += 18;
 
     bar_ = new Fl_Progress(X + m, y, W - 2 * m, 20);
     bar_->minimum(0);
@@ -961,6 +977,8 @@ void BuildRunner::do_run()
     bar_->value(0);
     bar_->selection_color(FL_BLUE);
     bar_->copy_label("running...");
+    status_label_->label("Building...");
+    status_label_->redraw();
     run_btn_->deactivate();
 }
 
@@ -1002,6 +1020,8 @@ void BuildRunner::handle_line(const std::string &line)
             snprintf(lbl, sizeof(lbl), "%d%%", MILESTONES[i].percent);
             bar_->copy_label(lbl);
             bar_->redraw();
+            status_label_->label(MILESTONES[i].phase);
+            status_label_->redraw();
             break;
         }
     }
@@ -1031,14 +1051,17 @@ void BuildRunner::finish(int rc)
         bar_->value(100);
         bar_->selection_color(FL_DARK_GREEN);
         snprintf(lbl, sizeof(lbl), "done");
+        status_label_->label("Done");
         append("\n--- build-and-deploy.sh finished successfully ---\n");
     } else {
         bar_->selection_color(FL_RED);
         snprintf(lbl, sizeof(lbl), "FAILED (exit %d)", rc);
+        status_label_->label("Failed");
         append("\n--- build-and-deploy.sh FAILED. See the log above. ---\n");
     }
     bar_->copy_label(lbl);
     bar_->redraw();
+    status_label_->redraw();
 }
 
 /* ---------------------------------------------------------------------- *

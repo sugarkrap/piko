@@ -348,6 +348,30 @@ static bool run_tar(const std::string &tar_path, const std::string &dest_dir)
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/* Sum of every step's bytes, for MSG_DEPLOY_BEGIN -- see its comment in
+ * protocol.h for why the server needs this up front rather than learning
+ * about one file at a time. put_tar_tree counts the tar's own archive
+ * size as a stand-in for its expanded contents (the real size isn't known
+ * until execute_step() actually extracts it); everything else is an exact
+ * stat(). A step whose local file has since vanished contributes 0 rather
+ * than aborting here -- execute_step() will report that failure properly,
+ * with a useful message, when it actually gets there. */
+static uint64_t compute_plan_total_bytes(const std::vector<Step> &plan)
+{
+    uint64_t total = 0;
+    struct stat st;
+    for (size_t i = 0; i < plan.size(); i++) {
+        const Step &s = plan[i];
+        const std::string *path = 0;
+        if (s.type == STEP_PUT_FILE) path = &s.local_path;
+        else if (s.type == STEP_EXTRACT_TAR_TREE) path = &s.local_tar_path;
+        else continue;
+        if (stat(path->c_str(), &st) == 0)
+            total += static_cast<uint64_t>(st.st_size);
+    }
+    return total;
+}
+
 /* --dry-run's listing -- no network, no filesystem access beyond what
  * build_plan() already did. */
 static std::string describe_step(const Step &s)
@@ -698,6 +722,18 @@ int main(int argc, char **argv)
 
     printf("Target: %s:%d (staging=%s)\n", g_host.c_str(), g_port, staging_name);
     printf("%zu steps to run\n", plan.size());
+
+    /* Best-effort: a deploy-wide progress bar is a nicety, not something
+     * worth failing an otherwise-working deploy over if this one extra
+     * connection has a problem. */
+    {
+        DeployBeginMsg begin;
+        begin.total_bytes = compute_plan_total_bytes(plan);
+        std::string resp, begin_error;
+        if (!simple_request(MSG_DEPLOY_BEGIN, encode(begin), MSG_DEPLOY_BEGIN_ACK, resp, begin_error))
+            fprintf(stderr, "  (note: could not announce deploy size to the server: %s)\n",
+                    begin_error.c_str());
+    }
 
     for (size_t i = 0; i < plan.size(); i++) {
         if (!execute_step(plan[i], error)) {

@@ -74,7 +74,12 @@ enum MessageType {
     MSG_QUERY_EXISTING     = 18, /* client -> server */
     MSG_QUERY_EXISTING_ACK = 19, /* server -> client */
     MSG_FREE_SPACE         = 20, /* client -> server */
-    MSG_FREE_SPACE_ACK     = 21  /* server -> client */
+    MSG_FREE_SPACE_ACK     = 21, /* server -> client */
+
+    /* Sent once, on its own short-lived connection, before any PUT_OFFER
+     * -- see DeployBeginMsg below for why. */
+    MSG_DEPLOY_BEGIN       = 22, /* client -> server */
+    MSG_DEPLOY_BEGIN_ACK   = 23  /* server -> client */
 };
 
 enum PutPolicy {
@@ -519,6 +524,37 @@ inline bool decode_put_offer_ack(const std::string &p, PutOfferAckMsg &m)
         && get_str16(p, pos, m.reason);
 }
 
+/* Sent once, before the first PUT_OFFER of a deploy run, so the server can
+ * show progress across the WHOLE run instead of only what it has heard
+ * about so far. Without this, the server only learns about one file at a
+ * time (each on its own short-lived connection) -- a file that is
+ * PUT_ALREADY_SATISFIED never even gets a row, and one that IS sent only
+ * contributes its own size to the aggregate once its PUT_OFFER arrives, so
+ * the aggregate bar could read 100% between files while 100 more were
+ * still queued behind it (seen live 2026-08-03: the bar sat at 100% for
+ * most of a 119-step deploy). total_bytes is the sum of every step's
+ * bytes as pikodeploy's own plan sees it -- put_tar_tree steps (the
+ * X11/Matchbox payload) count the tar's own archive size as a stand-in
+ * for its expanded contents, since the tar is not extracted (and its
+ * true expanded size not known) until execute_step() actually reaches
+ * that step; close enough for a progress indicator, not used for
+ * anything that needs to be exact. */
+struct DeployBeginMsg {
+    uint64_t total_bytes;
+    DeployBeginMsg() : total_bytes(0) {}
+};
+inline std::string encode(const DeployBeginMsg &m)
+{
+    std::string p;
+    put_u64(p, m.total_bytes);
+    return p;
+}
+inline bool decode_deploy_begin(const std::string &p, DeployBeginMsg &m)
+{
+    size_t pos = 0;
+    return get_u64(p, pos, m.total_bytes);
+}
+
 struct PathMsg { /* shared shape for MKDIR and QUERY_EXISTING/FREE_SPACE requests */
     std::string path;
 };
@@ -534,7 +570,7 @@ inline bool decode_path(const std::string &p, PathMsg &m)
     return get_str16(p, pos, m.path);
 }
 
-struct OkReasonMsg { /* shared shape for MKDIR_ACK/SYMLINK_ACK/RUN_ACK */
+struct OkReasonMsg { /* shared shape for MKDIR_ACK/SYMLINK_ACK/RUN_ACK/DEPLOY_BEGIN_ACK */
     bool ok;
     std::string reason; /* valid when !ok */
     OkReasonMsg() : ok(false) {}

@@ -62,6 +62,79 @@ using namespace pikoxfer;
 static const char *TRANSFERS_DIR = "/mnt/card/Transfers";
 static const char *PART_SUFFIX = ".pikoxfer-part";
 
+/* The device's root (and /boot) is JFFS2 on raw NAND. Its reserve-space
+ * path can transiently return EAGAIN from write()/rename()/mkdir() when
+ * garbage collection hasn't freed a block yet -- not a real failure, and
+ * expected by the filesystem's own contract to be retried after a short
+ * wait (see fs/jffs2/write.c). Missing that here turned a normal,
+ * momentary GC stall into a hard, unretried deploy failure (2026-08-03:
+ * "could not finalize: Resource temporarily unavailable" writing the
+ * zImage to /boot while staged on the SD card). EINTR is handled the same
+ * way for the usual reason (a signal landed mid-syscall, not an error).
+ */
+static const int JFFS2_EAGAIN_RETRIES = 20;
+static const int JFFS2_EAGAIN_DELAY_US = 100000;
+
+static ssize_t write_retry(int fd, const void *buf, size_t count)
+{
+    for (int attempt = 0; ; attempt++) {
+        ssize_t n = write(fd, buf, count);
+        if (n >= 0)
+            return n;
+        if (errno == EINTR)
+            continue;
+        if (errno == EAGAIN && attempt < JFFS2_EAGAIN_RETRIES) {
+            usleep(JFFS2_EAGAIN_DELAY_US);
+            continue;
+        }
+        return -1;
+    }
+}
+
+static ssize_t pwrite_retry(int fd, const void *buf, size_t count, off_t offset)
+{
+    for (int attempt = 0; ; attempt++) {
+        ssize_t n = pwrite(fd, buf, count, offset);
+        if (n >= 0)
+            return n;
+        if (errno == EINTR)
+            continue;
+        if (errno == EAGAIN && attempt < JFFS2_EAGAIN_RETRIES) {
+            usleep(JFFS2_EAGAIN_DELAY_US);
+            continue;
+        }
+        return -1;
+    }
+}
+
+static int rename_retry(const char *oldpath, const char *newpath)
+{
+    for (int attempt = 0; ; attempt++) {
+        if (rename(oldpath, newpath) == 0)
+            return 0;
+        if (errno == EAGAIN && attempt < JFFS2_EAGAIN_RETRIES) {
+            usleep(JFFS2_EAGAIN_DELAY_US);
+            continue;
+        }
+        return -1;
+    }
+}
+
+static int mkdir_retry(const char *path, mode_t mode)
+{
+    for (int attempt = 0; ; attempt++) {
+        if (mkdir(path, mode) == 0)
+            return 0;
+        if (errno == EEXIST)
+            return 0;
+        if (errno == EAGAIN && attempt < JFFS2_EAGAIN_RETRIES) {
+            usleep(JFFS2_EAGAIN_DELAY_US);
+            continue;
+        }
+        return -1;
+    }
+}
+
 static std::string dirname_of(const std::string &path)
 {
     std::string::size_type slash = path.find_last_of('/');
@@ -82,9 +155,7 @@ static bool mkdir_p(const std::string &path)
         return S_ISDIR(st.st_mode);
     if (!mkdir_p(dirname_of(path)))
         return false;
-    if (mkdir(path.c_str(), 0755) == 0)
-        return true;
-    return errno == EEXIST;
+    return mkdir_retry(path.c_str(), 0755) == 0;
 }
 
 static bool is_sd_card_mounted()
@@ -166,7 +237,7 @@ static bool copy_file(const std::string &src, const std::string &dst)
     ssize_t n;
     bool ok = true;
     while ((n = read(in, buf, sizeof(buf))) > 0) {
-        ssize_t w = write(out, buf, static_cast<size_t>(n));
+        ssize_t w = write_retry(out, buf, static_cast<size_t>(n));
         if (w != n) { ok = false; break; }
     }
     if (n < 0)
@@ -222,6 +293,7 @@ private:
     void handle_run(const std::string &payload);
     void handle_query_existing(const std::string &payload);
     void handle_free_space(const std::string &payload);
+    void handle_deploy_begin(const std::string &payload);
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason); /* send ERROR (best effort), then close */
@@ -264,13 +336,27 @@ public:
     TransferMap &transfer_map() { return transfer_map_; }
     const std::vector<std::string> &complete_names() const { return complete_names_; }
     void note_complete_name(const std::string &name) { complete_names_.push_back(name); }
+    DeploySession &deploy_session() { return deploy_session_; }
+
+    void set_status(const std::string &text)
+    {
+        status_label_->copy_label(text.c_str());
+        status_label_->redraw();
+    }
 
     void sync_table()
     {
         table_->sync();
-        aggregate_bar_->value(static_cast<float>(queue_.aggregate_percent()));
+        /* A deploy in progress overrides the plain per-row aggregate: that
+         * aggregate can only reflect files whose PUT_OFFER has already
+         * arrived on its own connection, so it reads 100% between files
+         * while dozens more are still queued behind them. Once
+         * MSG_DEPLOY_BEGIN has declared the whole run's byte total, that
+         * is the one that means something. */
+        double pct = deploy_session_.active() ? deploy_session_.percent() : queue_.aggregate_percent();
+        aggregate_bar_->value(static_cast<float>(pct));
         char lbl[32];
-        snprintf(lbl, sizeof(lbl), "%d%%", static_cast<int>(queue_.aggregate_percent() + 0.5));
+        snprintf(lbl, sizeof(lbl), "%d%%", static_cast<int>(pct + 0.5));
         aggregate_bar_->copy_label(lbl);
         aggregate_bar_->redraw();
     }
@@ -299,9 +385,11 @@ private:
     void scan_existing();
 
     Fl_Box *address_box_;
+    Fl_Box *status_label_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     TransferQueue queue_;
+    DeploySession deploy_session_;
     TransferMap transfer_map_;
     std::vector<std::string> complete_names_;
     int listen_fd_;
@@ -432,6 +520,7 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_RUN:              handle_run(payload); return;
         case MSG_QUERY_EXISTING:   handle_query_existing(payload); return;
         case MSG_FREE_SPACE:       handle_free_space(payload); return;
+        case MSG_DEPLOY_BEGIN:     handle_deploy_begin(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -507,9 +596,10 @@ void Connection::handle_offer(const std::string &payload)
         }
     }
 
-    row_ = app_->queue().add(final_name_, total_size_);
+    row_ = app_->queue().find_or_add(final_name_, total_size_);
     app_->queue().set_status(row_, XFER_TRANSFERRING);
     app_->queue().set_progress(row_, next_offset_);
+    app_->set_status("Receiving " + final_name_ + "...");
     app_->sync_table();
 
     FileOfferAckMsg ack;
@@ -530,8 +620,8 @@ void Connection::handle_chunk(const std::string &payload)
     if (next_offset_ + dc.data.size() > total_size_) { fail("chunk exceeds file size"); return; }
     if (part_fd_ < 0) { fail("no data expected for this file"); return; }
 
-    ssize_t w = pwrite(part_fd_, dc.data.data(), dc.data.size(),
-                        static_cast<off_t>(dc.offset));
+    ssize_t w = pwrite_retry(part_fd_, dc.data.data(), dc.data.size(),
+                              static_cast<off_t>(dc.offset));
     if (w < 0 || static_cast<size_t>(w) != dc.data.size()) {
         char msg[128];
         snprintf(msg, sizeof(msg), "write failed: %s", strerror(errno));
@@ -547,6 +637,8 @@ void Connection::handle_chunk(const std::string &payload)
      * shared Transfers/ folder, which an absolute deploy path never has). */
     if (!is_deploy_)
         app_->transfer_map()[TransferKey(original_name_, total_size_)].bytes_on_disk = next_offset_;
+    else
+        app_->deploy_session().add_bytes(dc.data.size());
 
     if (row_ >= 0) {
         app_->queue().set_progress(row_, next_offset_);
@@ -590,6 +682,7 @@ void Connection::handle_complete(const std::string &payload)
 
     /* Recompute the CRC from what is actually on disk, independent of
      * how many reconnects it took to get there -- see the file header. */
+    app_->set_status("Verifying " + final_name_ + "...");
     Crc32 crc;
     if (lseek(part_fd_, 0, SEEK_SET) == 0) {
         char buf[65536];
@@ -622,7 +715,7 @@ void Connection::handle_complete(const std::string &payload)
     close(part_fd_);
     part_fd_ = -1;
 
-    if (rename(part_path.c_str(), final_path.c_str()) != 0) {
+    if (rename_retry(part_path.c_str(), final_path.c_str()) != 0) {
         char msg[256];
         snprintf(msg, sizeof(msg), "could not finalize: %s", strerror(errno));
         FileCompleteAckMsg ack;
@@ -676,6 +769,11 @@ void Connection::handle_put_offer(const std::string &payload)
     bool exists = (stat(po.path.c_str(), &st) == 0);
 
     if (po.policy == PUT_IF_MISSING && exists) {
+        /* This file will never generate a DATA_CHUNK, so its weight in
+         * the deploy-wide total (see DeploySession) has to be credited
+         * right here or the bar could never reach 100%. */
+        app_->deploy_session().add_bytes(po.total_size);
+        app_->sync_table();
         PutOfferAckMsg ack;
         ack.outcome = PUT_ALREADY_SATISFIED;
         send(MSG_PUT_OFFER_ACK, encode(ack));
@@ -697,6 +795,8 @@ void Connection::handle_put_offer(const std::string &payload)
                 crc.update(buf, static_cast<size_t>(n));
             close(fd);
             if (crc.final_value() == po.crc32) {
+                app_->deploy_session().add_bytes(po.total_size);
+                app_->sync_table();
                 PutOfferAckMsg ack;
                 ack.outcome = PUT_ALREADY_SATISFIED;
                 send(MSG_PUT_OFFER_ACK, encode(ack));
@@ -747,9 +847,10 @@ void Connection::handle_put_offer(const std::string &payload)
     }
 
     next_offset_ = resume_offset;
-    row_ = app_->queue().add(po.path, po.total_size);
+    row_ = app_->queue().find_or_add(po.path, po.total_size);
     app_->queue().set_status(row_, XFER_TRANSFERRING);
     app_->queue().set_progress(row_, next_offset_);
+    app_->set_status("Receiving " + po.path + "...");
     app_->sync_table();
 
     PutOfferAckMsg ack;
@@ -771,6 +872,7 @@ void Connection::handle_deploy_complete(const FileCompleteMsg &fc)
         return;
     }
 
+    app_->set_status("Verifying " + original_name_ + "...");
     Crc32 crc;
     if (lseek(part_fd_, 0, SEEK_SET) == 0) {
         char buf[65536];
@@ -848,15 +950,17 @@ void Connection::handle_deploy_complete(const FileCompleteMsg &fc)
 
     bool finalized;
     if (same_fs) {
-        finalized = (rename(staging_part_path_.c_str(), dest.c_str()) == 0);
+        finalized = (rename_retry(staging_part_path_.c_str(), dest.c_str()) == 0);
     } else {
         std::string local_tmp = dest + PART_SUFFIX; /* same dir as dest -> its own rename is same-fs */
         finalized = copy_file(staging_part_path_, local_tmp)
-                 && rename(local_tmp.c_str(), dest.c_str()) == 0;
+                 && rename_retry(local_tmp.c_str(), dest.c_str()) == 0;
+        int finalize_errno = errno; /* unlink() below must not clobber this for the message below */
         if (finalized)
             unlink(staging_part_path_.c_str()); /* the local copy is now authoritative */
         else
             unlink(local_tmp.c_str()); /* best effort; staging copy is left for the next resume attempt */
+        errno = finalize_errno;
     }
 
     if (!finalized) {
@@ -991,6 +1095,19 @@ void Connection::handle_free_space(const std::string &payload)
     close_connection();
 }
 
+void Connection::handle_deploy_begin(const std::string &payload)
+{
+    DeployBeginMsg m;
+    if (!decode_deploy_begin(payload, m)) { fail("malformed DEPLOY_BEGIN"); return; }
+
+    app_->deploy_session().begin(m.total_bytes);
+    app_->sync_table();
+
+    OkReasonMsg ack; ack.ok = true;
+    send(MSG_DEPLOY_BEGIN_ACK, encode(ack));
+    close_connection();
+}
+
 /* ---------------------------------------------------------------------- *
  * ServerApp                                                                *
  * ---------------------------------------------------------------------- */
@@ -1003,7 +1120,17 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     address_box_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
     address_box_->label("starting...");
 
-    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 44, W - 2 * m, 20);
+    /* What the server is doing RIGHT NOW -- "Receiving .../Verifying ..."
+     * -- distinct from the aggregate bar below it, which is a percentage,
+     * not a description. Blank (not "Idle") between operations: this is a
+     * one-line status, not something that needs its own resting state. */
+    status_label_ = new Fl_Box(X + m, Y + m + 44, W - 2 * m, 16);
+    status_label_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    status_label_->labelfont(FL_HELVETICA_ITALIC);
+    status_label_->labelsize(12);
+    status_label_->label("");
+
+    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 62, W - 2 * m, 20);
     aggregate_bar_->minimum(0);
     aggregate_bar_->maximum(100);
     aggregate_bar_->value(0);
@@ -1011,7 +1138,7 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
 
-    table_ = new TransferTable(X + m, Y + m + 72, W - 2 * m, H - m - 72 - m);
+    table_ = new TransferTable(X + m, Y + m + 90, W - 2 * m, H - m - 90 - m);
     table_->queue(&queue_);
 
     /* mkdir best-effort: /mnt/card is expected to already be the SD
