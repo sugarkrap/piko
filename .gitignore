@@ -228,6 +228,9 @@ userspace/src/mhz
 # cardswap: same rule -- tracked source is cardswap.c, rebuilt by
 # tools/build-userspace.sh and shipped by tools/chunked-deploy.sh.
 userspace/src/cardswap
+# zramswap: same rule -- tracked source is zramswap.c, rebuilt by
+# tools/build-userspace.sh and shipped by tools/chunked-deploy.sh.
+userspace/src/zramswap
 # piko-splash: same rule -- tracked source is piko-splash.c, rebuilt by
 # tools/build-userspace.sh. NB the *asset* it draws
 # (rootfs/usr/share/piko/splash.raw) IS tracked: it is generated art, not a

@@ -189,6 +189,11 @@ sd_card_overlay:
     mode: "0755"
     if_exists: "${REPO}/userspace/src/cardswap"
   - type: put_file
+    local: "${REPO}/userspace/src/zramswap"
+    remote: /usr/sbin/zramswap
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/zramswap"
+  - type: put_file
     local: "${REPO}/rootfs/etc/mdev.conf"
     remote: /etc/mdev.conf
     mode: "0644"

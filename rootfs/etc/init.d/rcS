@@ -24,6 +24,24 @@ mount -t sysfs    sysfs    /sys             2>/dev/null
 # again harmlessly in case it wasn't.
 mount -t devtmpfs devtmpfs /dev             2>/dev/null
 
+# --- compressed RAM swap (zram), ahead of the SD card's ---
+# CONFIG_ZRAM is built into this kernel, so /dev/zram0 already exists by
+# the time this runs -- no modprobe needed. zramswap sets it up as a
+# second swap area and swapon(2)s it at a priority that always beats the
+# card's (see userspace/src/zramswap.c and docs/HOWTO-SWAP.md): a page
+# that compresses even 2:1 is cheaper to keep in RAM than to write
+# anywhere, and unlike the card's it needs no card to be present at all.
+# Run here, right after /sys and /dev are up (zramswap needs
+# /sys/block/zram0) and long before the card's swap can possibly come up
+# -- that waits on mdev's coldplug scan much later in this script.
+#
+# Never fatal: if the binary is missing (a deploy from before this
+# existed) or this kernel lacks CONFIG_ZRAM, the machine just has less
+# swap, not none -- the card path below is unaffected either way.
+if test -x /usr/sbin/zramswap; then
+    /usr/sbin/zramswap on >/tmp/zramswap.log 2>&1 || true
+fi
+
 # --- boot splash, continued from stage 1 ---
 # The bootstrap draws this same picture before it kexecs (see
 # docs/HOWTO-BOOT-SPLASH.md); redrawing it here as early as /dev exists is
