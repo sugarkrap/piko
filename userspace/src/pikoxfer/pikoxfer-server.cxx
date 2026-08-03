@@ -44,6 +44,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -60,6 +61,45 @@ using namespace pikoxfer;
 
 static const char *TRANSFERS_DIR = "/mnt/card/Transfers";
 static const char *PART_SUFFIX = ".pikoxfer-part";
+
+static std::string dirname_of(const std::string &path)
+{
+    std::string::size_type slash = path.find_last_of('/');
+    if (slash == std::string::npos || slash == 0)
+        return "/";
+    return path.substr(0, slash);
+}
+
+/* `mkdir -p` equivalent for pikodeploy's PUT_OFFER/MKDIR -- absolute
+ * deploy paths land anywhere in the filesystem, unlike plain transfers
+ * which only ever write into the one pre-existing TRANSFERS_DIR. */
+static bool mkdir_p(const std::string &path)
+{
+    if (path.empty() || path == "/")
+        return true;
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0)
+        return S_ISDIR(st.st_mode);
+    if (!mkdir_p(dirname_of(path)))
+        return false;
+    if (mkdir(path.c_str(), 0755) == 0)
+        return true;
+    return errno == EEXIST;
+}
+
+static bool is_sd_card_mounted()
+{
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f)
+        return false;
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, " /mnt/card ")) { found = true; break; }
+    }
+    fclose(f);
+    return found;
+}
 
 class ServerApp;
 
@@ -78,6 +118,17 @@ public:
     void close_connection();
 
 private:
+    /* WAIT_OFFER is really "wait for the client to say what this
+     * connection is for" -- a plain FILE_OFFER (unchanged), a pikodeploy
+     * PUT_OFFER (its chunked-transfer counterpart, sharing RECEIVING and
+     * handle_chunk() below -- see is_deploy_), or one of the lightweight
+     * single-request deploy ops (MKDIR/SYMLINK/RUN/QUERY_EXISTING/
+     * FREE_SPACE), each answered and closed without ever leaving this
+     * phase. One connection per operation throughout, matching the
+     * existing one-connection-per-file transfer model -- simpler than a
+     * request/response loop, and the lightweight ops are rare enough
+     * (a handful per deploy, against multi-megabyte transfers dominating
+     * the rest) that the extra TCP handshakes cost nothing that matters. */
     enum Phase { WAIT_HELLO, WAIT_OFFER, RECEIVING, CLOSED };
 
     static void read_cb(int, void *v) { static_cast<Connection *>(v)->on_read(); }
@@ -87,6 +138,14 @@ private:
     void handle_offer(const std::string &payload);
     void handle_chunk(const std::string &payload);
     void handle_complete(const std::string &payload);
+    void handle_deploy_complete(const FileCompleteMsg &fc);
+
+    void handle_put_offer(const std::string &payload);
+    void handle_mkdir(const std::string &payload);
+    void handle_symlink(const std::string &payload);
+    void handle_run(const std::string &payload);
+    void handle_query_existing(const std::string &payload);
+    void handle_free_space(const std::string &payload);
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason); /* send ERROR (best effort), then close */
@@ -104,6 +163,13 @@ private:
     bool already_fully_done_;
     int row_;
     int part_fd_;
+
+    /* pikodeploy (MSG_PUT_OFFER) state -- original_name_ doubles as the
+     * absolute destination path in this mode, part_fd_/next_offset_/
+     * total_size_ are shared with the plain-transfer path unchanged. */
+    bool is_deploy_;
+    uint32_t deploy_mode_;
+    bool deploy_backup_;
 };
 
 /* ---------------------------------------------------------------------- *
@@ -172,7 +238,8 @@ private:
 Connection::Connection(int fd, ServerApp *app)
     : app_(app), fd_(fd), phase_(WAIT_HELLO),
       total_size_(0), next_offset_(0), already_fully_done_(false),
-      row_(-1), part_fd_(-1)
+      row_(-1), part_fd_(-1),
+      is_deploy_(false), deploy_mode_(0644), deploy_backup_(false)
 {
     set_nonblock(fd_);
     Fl::add_fd(fd_, FL_READ, read_cb, this);
@@ -280,9 +347,18 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         handle_hello(payload);
         return;
     case WAIT_OFFER:
-        if (type != MSG_FILE_OFFER) { fail("expected FILE_OFFER"); return; }
-        handle_offer(payload);
-        return;
+        switch (type) {
+        case MSG_FILE_OFFER:       handle_offer(payload); return;
+        case MSG_PUT_OFFER:        handle_put_offer(payload); return;
+        case MSG_MKDIR:            handle_mkdir(payload); return;
+        case MSG_SYMLINK:          handle_symlink(payload); return;
+        case MSG_RUN:              handle_run(payload); return;
+        case MSG_QUERY_EXISTING:   handle_query_existing(payload); return;
+        case MSG_FREE_SPACE:       handle_free_space(payload); return;
+        default:
+            fail("expected an offer or a deploy request");
+            return;
+        }
     case RECEIVING:
         if (type == MSG_DATA_CHUNK) { handle_chunk(payload); return; }
         if (type == MSG_FILE_COMPLETE) { handle_complete(payload); return; }
@@ -387,10 +463,18 @@ void Connection::handle_chunk(const std::string &payload)
     }
 
     next_offset_ += dc.data.size();
-    app_->transfer_map()[TransferKey(original_name_, total_size_)].bytes_on_disk = next_offset_;
+    /* Deploy mode has no TransferMap entry to update: its resume source
+     * of truth is the ".part" file's own size on disk, re-checked fresh
+     * at the next PUT_OFFER, not an in-memory (name, size) -> record map
+     * (that map exists specifically to resolve name COLLISIONS in the
+     * shared Transfers/ folder, which an absolute deploy path never has). */
+    if (!is_deploy_)
+        app_->transfer_map()[TransferKey(original_name_, total_size_)].bytes_on_disk = next_offset_;
 
-    app_->queue().set_progress(row_, next_offset_);
-    app_->sync_table();
+    if (row_ >= 0) {
+        app_->queue().set_progress(row_, next_offset_);
+        app_->sync_table();
+    }
 
     ChunkAckMsg ack; ack.bytes_written = next_offset_;
     send(MSG_CHUNK_ACK, encode(ack));
@@ -400,6 +484,11 @@ void Connection::handle_complete(const std::string &payload)
 {
     FileCompleteMsg fc;
     if (!decode_file_complete(payload, fc)) { fail("malformed FILE_COMPLETE"); return; }
+
+    if (is_deploy_) {
+        handle_deploy_complete(fc);
+        return;
+    }
 
     TransferKey key(original_name_, total_size_);
 
@@ -476,6 +565,300 @@ void Connection::handle_complete(const std::string &payload)
     send(MSG_FILE_COMPLETE_ACK, encode(ack));
     app_->queue().set_status(row_, XFER_DONE);
     app_->sync_table();
+    close_connection();
+}
+
+/* ---------------------------------------------------------------------- *
+ * pikodeploy: PUT_OFFER shares RECEIVING/handle_chunk() with plain        *
+ * transfers above (is_deploy_ skips the collision-map bookkeeping that    *
+ * only makes sense for the shared Transfers/ folder); its own offer       *
+ * decision and finalize are different enough to need their own code.      *
+ * ---------------------------------------------------------------------- */
+
+void Connection::handle_put_offer(const std::string &payload)
+{
+    PutOfferMsg po;
+    if (!decode_put_offer(payload, po)) { fail("malformed PUT_OFFER"); return; }
+    if (po.path.empty() || po.path[0] != '/') { fail("PUT_OFFER path must be absolute"); return; }
+    if (po.total_size == 0) {
+        PutOfferAckMsg ack;
+        ack.outcome = PUT_REJECTED;
+        ack.reason = "empty files are not supported";
+        send(MSG_PUT_OFFER_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    is_deploy_ = true;
+    original_name_ = po.path; /* doubles as the absolute destination in deploy mode */
+    total_size_ = po.total_size;
+    deploy_mode_ = po.mode;
+    deploy_backup_ = po.backup;
+
+    struct stat st;
+    bool exists = (stat(po.path.c_str(), &st) == 0);
+
+    if (po.policy == PUT_IF_MISSING && exists) {
+        PutOfferAckMsg ack;
+        ack.outcome = PUT_ALREADY_SATISFIED;
+        send(MSG_PUT_OFFER_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    /* Skip entirely if the destination already has the right byte count
+     * AND content -- same "already deployed" check chunked-deploy.sh's
+     * remote_md5 does today, just CRC32 (cheaper to compute, and this
+     * device's 400MHz PXA255 pays that cost either way). */
+    if (exists && static_cast<uint64_t>(st.st_size) == po.total_size) {
+        int fd = open(po.path.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            Crc32 crc;
+            char buf[65536];
+            ssize_t n;
+            while ((n = read(fd, buf, sizeof(buf))) > 0)
+                crc.update(buf, static_cast<size_t>(n));
+            close(fd);
+            if (crc.final_value() == po.crc32) {
+                PutOfferAckMsg ack;
+                ack.outcome = PUT_ALREADY_SATISFIED;
+                send(MSG_PUT_OFFER_ACK, encode(ack));
+                close_connection();
+                return;
+            }
+        }
+    }
+
+    if (!mkdir_p(dirname_of(po.path))) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cannot create directory for %s: %s",
+                 po.path.c_str(), strerror(errno));
+        PutOfferAckMsg ack;
+        ack.outcome = PUT_REJECTED;
+        ack.reason = msg;
+        send(MSG_PUT_OFFER_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    std::string part_path = po.path + PART_SUFFIX;
+    uint64_t resume_offset = 0;
+    struct stat pst;
+    if (stat(part_path.c_str(), &pst) == 0) {
+        resume_offset = static_cast<uint64_t>(pst.st_size);
+        if (resume_offset > po.total_size) /* corrupt/stale part: restart clean */
+            resume_offset = 0;
+    }
+
+    part_fd_ = open(part_path.c_str(), O_CREAT | O_RDWR, 0644);
+    if (part_fd_ < 0) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cannot open %s: %s", part_path.c_str(), strerror(errno));
+        PutOfferAckMsg ack;
+        ack.outcome = PUT_REJECTED;
+        ack.reason = msg;
+        send(MSG_PUT_OFFER_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    next_offset_ = resume_offset;
+    row_ = app_->queue().add(po.path, po.total_size);
+    app_->queue().set_status(row_, XFER_TRANSFERRING);
+    app_->queue().set_progress(row_, next_offset_);
+    app_->sync_table();
+
+    PutOfferAckMsg ack;
+    ack.outcome = PUT_RESUME;
+    ack.resume_offset = next_offset_;
+    if (!send(MSG_PUT_OFFER_ACK, encode(ack)))
+        return;
+    phase_ = RECEIVING;
+}
+
+void Connection::handle_deploy_complete(const FileCompleteMsg &fc)
+{
+    if (next_offset_ != total_size_) {
+        FileCompleteAckMsg ack;
+        ack.ok = false;
+        ack.reason = "incomplete: not all bytes were received";
+        send(MSG_FILE_COMPLETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    Crc32 crc;
+    if (lseek(part_fd_, 0, SEEK_SET) == 0) {
+        char buf[65536];
+        for (;;) {
+            ssize_t n = read(part_fd_, buf, sizeof(buf));
+            if (n <= 0) break;
+            crc.update(buf, static_cast<size_t>(n));
+        }
+    }
+
+    if (crc.final_value() != fc.crc32) {
+        ftruncate(part_fd_, 0); /* let a fresh PUT_OFFER resume-from-0 and resend cleanly */
+
+        FileCompleteAckMsg ack;
+        ack.ok = false;
+        ack.reason = "checksum mismatch -- please retry";
+        send(MSG_FILE_COMPLETE_ACK, encode(ack));
+
+        if (row_ >= 0) {
+            app_->queue().set_status(row_, XFER_ERROR, "checksum mismatch");
+            app_->sync_table();
+        }
+        close_connection();
+        return;
+    }
+
+    const std::string &dest = original_name_;
+    std::string part_path = dest + PART_SUFFIX;
+    close(part_fd_);
+    part_fd_ = -1;
+
+    /* Rename, not copy -- efficient and atomic, and matches
+     * --create-backup-files' existing behaviour on the plain-transfer
+     * side. dropbear's manifest entry sets backup unconditionally
+     * (deploy_backup_ true regardless of the CLI flag): it is the one
+     * binary that can strand this board with no serial console and no
+     * USB, so it always gets a recoverable .bak. */
+    if (deploy_backup_) {
+        struct stat st;
+        if (stat(dest.c_str(), &st) == 0)
+            rename(dest.c_str(), (dest + ".bak").c_str()); /* best effort */
+    }
+
+    if (rename(part_path.c_str(), dest.c_str()) != 0) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "could not finalize: %s", strerror(errno));
+        FileCompleteAckMsg ack;
+        ack.ok = false;
+        ack.reason = msg;
+        send(MSG_FILE_COMPLETE_ACK, encode(ack));
+        if (row_ >= 0) {
+            app_->queue().set_status(row_, XFER_ERROR, msg);
+            app_->sync_table();
+        }
+        close_connection();
+        return;
+    }
+    chmod(dest.c_str(), deploy_mode_);
+
+    FileCompleteAckMsg ack;
+    ack.ok = true;
+    send(MSG_FILE_COMPLETE_ACK, encode(ack));
+    if (row_ >= 0) {
+        app_->queue().set_status(row_, XFER_DONE);
+        app_->sync_table();
+    }
+    close_connection();
+}
+
+void Connection::handle_mkdir(const std::string &payload)
+{
+    PathMsg m;
+    if (!decode_path(payload, m)) { fail("malformed MKDIR"); return; }
+
+    OkReasonMsg ack;
+    ack.ok = mkdir_p(m.path);
+    if (!ack.ok) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "mkdir failed: %s", strerror(errno));
+        ack.reason = msg;
+    }
+    send(MSG_MKDIR_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_symlink(const std::string &payload)
+{
+    SymlinkMsg m;
+    if (!decode_symlink(payload, m)) { fail("malformed SYMLINK"); return; }
+
+    /* symlink() fails with EEXIST if linkname is already there -- a
+     * redeploy must be able to replace it, so clear it first. */
+    unlink(m.linkname.c_str());
+
+    OkReasonMsg ack;
+    ack.ok = (symlink(m.target.c_str(), m.linkname.c_str()) == 0);
+    if (!ack.ok) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "symlink failed: %s", strerror(errno));
+        ack.reason = msg;
+    }
+    send(MSG_SYMLINK_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_run(const std::string &payload)
+{
+    RunMsg m;
+    if (!decode_run(payload, m)) { fail("malformed RUN"); return; }
+
+    OkReasonMsg ack;
+    if (m.op == RUN_MOUNT_SD_CARD) {
+        /* Best effort, matching chunked-deploy.sh's own "|| true": already
+         * mounted is not an error. Verified via /proc/mounts afterward
+         * rather than trusting the exit status -- pxamci's card-detect
+         * does not reliably signal insertion, so a mount attempt can
+         * silently no-op even with a card physically present. */
+        system("mount /mnt/card >/dev/null 2>&1");
+        ack.ok = is_sd_card_mounted();
+        if (!ack.ok)
+            ack.reason = "SD card is not mounted";
+    } else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "unknown run op %u", m.op);
+        ack.ok = false;
+        ack.reason = msg;
+    }
+    send(MSG_RUN_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_query_existing(const std::string &payload)
+{
+    PathMsg m;
+    if (!decode_path(payload, m)) { fail("malformed QUERY_EXISTING"); return; }
+
+    struct stat st;
+    QueryExistingAckMsg ack;
+    if (stat(m.path.c_str(), &st) == 0) {
+        ack.exists = true;
+        ack.size = static_cast<uint64_t>(st.st_size);
+    } else {
+        ack.exists = false;
+    }
+    send(MSG_QUERY_EXISTING_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_free_space(const std::string &payload)
+{
+    PathMsg m;
+    if (!decode_path(payload, m)) { fail("malformed FREE_SPACE"); return; }
+
+    /* statvfs() needs a path that exists; a destination directory that
+     * hasn't been created yet is answered from its nearest existing
+     * ancestor instead -- same filesystem, same free space. */
+    std::string probe = m.path;
+    struct stat st;
+    while (!probe.empty() && stat(probe.c_str(), &st) != 0) {
+        std::string parent = dirname_of(probe);
+        if (parent == probe)
+            break;
+        probe = parent;
+    }
+    if (probe.empty())
+        probe = "/";
+
+    struct statvfs sv;
+    FreeSpaceAckMsg ack;
+    if (statvfs(probe.c_str(), &sv) == 0)
+        ack.free_bytes = static_cast<uint64_t>(sv.f_bavail) * sv.f_frsize;
+    send(MSG_FREE_SPACE_ACK, encode(ack));
     close_connection();
 }
 

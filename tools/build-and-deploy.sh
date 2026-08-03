@@ -3,10 +3,20 @@ set -eu
 
 # Cross-compiles the stage-2 kernel + all modules with our buildroot
 # toolchain, then deploys the result (zImage + sound modules + WiFi/PCMCIA
-# modules + helper scripts) to a reachable Zaurus over SSH by calling
-# chunked-deploy.sh. This is the ROUTINE path for updating the running
-# "home"-partition kernel: no NAND flash, no SD card, no recovery menu,
-# no reboot to a service menu. See docs/HOWTO-BUILD-DEPLOY-KERNEL.md.
+# modules + helper scripts) to a reachable Zaurus by calling pikodeploy
+# (userspace/src/pikodeploy/pikodeploy.cxx). This is the ROUTINE path for
+# updating the running "home"-partition kernel: no NAND flash, no
+# recovery menu, no reboot to a service menu. See
+# docs/HOWTO-BUILD-DEPLOY-KERNEL.md.
+#
+# pikodeploy replaced tools/chunked-deploy.sh's hand-rolled SSH chunking
+# here -- same idea (chunked, resumable, verified transfer) as a real
+# protocol instead of shell driving `ssh`/`cat` pipelines by hand. One
+# consequence worth knowing: it talks to pikoxfer-server over TCP, not
+# SSH, so the device needs pikoxfer-server OPEN (the GUI app, on the
+# desktop) for a deploy to work at all -- unlike chunked-deploy.sh, which
+# only ever needed dropbear running. See userspace/src/pikodeploy/'s own
+# README for the wire protocol and manifest.yaml for the actual file list.
 #
 # kernel-src/ itself is reconstructed by flash/setup-kernel-src.sh before
 # every build (download a pristine kernel.org tarball + apply every
@@ -25,18 +35,26 @@ set -eu
 # the last spare board", never combine mtd1/mtd3 passes).
 #
 # Usage:
-#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--skip-st] [--skip-x11] [--build-only] [user@host]
+#   tools/build-and-deploy.sh [--adapter IFACE] [--force-kernel-src] [--kernel-only] [--skip-userspace] [--skip-st] [--skip-x11] [--build-only] [--create-backup-files] [user@host]
 # Example:
 #   tools/build-and-deploy.sh --adapter wlan0 root@10.43.112.72
 #
 # --adapter IFACE binds the SSH connection to a specific local network
 # interface (ssh -B), useful when the build machine has multiple network
 # adapters and the Zaurus is only reachable via one of them.
+# --create-backup-files forwards to pikodeploy, which then keeps a
+# "$remote_path.bak" copy of whatever each transferred file replaces.
+# Previously only reachable by invoking chunked-deploy.sh directly -- any
+# flag this script's own arg parser doesn't recognize silently becomes the
+# TARGET argument instead of an error, so there was no way to ask for this
+# through the routine build-and-deploy.sh path at all. Off by default, same
+# reasoning as chunked-deploy.sh's own default: every file this touches
+# ends up duplicated on the ~68 MiB root jffs2 if it's on.
 # --force-kernel-src forces tools/setup-kernel-src.sh to re-apply every
 # tracked patch even if kernel-src/ already looks patched -- use this if
 # you've changed one of the tracked patch files under modules/.
 # --kernel-only builds only zImage (skips `make modules`) and forwards
-# --kernel-only to chunked-deploy.sh, which then only ships
+# --kernel-only to pikodeploy, which then only ships
 # /boot/zImage-full and skips every module/script/helper deploy step.
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
@@ -51,7 +69,7 @@ set -eu
 # --skip-userspace skips building the cross-compiled userspace
 # (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
 # + st + FLTK) and forwards
-# --no-userspace to chunked-deploy.sh so it does not ship a stale staged
+# --no-userspace to pikodeploy so it does not ship a stale staged
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
@@ -69,8 +87,8 @@ set -eu
 # and losing ALSA/MPlayer/SDL/SSH along with it.
 # --build-only builds everything this script would normally build (kernel,
 # modules, userspace, the X11/Matchbox payload) and then STOPS, without
-# contacting the device at all -- no SSH reachability probe up front and no
-# chunked-deploy.sh handoff at the end. No target argument is needed or used.
+# contacting the device at all -- no reachability probe up front and no
+# pikodeploy handoff at the end. No target argument is needed or used.
 #
 # That exists because CI has no device to deploy to, and because building
 # and shipping are genuinely separate concerns: without it, the only way to
@@ -87,6 +105,7 @@ SKIP_USERSPACE=0
 SKIP_ST=0
 SKIP_X11=0
 BUILD_ONLY=0
+CREATE_BACKUP_FILES=0
 TARGET=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -118,6 +137,10 @@ while [ $# -gt 0 ]; do
             BUILD_ONLY=1
             shift
             ;;
+        --create-backup-files)
+            CREATE_BACKUP_FILES=1
+            shift
+            ;;
         *)
             TARGET="$1"
             shift
@@ -139,16 +162,34 @@ TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linu
 BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
+# pikodeploy itself needs building before either the probe below or the
+# final exec can use it -- unlike chunked-deploy.sh, a checked-in script
+# that was simply always there, this is a compiled binary. Plain host
+# g++, no cross toolchain, no FLTK/X11 stage: see tools/build-pikodeploy.sh.
+echo "==> building pikodeploy"
+"$REPO/tools/build-pikodeploy.sh"
+PIKODEPLOY="$REPO/userspace/src/pikodeploy/pikodeploy"
+
 # --build-only never touches the device, so the probe that exists purely to
 # fail fast before a long build would be both pointless and, in CI, a
 # guaranteed failure.
 if [ "$BUILD_ONLY" -eq 1 ]; then
     echo "==> --build-only: building without contacting any device"
 else
-    echo "==> checking $TARGET is reachable over SSH before spending time building..."
-    if ! ssh $SSH_OPTS -i "$KEY" "$TARGET" "uname -a"; then
-        echo "FAILED: $TARGET is not reachable over SSH." >&2
-        echo "This script only handles the routine SSH-based redeploy path." >&2
+    echo "==> checking $TARGET is reachable before spending time building..."
+    # Not an SSH probe anymore: pikodeploy talks to pikoxfer-server over
+    # its own TCP port, not dropbear, so an SSH reachability check would
+    # be testing the wrong protocol -- it could pass while the actual
+    # deploy path (pikoxfer-server not open on the device) still fails,
+    # or fail while a deploy would have worked fine.
+    PROBE_ARGS=""
+    if [ -n "$ADAPTER" ]; then
+        PROBE_ARGS="--adapter $ADAPTER"
+    fi
+    if ! "$PIKODEPLOY" $PROBE_ARGS --probe "$TARGET"; then
+        echo "FAILED: $TARGET is not reachable, or pikoxfer-server is not open" >&2
+        echo "on the device -- deploy needs it open (unlike the old SSH-based" >&2
+        echo "chunked-deploy.sh). Open pikoxfer-server from the desktop and retry." >&2
         echo "If the device is unreachable/unbootable, or you need to change" >&2
         echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
         echo "procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md" >&2
@@ -215,10 +256,14 @@ echo "==> build OK"
 # cross-built userspace component, and each step it runs is idempotent, so
 # this is cheap on every subsequent invocation once things are built.
 #
-# md5sum in particular has to exist before chunked-deploy.sh runs: it is
-# deployed first so every later transfer is content-verified rather than
-# only byte-counted (silent truncation over this WiFi link is a real,
-# repeatedly-observed failure mode, not a hypothetical).
+# md5sum used to be deployed first specifically so chunked-deploy.sh could
+# content-verify every later transfer instead of only byte-counting it
+# (silent truncation over this WiFi link is a real, repeatedly-observed
+# failure mode). pikodeploy no longer needs that bootstrap step -- every
+# PUT_FILE already carries a whole-file CRC32 the device verifies before
+# finalizing, natively, not via a separately-shipped external tool -- so
+# this is now just "build userspace", not "build userspace, and also
+# prerequisite plumbing for the deploy mechanism itself".
 #
 # Skipped for --kernel-only, which deploys nothing but the zImage anyway.
 if [ "$KERNEL_ONLY" -eq 1 ]; then
@@ -254,14 +299,16 @@ fi
 # (idempotent -- skips anything already built, so this is cheap on every
 # subsequent run, same as tools/setup-kernel-src.sh/build-userspace.sh
 # above), then tools/build-matchbox-payload.sh collects the result into
-# the single tar chunked-deploy ships (see section 9 there).
+# the single tar pikodeploy extracts locally and ships file-by-file (see
+# manifest.yaml's x11_matchbox section and manifest.h's header for why
+# individual resumable transfers replaced shipping+unpacking one tar).
 # See docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
 # EITHER FAILURE IS FATAL. It did not used to be: the rationale was that a
 # machine without the X11 toolchain provisioned should still get a kernel
 # out. What that actually produced was a deploy which printed one warning
 # line, carried on through several minutes of kernel/module transfers, and
-# ended with chunked-deploy's cheerful
+# ended with pikodeploy's cheerful
 #
 #     ==> no X11 payload at /tmp/matchbox-payload.tar -- skipping
 #         (build it with tools/build-matchbox-payload.sh)
@@ -336,7 +383,8 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
         echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
     echo ""
-    echo "    Deploy it later with:  tools/chunked-deploy.sh [user@host]"
+    echo "    Deploy it later with:  userspace/src/pikodeploy/pikodeploy [user@host]"
+    echo "    (pikoxfer-server must be open on the device first)"
     exit 0
 fi
 
@@ -352,14 +400,17 @@ fi
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     set -- --kernel-only "$@"
 fi
-# Nothing was built, so don't let chunked-deploy ship a stale staged payload.
+# Nothing was built, so don't let pikodeploy ship a stale staged payload.
 if [ "$SKIP_USERSPACE" -eq 1 ]; then
     set -- --no-userspace "$@"
 fi
+if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
+    set -- --create-backup-files "$@"
+fi
 # The two scripts spell the same file with different variable names --
 # PAYLOAD_TAR when producing it, X11_PAYLOAD when shipping it. Pin them
-# together so overriding the producer cannot leave chunked-deploy sending
+# together so overriding the producer cannot leave pikodeploy sending
 # whatever happens to be at the default path instead.
 X11_PAYLOAD="${X11_PAYLOAD:-$X11_PAYLOAD_TAR}"
 export REPO KERNEL_DIR X11_PAYLOAD
-exec "$REPO/tools/chunked-deploy.sh" "$@"
+exec "$PIKODEPLOY" "$@"

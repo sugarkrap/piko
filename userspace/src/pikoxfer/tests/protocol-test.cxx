@@ -120,6 +120,83 @@ static void test_message_roundtrips()
     check_str(em2.message, "protocol version mismatch", "error message");
 }
 
+static void test_deploy_message_roundtrips()
+{
+    printf("pikodeploy: every new message type round-trips through encode/decode\n");
+
+    PutOfferMsg po; po.path = "/boot/zImage-full"; po.total_size = 1234567;
+    po.mode = 0755; po.policy = PUT_ALWAYS; po.crc32 = 0xabcd1234u; po.backup = true;
+    PutOfferMsg po2;
+    check(decode_put_offer(encode(po), po2), "put_offer decodes");
+    check_str(po2.path, "/boot/zImage-full", "put_offer path");
+    check_u64(po2.total_size, 1234567, "put_offer total_size");
+    check(po2.mode == 0755u, "put_offer mode");
+    check(po2.policy == PUT_ALWAYS, "put_offer policy");
+    check(po2.crc32 == 0xabcd1234u, "put_offer crc32");
+    check(po2.backup, "put_offer backup flag");
+
+    PutOfferMsg po3; po3.policy = PUT_IF_MISSING; po3.backup = false;
+    PutOfferMsg po4;
+    check(decode_put_offer(encode(po3), po4), "put_offer (if_missing) decodes");
+    check(po4.policy == PUT_IF_MISSING, "put_offer if_missing policy");
+    check(!po4.backup, "put_offer backup false");
+
+    PutOfferAckMsg resume; resume.outcome = PUT_RESUME; resume.resume_offset = 4096;
+    PutOfferAckMsg resume2;
+    check(decode_put_offer_ack(encode(resume), resume2), "put_offer_ack (resume) decodes");
+    check(resume2.outcome == PUT_RESUME, "put_offer_ack resume outcome");
+    check_u64(resume2.resume_offset, 4096, "put_offer_ack resume_offset");
+
+    PutOfferAckMsg rej; rej.outcome = PUT_REJECTED; rej.reason = "no such directory";
+    PutOfferAckMsg rej2;
+    check(decode_put_offer_ack(encode(rej), rej2), "put_offer_ack (rejected) decodes");
+    check(rej2.outcome == PUT_REJECTED, "put_offer_ack rejected outcome");
+    check_str(rej2.reason, "no such directory", "put_offer_ack reason");
+
+    PathMsg path; path.path = "/lib/modules/7.1.4/zaurus-audio";
+    PathMsg path2;
+    check(decode_path(encode(path), path2), "path decodes");
+    check_str(path2.path, "/lib/modules/7.1.4/zaurus-audio", "path value");
+
+    OkReasonMsg ok; ok.ok = true;
+    OkReasonMsg ok2;
+    check(decode_ok_reason(encode(ok), ok2), "ok_reason (ok) decodes");
+    check(ok2.ok, "ok_reason ok flag");
+
+    OkReasonMsg bad; bad.ok = false; bad.reason = "permission denied";
+    OkReasonMsg bad2;
+    check(decode_ok_reason(encode(bad), bad2), "ok_reason (bad) decodes");
+    check(!bad2.ok, "ok_reason !ok flag");
+    check_str(bad2.reason, "permission denied", "ok_reason reason");
+
+    SymlinkMsg sl; sl.target = "ld-uClibc-1.0.54.so"; sl.linkname = "/lib/ld-uClibc.so.1";
+    SymlinkMsg sl2;
+    check(decode_symlink(encode(sl), sl2), "symlink decodes");
+    check_str(sl2.target, "ld-uClibc-1.0.54.so", "symlink target");
+    check_str(sl2.linkname, "/lib/ld-uClibc.so.1", "symlink linkname");
+
+    RunMsg run; run.op = RUN_MOUNT_SD_CARD;
+    RunMsg run2;
+    check(decode_run(encode(run), run2), "run decodes");
+    check(run2.op == RUN_MOUNT_SD_CARD, "run op");
+
+    QueryExistingAckMsg qe; qe.exists = true; qe.size = 999;
+    QueryExistingAckMsg qe2;
+    check(decode_query_existing_ack(encode(qe), qe2), "query_existing_ack decodes");
+    check(qe2.exists, "query_existing_ack exists flag");
+    check_u64(qe2.size, 999, "query_existing_ack size");
+
+    QueryExistingAckMsg qe3; qe3.exists = false;
+    QueryExistingAckMsg qe4;
+    check(decode_query_existing_ack(encode(qe3), qe4), "query_existing_ack (missing) decodes");
+    check(!qe4.exists, "query_existing_ack !exists flag");
+
+    FreeSpaceAckMsg fs; fs.free_bytes = 18364ull * 1024;
+    FreeSpaceAckMsg fs2;
+    check(decode_free_space_ack(encode(fs), fs2), "free_space_ack decodes");
+    check_u64(fs2.free_bytes, 18364ull * 1024, "free_space_ack free_bytes");
+}
+
 static void test_decode_rejects_truncated()
 {
     printf("protocol: truncated payloads are rejected, not read out of bounds\n");
@@ -373,6 +450,7 @@ static void test_queue_empty_aggregate_is_zero_not_nan()
 int main()
 {
     test_message_roundtrips();
+    test_deploy_message_roundtrips();
     test_decode_rejects_truncated();
 
     test_frame_reader_whole();

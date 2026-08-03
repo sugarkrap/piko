@@ -54,7 +54,54 @@ enum MessageType {
     MSG_CHUNK_ACK         = 6, /* server -> client */
     MSG_FILE_COMPLETE     = 7, /* client -> server */
     MSG_FILE_COMPLETE_ACK = 8, /* server -> client */
-    MSG_ERROR             = 9  /* either direction */
+    MSG_ERROR             = 9, /* either direction */
+
+    /* pikodeploy's message set, sharing this same connection/frame format.
+     * MSG_DATA_CHUNK/MSG_CHUNK_ACK/MSG_FILE_COMPLETE/MSG_FILE_COMPLETE_ACK
+     * above are reused as-is for the actual bytes of a MSG_PUT_OFFER --
+     * only the offer/finalize semantics differ from a plain MSG_FILE_OFFER
+     * (an absolute destination path instead of a collision-resolved name,
+     * an explicit mode, and an ALWAYS/IF_MISSING policy). See
+     * pikodeploy/README.md. */
+    MSG_PUT_OFFER          = 10, /* client -> server */
+    MSG_PUT_OFFER_ACK      = 11, /* server -> client */
+    MSG_MKDIR              = 12, /* client -> server */
+    MSG_MKDIR_ACK          = 13, /* server -> client */
+    MSG_SYMLINK            = 14, /* client -> server */
+    MSG_SYMLINK_ACK        = 15, /* server -> client */
+    MSG_RUN                = 16, /* client -> server */
+    MSG_RUN_ACK            = 17, /* server -> client */
+    MSG_QUERY_EXISTING     = 18, /* client -> server */
+    MSG_QUERY_EXISTING_ACK = 19, /* server -> client */
+    MSG_FREE_SPACE         = 20, /* client -> server */
+    MSG_FREE_SPACE_ACK     = 21  /* server -> client */
+};
+
+enum PutPolicy {
+    PUT_ALWAYS     = 0, /* overwrite unconditionally (after the usual
+                          * already-matches-so-skip check) */
+    PUT_IF_MISSING = 1  /* leave alone if the destination already exists,
+                          * regardless of its content -- chunked-deploy.sh's
+                          * current /etc/TZ and touchscreen.cfg handling */
+};
+
+enum PutOutcome {
+    PUT_RESUME            = 0, /* resume_offset valid, may be 0 (fresh) */
+    PUT_ALREADY_SATISFIED = 1, /* nothing to send: content already matches
+                                 * (ALWAYS) or destination already exists
+                                 * (IF_MISSING) */
+    PUT_REJECTED          = 2  /* reason valid */
+};
+
+/* Deliberately just one op: replacing chunked-deploy.sh's "stop the
+ * graphical session before unpacking the X11 payload" step turned out to
+ * be unnecessary, not merely unported -- every PUT_FILE finalizes via a
+ * same-directory rename() (see MSG_PUT_OFFER above), which is exactly
+ * how send_file's rename-aside already replaces running binaries like
+ * brightd/flipd today without stopping them. A running Xfbdev/matchbox
+ * keeps executing from its old, unlinked-but-open inode the same way. */
+enum RunOp {
+    RUN_MOUNT_SD_CARD = 1
 };
 
 /* ---------------------------------------------------------------------- *
@@ -388,6 +435,174 @@ inline bool decode_error(const std::string &p, ErrorMsg &m)
 {
     size_t pos = 0;
     return get_str16(p, pos, m.message);
+}
+
+/* ---------------------------------------------------------------------- *
+ * pikodeploy messages                                                     *
+ * ---------------------------------------------------------------------- */
+
+struct PutOfferMsg {
+    std::string path;    /* absolute destination path, not collision-resolved */
+    uint64_t total_size;
+    uint32_t mode;        /* permission bits, e.g. 0755 as the integer 493 */
+    uint32_t policy;      /* PutPolicy */
+    uint32_t crc32;        /* whole-file CRC, sent up front so the server can
+                            * answer ALREADY_SATISFIED without a transfer */
+    bool backup;          /* copy the existing file to path+".bak" first */
+    PutOfferMsg() : total_size(0), mode(0), policy(PUT_ALWAYS), crc32(0), backup(false) {}
+};
+inline std::string encode(const PutOfferMsg &m)
+{
+    std::string p;
+    put_str16(p, m.path);
+    put_u64(p, m.total_size);
+    put_u32(p, m.mode);
+    put_u32(p, m.policy);
+    put_u32(p, m.crc32);
+    p.push_back(m.backup ? 1 : 0);
+    return p;
+}
+inline bool decode_put_offer(const std::string &p, PutOfferMsg &m)
+{
+    size_t pos = 0;
+    if (!get_str16(p, pos, m.path) || !get_u64(p, pos, m.total_size)
+        || !get_u32(p, pos, m.mode) || !get_u32(p, pos, m.policy)
+        || !get_u32(p, pos, m.crc32))
+        return false;
+    if (p.size() - pos < 1)
+        return false;
+    m.backup = p[pos] != 0;
+    return true;
+}
+
+struct PutOfferAckMsg {
+    uint32_t outcome;      /* PutOutcome */
+    uint64_t resume_offset; /* valid when outcome == PUT_RESUME */
+    std::string reason;    /* valid when outcome == PUT_REJECTED */
+    PutOfferAckMsg() : outcome(PUT_REJECTED), resume_offset(0) {}
+};
+inline std::string encode(const PutOfferAckMsg &m)
+{
+    std::string p;
+    put_u32(p, m.outcome);
+    put_u64(p, m.resume_offset);
+    put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_put_offer_ack(const std::string &p, PutOfferAckMsg &m)
+{
+    size_t pos = 0;
+    return get_u32(p, pos, m.outcome) && get_u64(p, pos, m.resume_offset)
+        && get_str16(p, pos, m.reason);
+}
+
+struct PathMsg { /* shared shape for MKDIR and QUERY_EXISTING/FREE_SPACE requests */
+    std::string path;
+};
+inline std::string encode(const PathMsg &m)
+{
+    std::string p;
+    put_str16(p, m.path);
+    return p;
+}
+inline bool decode_path(const std::string &p, PathMsg &m)
+{
+    size_t pos = 0;
+    return get_str16(p, pos, m.path);
+}
+
+struct OkReasonMsg { /* shared shape for MKDIR_ACK/SYMLINK_ACK/RUN_ACK */
+    bool ok;
+    std::string reason; /* valid when !ok */
+    OkReasonMsg() : ok(false) {}
+};
+inline std::string encode(const OkReasonMsg &m)
+{
+    std::string p;
+    p.push_back(m.ok ? 1 : 0);
+    if (!m.ok)
+        put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_ok_reason(const std::string &p, OkReasonMsg &m)
+{
+    if (p.empty())
+        return false;
+    m.ok = p[0] != 0;
+    if (m.ok)
+        return true;
+    size_t pos = 1;
+    return get_str16(p, pos, m.reason);
+}
+
+struct SymlinkMsg {
+    std::string target;
+    std::string linkname;
+};
+inline std::string encode(const SymlinkMsg &m)
+{
+    std::string p;
+    put_str16(p, m.target);
+    put_str16(p, m.linkname);
+    return p;
+}
+inline bool decode_symlink(const std::string &p, SymlinkMsg &m)
+{
+    size_t pos = 0;
+    return get_str16(p, pos, m.target) && get_str16(p, pos, m.linkname);
+}
+
+struct RunMsg {
+    uint32_t op; /* RunOp */
+    RunMsg() : op(0) {}
+};
+inline std::string encode(const RunMsg &m)
+{
+    std::string p;
+    put_u32(p, m.op);
+    return p;
+}
+inline bool decode_run(const std::string &p, RunMsg &m)
+{
+    size_t pos = 0;
+    return get_u32(p, pos, m.op);
+}
+
+struct QueryExistingAckMsg {
+    bool exists;
+    uint64_t size; /* valid when exists */
+    QueryExistingAckMsg() : exists(false), size(0) {}
+};
+inline std::string encode(const QueryExistingAckMsg &m)
+{
+    std::string p;
+    p.push_back(m.exists ? 1 : 0);
+    put_u64(p, m.size);
+    return p;
+}
+inline bool decode_query_existing_ack(const std::string &p, QueryExistingAckMsg &m)
+{
+    if (p.empty())
+        return false;
+    m.exists = p[0] != 0;
+    size_t pos = 1;
+    return get_u64(p, pos, m.size);
+}
+
+struct FreeSpaceAckMsg {
+    uint64_t free_bytes;
+    FreeSpaceAckMsg() : free_bytes(0) {}
+};
+inline std::string encode(const FreeSpaceAckMsg &m)
+{
+    std::string p;
+    put_u64(p, m.free_bytes);
+    return p;
+}
+inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
+{
+    size_t pos = 0;
+    return get_u64(p, pos, m.free_bytes);
 }
 
 } /* namespace pikoxfer */

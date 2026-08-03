@@ -1,0 +1,378 @@
+# pikodeploy's manifest -- the file list that used to live inline in
+# tools/chunked-deploy.sh, now data instead of shell control flow so it can
+# be edited without touching (or recompiling) any code. Parsed by
+# yaml_lite.h into sections; manifest.cxx decides which sections run for a
+# given set of CLI flags and executes each section's entries in order.
+#
+# ${VAR} placeholders are substituted by manifest.cxx before use -- REPO,
+# KERNEL_DIR, KVER, SSH_STAGE, ALSA_STAGE, MPLAYER_STAGE, SDL_STAGE, TCROOT
+# are the same values chunked-deploy.sh computes today.
+#
+# Entry fields, all optional except the ones a `type` needs to do anything:
+#   type       put_file | put_tree_from_list | put_tree_from_dir | mkdir |
+#              symlink | run  (see manifest.h for exactly what each does)
+#   mode       octal permission string, e.g. "0755" (put_* only)
+#   policy     always (default) | if_missing -- if_missing leaves an
+#              existing destination alone regardless of content, matching
+#              /etc/TZ and touchscreen.cfg's current behavior
+#   backup     always -- copies the existing destination aside before
+#              overwriting even when --create-backup-files was not passed.
+#              Only dropbear uses this; everything else's backup follows
+#              the CLI flag.
+#   if_exists  skip this entry if the given local path does not exist --
+#              chunked-deploy.sh's "only if built" guards (brightd, mhz,
+#              flipd, cardswap, pkillx, kill, and the opkg/ALSA/SDL/SSH
+#              staged trees)
+#   if_flag    skip this entry unless the named CLI flag was passed
+#              (only "replace_dropbear" today)
+#
+# What's deliberately NOT here, and why: MPlayer's card-only destination
+# (verified SD mount, not just "assumed"), the ALSA/SDL/MPlayer preflight
+# free-space check, SDL's version-suffixed .so (glob-resolved), and the
+# whole X11/Matchbox payload (extracted from the tar
+# tools/build-matchbox-payload.sh still builds, then sent file-by-file) are
+# genuinely dynamic -- computed in manifest.cxx, not static data. See its
+# header comment.
+
+kernel:
+  - type: put_file
+    local: "${KERNEL_DIR}/arch/arm/boot/zImage"
+    remote: /boot/zImage-full
+    mode: "0644"
+
+# The module lists themselves are NOT duplicated here -- they already have
+# exactly one source of truth, tools/kernel-modules.sh, shared with the
+# offline update-package and mtd3 image builders. Re-listing them a fourth
+# time here is exactly the staleness risk that file's own header warns
+# about. manifest.cxx reads AUDIO_MODULES/WIFI_MODULES/SD_MODULES from it
+# directly and expands each into a put_file step.
+sound_modules:
+  - type: mkdir
+    remote: "/lib/modules/${KVER}/zaurus-audio"
+  - type: put_tree_from_list
+    list_var: AUDIO_MODULES
+    list_file: "${REPO}/tools/kernel-modules.sh"
+    local_base: "${KERNEL_DIR}"
+    remote_base: "/lib/modules/${KVER}/zaurus-audio"
+    flatten: "true"
+    mode: "0644"
+
+wifi_modules:
+  - type: put_tree_from_list
+    list_var: WIFI_MODULES
+    list_file: "${REPO}/tools/kernel-modules.sh"
+    local_base: "${KERNEL_DIR}"
+    strip_prefix: "kernel/"
+    remote_base: "/lib/modules/${KVER}"
+    mode: "0644"
+
+sd_modules:
+  - type: put_tree_from_list
+    list_var: SD_MODULES
+    list_file: "${REPO}/tools/kernel-modules.sh"
+    local_base: "${KERNEL_DIR}"
+    strip_prefix: "kernel/"
+    remote_base: "/lib/modules/${KVER}"
+    mode: "0644"
+
+core_scripts:
+  - type: put_file
+    local: "${REPO}/rootfs/etc/init.d/rcS"
+    remote: /etc/init.d/rcS
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/init.d/xsession"
+    remote: /etc/init.d/xsession
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/inittab"
+    remote: /etc/inittab
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/modprobe.d/hostap.conf"
+    remote: /etc/modprobe.d/hostap.conf
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/wifi-up.sh"
+    remote: /etc/wifi-up.sh
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/audioon"
+    remote: /usr/sbin/audioon
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/audinfo"
+    remote: /usr/sbin/audinfo
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/bright"
+    remote: /usr/sbin/bright
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/userspace/src/brightd"
+    remote: /usr/sbin/brightd
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/brightd"
+  - type: put_file
+    local: "${REPO}/userspace/src/mhz"
+    remote: /usr/sbin/mhz
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/mhz"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/zaurus/power-management.cfg"
+    remote: /etc/zaurus/power-management.cfg
+    mode: "0644"
+    if_exists: "${REPO}/rootfs/etc/zaurus/power-management.cfg"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/flip"
+    remote: /usr/sbin/flip
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/userspace/src/flipd"
+    remote: /usr/sbin/flipd
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/flipd"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/piko/rotation.cfg"
+    remote: /etc/piko/rotation.cfg
+    mode: "0644"
+    if_exists: "${REPO}/rootfs/etc/piko/rotation.cfg"
+  - type: put_file
+    local: "${REPO}/rootfs/root/.matchbox/wallpaper"
+    remote: /root/.matchbox/wallpaper
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/settime"
+    remote: /usr/sbin/settime
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/userspace/src/hwclock"
+    remote: /usr/sbin/hwclock
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/hwclock"
+  - type: put_file
+    local: "${REPO}/userspace/src/ntpsync"
+    remote: /usr/sbin/ntpsync
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/ntpsync"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/TZ"
+    remote: /etc/TZ
+    mode: "0644"
+    policy: if_missing
+    if_exists: "${REPO}/rootfs/etc/TZ"
+
+sd_card_overlay:
+  - type: put_file
+    local: "${REPO}/rootfs/etc/zaurus-card.sh"
+    remote: /etc/zaurus-card.sh
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/profile"
+    remote: /etc/profile
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/zshrc"
+    remote: /etc/zshrc
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/sdapps"
+    remote: /usr/sbin/sdapps
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/sdcard"
+    remote: /usr/sbin/sdcard
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/userspace/src/cardswap"
+    remote: /usr/sbin/cardswap
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/cardswap"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/mdev.conf"
+    remote: /etc/mdev.conf
+    mode: "0644"
+
+ssh_payload:
+  - type: put_tree_from_list
+    list_var: SSH_PAYLOAD_FILES
+    list_file: "${REPO}/tools/ssh-payload.sh"
+    local_base: "${SSH_STAGE}"
+    remote_base: "/"
+    format: "local:remote:mode"
+    if_exists: "${SSH_STAGE}"
+  # dropbear itself is opt-in (--replace-dropbear) and always backed up
+  # first regardless of --create-backup-files -- it is the one binary
+  # that can strand this board with no serial console and no USB
+  # (AGENTS.md). The existing copy lands at /usr/sbin/dropbear.bak; the
+  # new one takes effect on the next reboot.
+  - type: put_file
+    if_flag: replace_dropbear
+    local: "${SSH_STAGE}/usr/sbin/dropbear"
+    remote: /usr/sbin/dropbear
+    mode: "0755"
+    backup: always
+
+opkg:
+  - type: mkdir
+    remote: /var/lib/opkg/info
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: mkdir
+    remote: /var/cache/opkg
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    remote: /usr/bin/opkg
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/opkg/opkg.conf"
+    remote: /etc/opkg/opkg.conf
+    mode: "0644"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/pkgadd"
+    remote: /usr/sbin/pkgadd
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/pkgdel"
+    remote: /usr/sbin/pkgdel
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/pkglist"
+    remote: /usr/sbin/pkglist
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/deskscan"
+    remote: /usr/sbin/deskscan
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+  - type: put_file
+    local: "${REPO}/userspace/src/kill"
+    remote: /usr/local/bin/kill
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/kill"
+
+panel_actions:
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/suspend"
+    remote: /usr/sbin/suspend
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/gototty"
+    remote: /usr/sbin/gototty
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/softreboot"
+    remote: /usr/sbin/softreboot
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/userspace/src/pkillx"
+    remote: /usr/sbin/pkillx
+    mode: "0755"
+    if_exists: "${REPO}/userspace/src/pkillx"
+
+# ALSA + the static bootstrap libs are static data; MPlayer's destination
+# (card-only, verified-mount) and SDL's version-suffixed .so are computed
+# in manifest.cxx and injected into this section's plan at runtime -- see
+# this file's header.
+userspace_media:
+  - type: mkdir
+    remote: /usr/share/alsa/cards
+  - type: mkdir
+    remote: /usr/share/alsa/pcm
+  - type: mkdir
+    remote: /usr/share/alsa/ctl
+  - type: mkdir
+    remote: /var/lib/alsa
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/share/alsa/alsa.conf"
+    remote: /usr/share/alsa/alsa.conf
+    mode: "0644"
+    if_exists: "${ALSA_STAGE}/usr/share/alsa/alsa.conf"
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/share/alsa/cards/aliases.conf"
+    remote: /usr/share/alsa/cards/aliases.conf
+    mode: "0644"
+    if_exists: "${ALSA_STAGE}/usr/share/alsa/cards/aliases.conf"
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/share/alsa/ctl/default.conf"
+    remote: /usr/share/alsa/ctl/default.conf
+    mode: "0644"
+    if_exists: "${ALSA_STAGE}/usr/share/alsa/ctl/default.conf"
+  - type: put_tree_from_dir
+    local_dir: "${ALSA_STAGE}/usr/share/alsa/pcm"
+    remote_base: /usr/share/alsa/pcm
+    mode: "0644"
+    if_exists: "${ALSA_STAGE}/usr/share/alsa/pcm"
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/bin/aplay"
+    remote: /usr/bin/aplay
+    mode: "0755"
+    if_exists: "${ALSA_STAGE}/usr/bin/aplay"
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/bin/amixer"
+    remote: /usr/bin/amixer
+    mode: "0755"
+    if_exists: "${ALSA_STAGE}/usr/bin/amixer"
+  - type: put_file
+    local: "${ALSA_STAGE}/usr/sbin/alsactl"
+    remote: /usr/sbin/alsactl
+    mode: "0755"
+    if_exists: "${ALSA_STAGE}/usr/sbin/alsactl"
+  - type: put_file
+    local: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+    remote: /lib/ld-uClibc-1.0.54.so
+    mode: "0755"
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: put_file
+    local: "${TCROOT}/lib/libuClibc-1.0.54.so"
+    remote: /lib/libuClibc-1.0.54.so
+    mode: "0755"
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: symlink
+    target: ld-uClibc-1.0.54.so
+    linkname: /lib/ld-uClibc.so.1
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: symlink
+    target: ld-uClibc.so.1
+    linkname: /lib/ld-uClibc.so.0
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: symlink
+    target: libuClibc-1.0.54.so
+    linkname: /lib/libc.so.0
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: symlink
+    target: libuClibc-1.0.54.so
+    linkname: /lib/libc.so.1
+    if_exists: "${TCROOT}/lib/ld-uClibc-1.0.54.so"
+  - type: put_file
+    local: "${SDL_STAGE}/usr/bin/sdltest"
+    remote: /usr/bin/sdltest
+    mode: "0755"
+    if_exists: "${SDL_STAGE}/usr/bin/sdltest"
+  - type: put_file
+    local: "${SDL_STAGE}/usr/bin/pikalibrate"
+    remote: /usr/bin/pikalibrate
+    mode: "0755"
+    if_exists: "${SDL_STAGE}/usr/bin/pikalibrate"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/piko/touchscreen.cfg"
+    remote: /etc/piko/touchscreen.cfg
+    mode: "0644"
+    policy: if_missing
+    if_exists: "${REPO}/rootfs/etc/piko/touchscreen.cfg"
+
+# Extracted from the tar tools/build-matchbox-payload.sh still assembles
+# (that script's own curation of exactly which runtime files belong is
+# unchanged and reused as-is) and sent file-by-file instead of unpacked
+# on-device -- see manifest.h's header for why that also removes the need
+# to stop the graphical session first.
+x11_matchbox:
+  - type: put_tar_tree
+    local_tar: "${X11_PAYLOAD}"
+    remote: /
+    if_exists: "${X11_PAYLOAD}"

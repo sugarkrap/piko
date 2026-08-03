@@ -618,6 +618,15 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     adapter_->align(FL_ALIGN_LEFT);
     target_ = new Fl_Input(X + m + 260, y, 160, 22, "Target:");
     target_->align(FL_ALIGN_LEFT);
+    /* Prefilled with a real user@host, not just an IP: a bare IP typed
+     * here (reasonably, since that's all the Transfer tab's address
+     * field wants) makes ssh fall back to the LOCAL shell user's name
+     * as the remote login -- "Permission denied" against a device that
+     * only accepts root, with no hint that a username was ever the
+     * problem. build_argv() below also auto-prepends root@ if the
+     * field is edited down to a bare host, as a second line of defense. */
+    std::string default_target = std::string("root@") + DEFAULT_ADDRESS;
+    target_->value(default_target.c_str()); /* Fl_Input copies it internally */
     y += 28;
 
     kernel_only_ = new Fl_Check_Button(X + m, y, 120, 20, "kernel-only");
@@ -670,8 +679,18 @@ void BuildRunner::build_argv(std::vector<std::string> &args) const
     if (skip_st_->value())          args.push_back("--skip-st");
     if (skip_x11_->value())         args.push_back("--skip-x11");
     if (build_only_->value())       args.push_back("--build-only");
-    if (target_->value() && target_->value()[0])
-        args.push_back(target_->value());
+    if (target_->value() && target_->value()[0]) {
+        std::string t = target_->value();
+        /* A bare host (no user@) is a completely reasonable thing to
+         * type here -- it's what the Transfer tab's address field
+         * wants -- but ssh would silently try the LOCAL shell user's
+         * name against a device that only accepts root, and fail with
+         * a "Permission denied" that gives no hint a username was ever
+         * the issue. Fill it in rather than let that surprise happen. */
+        if (t.find('@') == std::string::npos)
+            t = "root@" + t;
+        args.push_back(t);
+    }
 }
 
 void BuildRunner::append(const char *text)
