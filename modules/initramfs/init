@@ -1,12 +1,45 @@
 #!/bin/sh
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
+# devtmpfs first, and on its own: /dev/fb0 has to exist before anything can
+# be drawn, and the splash is meant to be the first thing on the panel.
+# /proc and /sys are not needed to draw, so they wait their turn below.
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 
-# Rebind stdio to the real console now that /dev exists (PID 1 starts with
-# no controlling TTY -> stdio is fully-buffered and output stays invisible
-# until exec time otherwise).
-exec > /dev/tty0 2>&1
+# The splash, before any output that could scroll across it.
+#
+# fbsplash blits a plain binary PPM at IMG_LEFT/IMG_TOP (0,0 here) with no
+# scaling and no clear-first, so modules/initramfs/splash.ppm is
+# pre-composited to the whole 640x480 panel -- white field, artwork centred.
+# One blit paints the entire screen; see tools/make-splash.py for how that
+# asset is built and why it is palettised.
+#
+# Deliberately non-fatal and deliberately quiet: a bootstrap that cannot
+# draw a picture must still boot. If /dev/fb0 is missing or the panel is not
+# up, we lose the splash, not the machine.
+/bin/fbsplash -s /splash.ppm 2>/dev/null || true
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+# Keep the splash on screen for a boot that works.
+#
+# This used to be `exec > /dev/tty0 2>&1` -- PID 1 starts with no
+# controlling TTY, so stdio is fully buffered and output stays invisible
+# until exec time otherwise. That reasoning still holds; all that changes is
+# *where* stdio gets rebound. Normal-path chatter now goes to a buffer file
+# so it does not scroll over the picture we just drew, and console_fallback
+# puts it all back the instant anything goes wrong. A boot that fails is
+# exactly as debuggable at the console as it was before the splash existed,
+# which matters -- that console is the only diagnostic channel this board
+# has.
+BOOTLOG=/tmp/bootstrap.log
+exec > "$BOOTLOG" 2>&1
+
+# Give the console back and replay everything buffered so far. Called on
+# every path that is about to give up and hand over to a human.
+console_fallback() {
+	exec > /dev/tty0 2>&1
+	cat "$BOOTLOG" 2>/dev/null
+}
 
 export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
@@ -55,9 +88,11 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 		sync
 		exec /mnt/home/sbin/kexec -e
 	fi
+	console_fallback
 	echo "kexec load failed -- dropping to bootstrap shell"
 	echo "kexec load failed" >> "$LOG"
 else
+	console_fallback
 	echo "home mount failed" >&2
 fi
 

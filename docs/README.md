@@ -24,6 +24,7 @@ the reasoning, not as instructions — do not follow it.
 |---|---|
 | [`HOWTO-BUILD-DEPLOY-KERNEL.md`](HOWTO-BUILD-DEPLOY-KERNEL.md) | The routine loop: rebuild the stage-2 kernel + modules, deploy over SSH, verify. Includes the `.config` traps that silently produce a wrong kernel. |
 | [`HOWTO-QEMU-SMOKE-TEST.md`](HOWTO-QEMU-SMOKE-TEST.md) | Boot a build under QEMU before it touches the board — and the two traps that look like kernel bugs but are not. |
+| [`HOWTO-BOOT-SPLASH.md`](HOWTO-BOOT-SPLASH.md) | The stage-1 splash: how it is drawn before anything else, and the mtd1 size budget that dictates every decision in it. |
 | [`HOWTO-OFFLINE-UPDATE.md`](HOWTO-OFFLINE-UPDATE.md) | Building the self-contained update package, and how CI boot-tests it. |
 | [`HOWTO-MATCHBOX-DESKTOP.md`](HOWTO-MATCHBOX-DESKTOP.md) | Building the X11 + Matchbox stack. Contains the non-guessable version pins and configure lines. |
 | [`HOWTO-X11-TOUCHSCREEN.md`](HOWTO-X11-TOUCHSCREEN.md) | Getting the touchscreen working as an absolute pointer under Xfbdev. |
