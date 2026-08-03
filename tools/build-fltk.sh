@@ -367,6 +367,49 @@ else
     echo "==> skipping mb-wallpaper-picker (no $WALLPAPER_PICKER_SRC)"
 fi
 
+# --- piko-settings -------------------------------------------------------
+# The ROM's settings window (see userspace/src/piko-settings.cxx): every
+# .desktop file with Categories=Settings, grouped under its
+# X-Piko-Settings-Group heading. Ships to /usr/local/bin, same as pikostore
+# and mb-wallpaper-picker.
+#
+# Needs libfltk_images for the same reason mb-wallpaper-picker does -- it
+# draws each entry's Icon=, which is a PNG -- so -lfltk_images -lpng -lz go
+# ahead of -lfltk. See docs/HOWTO-FLTK.md, "Add image loading".
+PIKO_SETTINGS_SRC="$SRC/piko-settings.cxx"
+if [ -f "$PIKO_SETTINGS_SRC" ]; then
+    echo "==> building piko-settings"
+    settings_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -o "$STAGE/usr/bin/piko-settings" \
+        "$PIKO_SETTINGS_SRC" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk_images -lpng -lz -lfltk $settings_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-settings" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-settings does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+    case " $needed " in
+        *" libfltk_images.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-settings does not NEED libfltk_images.so.$FL_DSO_VERSION" >&2
+            echo "-- every entry's icon would fail to decode on the device." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-settings (no $PIKO_SETTINGS_SRC)"
+fi
+
 echo ""
 echo "==> done: FLTK staged in $STAGE"
 for f in "$STAGE"/usr/lib/libfltk*.so."$FL_DSO_VERSION"; do

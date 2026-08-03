@@ -5,4 +5,14 @@ Comment=Recalibrate the touchscreen (4-point tap)
 Exec=/usr/bin/pikalibrate
 Icon=pikalibrate
 Terminal=false
-Categories=System;
+Categories=Settings;
+X-Piko-Settings-Group=Display
+X-Piko-NoDesktop=true
+# Categories was System, which put this in the panel menu's "System Tools"
+# folder. Settings moves it to "Desktop Preferences" alongside Set
+# Wallpaper -- and is what makes piko-settings list it at all, since that
+# is the one word it selects on. Recalibrating the panel is a setting, not
+# a system tool; the only thing lost is the old folder placement.
+#
+# See mb-wallpaper-picker.desktop for what the two X-Piko lines do and
+# which program reads each.

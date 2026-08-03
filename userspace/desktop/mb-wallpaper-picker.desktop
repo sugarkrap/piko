@@ -6,3 +6,19 @@ Exec=mb-wallpaper-picker
 Icon=mb-wallpaper-picker
 Terminal=false
 Categories=Settings
+X-Piko-Settings-Group=Display
+X-Piko-NoDesktop=true
+# The last two lines are read by two different programs, neither of which
+# is this file's own launcher:
+#
+#   X-Piko-Settings-Group -- piko-settings files this under its "Display"
+#     heading. Absent, the entry would still be listed, under "Other".
+#   X-Piko-NoDesktop      -- matchbox-desktop-classic's modules/dotdesktop.c
+#     leaves it off the desktop icon view. It is reachable from the
+#     Settings window and from the panel menu; a third copy on the desktop
+#     only pushes the actual applications further down a flat list.
+#
+# Categories=Settings still does what it always did -- it is what puts this
+# in the panel menu's "Desktop Preferences" folder -- and now also what
+# makes piko-settings pick the entry up at all. Do not change it without
+# reading both consumers first.
