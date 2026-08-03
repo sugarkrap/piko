@@ -3,6 +3,34 @@
 # be drawn, and the splash is meant to be the first thing on the panel.
 # /proc and /sys are not needed to draw, so they wait their turn below.
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+
+# Light the panel before drawing on it.
+#
+# The bootstrap owns this now. It did not used to: the panel was stage 2's
+# problem, so stage 1 could blit all it liked into a framebuffer nobody was
+# lit to see -- fbsplash would map /dev/fb0, write 921600 bytes, exit 0, and
+# leave the screen dark. FB_W100 being built in is not the same thing as the
+# panel being on.
+#
+# What was actually missing was CONFIG_SPI_PXA2XX. corgi_lcd is an SPI
+# *device* (it drives the Sharp LCDTG and registers the "corgi_bl"
+# backlight, see drivers/video/backlight/corgi_lcd.c); with no PXA2xx SPI
+# master there is no bus for it to probe on, so the timing generator is
+# never programmed and the backlight never comes up. LCD_CORGI and
+# BACKLIGHT_CLASS_DEVICE were already enabled here -- the driver was
+# compiled in the whole time, just never probed.
+#
+# Brightness is set to the panel's own maximum rather than a fixed number:
+# max_brightness is 47 on this hardware, but reading it keeps this correct
+# if that ever changes. Stage 2 takes brightness policy over within
+# seconds (see docs/HOWTO-BRIGHTNESS.md), so this only governs the splash.
+for bl in /sys/class/backlight/*/; do
+	if test -f "$bl/max_brightness"; then
+		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
+		echo 0 > "$bl/bl_power" 2>/dev/null
+	fi
+done
 
 # The splash, before any output that could scroll across it.
 #
@@ -18,7 +46,6 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null
 /bin/fbsplash -s /splash.ppm 2>/dev/null || true
 
 mount -t proc proc /proc
-mount -t sysfs sysfs /sys
 
 # Keep the splash on screen for a boot that works.
 #

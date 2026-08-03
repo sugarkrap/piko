@@ -23,8 +23,43 @@ an idea.
 | Installed by | `tools/build-initramfs.sh` |
 | Console quieting | `CONFIG_CMDLINE` in `kernel.config-corgi-7.1.4-minimal` |
 
-`init` mounts `devtmpfs` *alone* first — `/dev/fb0` has to exist before
-anything can be drawn — then immediately runs:
+## The panel does not come on by itself
+
+This is the part that is not obvious, and it cost a flash to find out.
+
+Lighting the panel used to be **stage 2's** job. Stage 1 had `FB_W100=y`, so
+`/dev/fb0` existed and `fbsplash` would happily map it, write 921600 bytes,
+and exit 0 — into a framebuffer behind a panel nobody had turned on. No
+error, no splash. *A registered framebuffer device is not a lit display.*
+
+What was actually missing was **`CONFIG_SPI_PXA2XX`**. `corgi_lcd` is an SPI
+*device*: it drives the Sharp LCDTG and registers the `corgi_bl` backlight
+(`drivers/video/backlight/corgi_lcd.c`, `module_spi_driver`). With no PXA2xx
+SPI master there is no bus for it to probe on, so the timing generator is
+never programmed and the backlight never comes up. `LCD_CORGI` and
+`BACKLIGHT_CLASS_DEVICE` were *already* `=y` in the minimal config — the
+driver was compiled in the whole time and simply never probed.
+
+Enabling it pulls in `PXA_SSP` as well, and costs about 11 kB of a budget
+that did not have much to give. That is the price of drawing anything at all
+in stage 1, and it is why the artwork is palettised as hard as it is.
+
+Note the SSP port is shared — `ads7846` (touchscreen), `corgi-lcd`
+(backlight) and `max1111` (battery ADC) all hang off it, and
+`tools/setup-kernel-src.sh` already patches `spi-pxa2xx-platform.c` for a
+double-`pxa_ssp_request()` bug. Stage 1 only needs the LCD half.
+
+The backlight is then set explicitly from `init`, reading the panel's own
+`max_brightness` (47 on this hardware) rather than hardcoding it. Stage 2
+takes brightness policy over within seconds — see
+[`HOWTO-BRIGHTNESS.md`](HOWTO-BRIGHTNESS.md) — so this only governs the
+splash itself.
+
+## How it is drawn
+
+`init` mounts `devtmpfs` and `sysfs` first — `/dev/fb0` has to exist before
+anything can be drawn, and `/sys` before the backlight can be raised — then
+runs:
 
 ```sh
 /bin/fbsplash -s /splash.ppm 2>/dev/null || true
@@ -65,20 +100,23 @@ without it:
 
 ```
 without splash : 178264 bytes
-with splash    : 216403 bytes   (+38139)
+with splash    : 211071 bytes   (+32807)
 ```
 
 And the bootstrap kernel that comes out the other side, built from a
-pristine `tools/setup-kernel-src.sh` tree with this initramfs linked in:
+pristine `tools/setup-kernel-src.sh` tree with this initramfs linked in —
+including `CONFIG_SPI_PXA2XX` and `PXA_SSP`, without which none of it is
+visible:
 
 ```
-bootstrap zImage : 1277224 bytes
+bootstrap zImage : 1282392 bytes
 mtd1 slot budget : 1294336 bytes
-headroom left    :   17112 bytes
+headroom left    :   11944 bytes
 ```
 
-That 17 kB is the whole remaining margin for anything else the bootstrap
-ever wants to carry. Treat it as spent.
+Roughly a third of that went on the SPI master alone. The ~12 kB left is the
+whole remaining margin for anything the bootstrap ever wants to carry —
+treat it as close to spent, and re-measure before adding anything.
 
 Both the cpio and the zImage are gzipped, so what costs flash is the
 *compressed* size of the asset. That is why `--colors` in
@@ -90,14 +128,32 @@ Both the cpio and the zImage are gzipped, so what costs flash is the
 | 360 (default) | 72 kB | **33 kB** |
 | 300 | 52 kB | 25 kB |
 
-Palettising to 64 colours is very close to free visually — the panel is
-RGB565, so it cannot display 8-bit-per-channel precision anyway — and it
-roughly halves the cost. **Dithering is deliberately off**: it destroys the
-flat runs gzip depends on and can double the compressed size for a picture
-that looks no better at this size.
+Palettising is very close to free visually — the panel is RGB565, so it
+cannot display 8-bit-per-channel precision anyway. The default is **32
+colours**, which on this flat-shaded artwork is indistinguishable from 64 at
+panel resolution and 6.5 kB cheaper; on a partition with single-digit kB of
+headroom that is worth having. **Dithering is deliberately off**: it
+destroys the flat runs gzip depends on and can double the compressed size
+for a picture that looks no better at this size.
 
-If you need headroom back, `--logo-height` is the knob with the best
-size-to-regret ratio. Drop to 300 and you get ~8 kB back.
+Measured options, if you need to trade (headroom is what is left of the
+1294336-byte slot after the whole kernel):
+
+| logo height | colours | asset | headroom |
+|---|---|---|---|
+| 360 | 64 | 33231 | 5920 *(measured)* |
+| 360 | **32** | **26688** | **11944** *(measured, shipped)* |
+| 320 | 64 | 27496 | ~11700 |
+| 300 | 64 | 25038 | ~14100 |
+| 300 | 48 | 22813 | ~16300 |
+
+The two measured rows come from real kernel builds; the rest are projected
+from the asset delta, which tracks the zImage delta to within a few hundred
+bytes (both are already gzipped, so the asset passes through the outer
+compression roughly 1:1).
+
+`--colors` is the knob to reach for first — it costs nothing you can see.
+`--logo-height` is the one that actually changes the design.
 
 ## Keeping the picture on screen
 

@@ -2,7 +2,7 @@
 """Render the bootstrap splash asset: modules/initramfs/splash.ppm.gz.
 
     tools/make-splash.py [--src FILE] [--out FILE] [--width 640] [--height 480]
-                         [--logo-height 360] [--colors 64] [--budget 40000]
+                         [--logo-height 360] [--colors 32] [--budget 40000]
 
 The bootstrap kernel's initramfs draws its splash with busybox's `fbsplash`
 applet, which takes a plain binary PPM (P6) and blits it at IMG_LEFT/IMG_TOP
@@ -30,11 +30,13 @@ headroom for the splash asset *and* the fbsplash applet together.
 Both the cpio and the zImage are gzipped, so what actually costs flash is
 this file's *compressed* size -- which is why `--colors` matters far more
 than it looks. A 640x480 field of pure white compresses to almost nothing;
-the artwork is the entire cost. Palettising to 64 colours roughly halves it
-and is very close to free visually, because the panel is RGB565 anyway (5-6
-bits per channel) -- there is no point shipping 8-bit precision the W100
-cannot display. Dithering is deliberately NOT used: it destroys the flat
-runs gzip depends on and can double the compressed size.
+the artwork is the entire cost. Palettising is close to free visually: the
+panel is RGB565 (5-6 bits per channel), so 8-bit precision is not something
+the W100 could display even if it were shipped. The default is 32, which on
+this flat-shaded artwork is indistinguishable from 64 at panel resolution
+and 6.5 kB cheaper -- worth having, on a partition with single-digit kB of
+headroom. Dithering is deliberately NOT used: it destroys the flat runs gzip
+depends on and can double the compressed size.
 
 --budget is a guard rail, not the real limit; the real check is the CI step
 that weighs the finished zImage. This one just fails early and loudly rather
@@ -83,7 +85,7 @@ def main():
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--logo-height", type=int, default=360)
-    p.add_argument("--colors", type=int, default=64,
+    p.add_argument("--colors", type=int, default=32,
                    help="palette size; 0 keeps truecolor (much larger)")
     p.add_argument("--budget", type=int, default=40000,
                    help="fail if the compressed asset exceeds this many bytes")
