@@ -77,6 +77,23 @@
  * reliably opens within a handful of frames -- invisible at ~100ms/frame
  * -- without ever compromising the zero-overlap guarantee to get there.
  *
+ * BATTERY DEAD ZONE reserves the bottom-right corner (BATTERY_ICON_SIZE
+ * square, inset BATTERY_MARGIN px from the right and bottom edges) for a
+ * battery-status icon that lands separately -- this is prep, not that
+ * feature. A sprite whose spawn box would land in that rectangle is
+ * rejected by try_spawn() the same way an occupied (x+y) slot is, so it
+ * gets the same treatment as the NO-OVERLAP case above: try elsewhere
+ * this frame, or come back next frame if nothing was clear. It is
+ * spawn-time only, same reasoning as NO-OVERLAP -- sprites drift down
+ * and left, so one that does not spawn in or next to the corner does not
+ * drift back into it later.
+ *
+ * Opt-out, not opt-in: the icon is expected to be on screen whenever this
+ * runs, so avoiding it is the default (battery_deadzone = 1). -B on the
+ * command line turns it off, for builds shipping without the icon.
+ * brightd passes -B when power-management.cfg says
+ * toast_battery_deadzone=no; see brightd.c's CONFIGURATION section.
+ *
  * This program does not decide WHEN to run. brightd (userspace/src/
  * brightd.c) already has reliable, hardware-proven idle detection (see its
  * own "WHY NOT X" header comment) and launches this after toast_secs of
@@ -99,6 +116,7 @@
 #include <X11/xpm.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/select.h>
@@ -124,6 +142,16 @@
 #define FLAP_EVERY      2     /* advance the wing frame every N frames */
 #define MIN_SPEED       4     /* px per frame, so 40..80 px/s at 10fps */
 #define MAX_SPEED       8
+
+/* Reserved for a battery-status icon that does not exist yet: bottom-right
+ * corner, MARGIN px in from the right and bottom edges. The icon is still
+ * being chosen between 16x16 and 24x24, so this takes the larger
+ * candidate -- shrinking it later only lets sprites spawn a little closer
+ * to the corner than strictly necessary, never the other way round, so it
+ * is the safe default to ship before the real icon lands. Bump ICON_SIZE
+ * to match once it does. See the BATTERY DEAD ZONE header comment. */
+#define BATTERY_ICON_SIZE  24
+#define BATTERY_MARGIN     10
 
 /* See the NO-OVERLAP header comment: two sprites can never touch as long
  * as their (x+y) values differ by at least this much, for as long as both
@@ -151,6 +179,12 @@ static Pixmap backbuf;
 static GC gc;
 static int width, height;
 static unsigned long col_bg;
+
+/* Top-left corner of the reserved battery-icon rectangle, computed once
+ * width/height are known (see main()). Only meaningful when
+ * battery_deadzone is set. */
+static int battery_zone_x, battery_zone_y;
+static int battery_deadzone = 1;   /* -B on the command line clears this */
 
 static Pixmap toaster_img[TOASTER_FRAMES];
 static Pixmap toaster_mask[TOASTER_FRAMES];
@@ -226,6 +260,20 @@ diag_clear(int diag, const Sprite *roster, int n, int self)
 	return 1;
 }
 
+/* True if a sprite spawning at (x,y) would land on the reserved
+ * battery-icon rectangle -- see the BATTERY DEAD ZONE header comment.
+ * Always false when battery_deadzone is off. */
+static int
+battery_zone_clear(int x, int y)
+{
+	if (!battery_deadzone)
+		return 1;
+	return x + SPRITE_SIZE <= battery_zone_x
+	    || y + SPRITE_SIZE <= battery_zone_y
+	    || x >= battery_zone_x + BATTERY_ICON_SIZE
+	    || y >= battery_zone_y + BATTERY_ICON_SIZE;
+}
+
 /* Try to bring sprite s to life: enter from the top or right edge and
  * drift down-left, which is the direction the original After Dark
  * toasters flew and the one upstream kept, EXCEPT when initial is set
@@ -234,11 +282,11 @@ diag_clear(int diag, const Sprite *roster, int n, int self)
  * the first toaster to sail in.
  *
  * Returns 0 without changing s if no (x+y) slot at least MIN_DIAG_GAP
- * from every other living sprite in roster[0..n) turned up in
- * SPAWN_TRIES random attempts -- the caller is expected to leave s dead
- * and call again next frame. See the NO-OVERLAP header comment for why
- * that is a real possibility this has to handle, not just defensive
- * code. */
+ * from every other living sprite in roster[0..n), clear of the battery
+ * dead zone, turned up in SPAWN_TRIES random attempts -- the caller is
+ * expected to leave s dead and call again next frame. See the
+ * NO-OVERLAP and BATTERY DEAD ZONE header comments for why that is a
+ * real possibility this has to handle, not just defensive code. */
 static int
 try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
 {
@@ -255,7 +303,8 @@ try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
 			x = rand() % (width + SPRITE_SIZE);
 			y = -SPRITE_SIZE;
 		}
-		if (diag_clear(x + y, roster, n, self)) {
+		if (diag_clear(x + y, roster, n, self) &&
+		    battery_zone_clear(x, y)) {
 			s->x = x;
 			s->y = y;
 			s->speed = MIN_SPEED + rand() % (MAX_SPEED - MIN_SPEED + 1);
@@ -268,12 +317,17 @@ try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
 	XSetWindowAttributes attrs;
 	XGCValues gcv;
 	Sprite sprites[N_TOASTERS + N_TOAST];
 	int i, tick = 0, xfd;
+
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "-B"))
+			battery_deadzone = 0;
+	}
 
 	dpy = XOpenDisplay(NULL);
 	if (!dpy) {
@@ -284,6 +338,8 @@ main(void)
 	width  = DisplayWidth(dpy, screen);
 	height = DisplayHeight(dpy, screen);
 	col_bg = BlackPixel(dpy, screen);
+	battery_zone_x = width - BATTERY_MARGIN - BATTERY_ICON_SIZE;
+	battery_zone_y = height - BATTERY_MARGIN - BATTERY_ICON_SIZE;
 
 	attrs.override_redirect = True;
 	attrs.background_pixel = col_bg;
