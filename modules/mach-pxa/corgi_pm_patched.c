@@ -224,20 +224,29 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 	.bat_levels_noac  = sharpsl_battery_levels_noac,
 	.bat_levels_acin  = sharpsl_battery_levels_acin,
 	/*
-	 * Recalibrated 2026-07-26 for this specific (heavily aged) battery pack:
-	 * mainline's stock thresholds (188/178/185/175) assume a fresh battery
-	 * that peaks around raw ADC 213. This unit's real-world MAX1111 readings
-	 * top out around 140-145 even at/near full charge (confirmed against the
-	 * stock charger + Cacko, which does not treat this as low/critical) --
-	 * offset every threshold down by 40 to match. See drivers/sharpsl_pm.c's
-	 * battery_levels tables (offset by the same -40) and the disabled
-	 * critical-suspend trigger in sharpsl_battery_thread() for the rest of
-	 * this recalibration.
+	 * Reverted 2026-08-03: the 2026-07-26 recalibration (148/138/145/135)
+	 * assumed this pack peaks around raw ADC 140-145, but live readings on
+	 * this board (raw ADC ~198 on the BATT_VOLT channel while unplugged)
+	 * contradict that -- back to mainline's stock thresholds, which match
+	 * what this board actually reports. See sharpsl_pm.c's battery_levels
+	 * tables for the matching revert; the disabled critical-suspend
+	 * trigger in sharpsl_battery_thread() is unrelated and stays as-is.
+	 *
+	 * status_low_acin/status_low_noac corrected 2026-08-03 to 181/178
+	 * (from mainline's 178/175) after cross-checking against the actual
+	 * Sharp-built kernels: SL-C760 and SL-C860 Cacko 1.23 zImage.bin
+	 * (kernel 2.4.18-rmk7-pxa3-embedix, both boards being the same
+	 * PXA255 hardware under different model-string ROMs) contain the
+	 * identical compiled comparison `voltage > 181` and `voltage > 178`
+	 * against the retry-averaged MAX1111 battery-voltage read, at the
+	 * byte-identical code address in both kernels. No equivalent
+	 * evidence was found for the two status_high_* thresholds, which
+	 * remain mainline's values.
 	 */
-	.status_high_acin = 148,
-	.status_low_acin  = 138,
-	.status_high_noac = 145,
-	.status_low_noac  = 135,
+	.status_high_acin = 188,
+	.status_low_acin  = 181,
+	.status_high_noac = 185,
+	.status_low_noac  = 178,
 };
 
 static struct platform_device *corgipm_device;
