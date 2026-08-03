@@ -112,6 +112,9 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 	# ATAG-only board (no /sys/firmware/fdt); without it the new kernel
 	# gets no memory map. Capture to a tmpfile (no `tee` in this busybox)
 	# so both console and the persistent log get it and $? is kexec's own.
+	# --append's "quiet" is cosmetic only: stage 2's kernel has
+	# CONFIG_CMDLINE_FORCE=y, so its compiled-in CONFIG_CMDLINE (which
+	# also carries quiet) wins regardless of what is passed here.
 	echo "--- kexec -d -l output ---"
 	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
 		--atags \
