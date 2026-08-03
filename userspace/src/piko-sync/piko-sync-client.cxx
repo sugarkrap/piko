@@ -628,6 +628,15 @@ private:
     void do_settings();
 
     Fl_Button *settings_btn_;
+    /* Where the piko checkout lives, i.e. where tools/build-and-deploy.sh
+     * is found. Seeded from PIKO_SYNC_REPO_ROOT at startup and settable
+     * from the Settings dialog; empty means "the current directory", the
+     * original behavior. A setting rather than env-only because the
+     * common way to launch this is now a desktop launcher, where there
+     * is no shell to export anything and not every launcher honors a
+     * .desktop Path= either -- so "run it from the repo root" stopped
+     * being something the user can reliably arrange. */
+    std::string repo_root_;
     std::string toolchain_bin_dir_; /* empty = inherit build-and-deploy.sh's own default */
     std::string jobs_; /* empty = inherit build-and-deploy.sh's own nproc-based default */
 
@@ -658,6 +667,12 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     : pid_(-1), out_fd_(-1), milestone_idx_(0), running_(false)
 {
     (void)tab;
+    /* Seed from the environment so an existing PIKO_SYNC_REPO_ROOT export
+     * keeps working exactly as before; the Settings dialog overrides it
+     * from here on. */
+    if (const char *env_root = getenv("PIKO_SYNC_REPO_ROOT"))
+        if (*env_root) repo_root_ = env_root;
+
     int m = 10, y = Y + m;
 
     adapter_ = new Fl_Choice(X + m + 70, y, 130, 22, "Adapter:");
@@ -747,8 +762,7 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
 
 std::string BuildRunner::script_path() const
 {
-    const char *root = getenv("PIKO_SYNC_REPO_ROOT");
-    std::string base = root && *root ? root : ".";
+    std::string base = repo_root_.empty() ? "." : repo_root_;
     return base + "/tools/build-and-deploy.sh";
 }
 
@@ -820,6 +834,32 @@ void browse_toolchain_cb(Fl_Widget *, void *v)
     input->value(picked.c_str());
 }
 
+/* Same shape as browse_toolchain_cb above, checking for the one file this
+ * app actually needs out of the repo. */
+void browse_repo_cb(Fl_Widget *, void *v)
+{
+    Fl_Input *input = static_cast<Fl_Input *>(v);
+    const char *start = (input->value() && input->value()[0]) ? input->value() : ".";
+
+    Fl_File_Chooser chooser(start, "*", Fl_File_Chooser::DIRECTORY,
+                             "Choose the piko repository root");
+    chooser.show();
+    while (chooser.shown())
+        Fl::wait();
+    if (!chooser.value(1))
+        return; /* cancelled */
+
+    std::string picked = chooser.value(1);
+    std::string probe = picked + "/tools/build-and-deploy.sh";
+    struct stat st;
+    if (stat(probe.c_str(), &st) != 0) {
+        fl_alert("Note: tools/build-and-deploy.sh was not found under:\n%s\n\n"
+                 "Build && Deploy will not work until this points at a piko checkout.",
+                 picked.c_str());
+    }
+    input->value(picked.c_str());
+}
+
 struct OkCancelCtx {
     Fl_Double_Window *dlg;
     bool *ok;
@@ -841,28 +881,42 @@ void settings_cancel_cb(Fl_Widget *, void *v)
 
 void BuildRunner::do_settings()
 {
-    Fl_Double_Window dlg(480, 210, "Build settings");
+    Fl_Double_Window dlg(480, 290, "Build settings");
     dlg.begin();
 
-    Fl_Input toolchain_input(90, 15, 300, 24, "Toolchain:");
+    Fl_Input repo_input(90, 15, 300, 24, "Repo:");
+    repo_input.align(FL_ALIGN_LEFT);
+    repo_input.value(repo_root_.c_str());
+
+    Fl_Button repo_browse_btn(400, 15, 70, 24, "Browse...");
+    repo_browse_btn.callback(browse_repo_cb, &repo_input);
+
+    Fl_Box repo_hint(10, 45, 460, 40,
+                "The piko checkout containing tools/build-and-deploy.sh\n"
+                "(PIKO_SYNC_REPO_ROOT). Leave blank to use the directory this\n"
+                "app was started from.");
+    repo_hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    repo_hint.labelsize(11);
+
+    Fl_Input toolchain_input(90, 95, 300, 24, "Toolchain:");
     toolchain_input.align(FL_ALIGN_LEFT);
     toolchain_input.value(toolchain_bin_dir_.c_str());
 
-    Fl_Button browse_btn(400, 15, 70, 24, "Browse...");
+    Fl_Button browse_btn(400, 95, 70, 24, "Browse...");
     browse_btn.callback(browse_toolchain_cb, &toolchain_input);
 
-    Fl_Box toolchain_hint(10, 45, 460, 40,
+    Fl_Box toolchain_hint(10, 125, 460, 40,
                 "Directory containing the arm-*-gcc cross compiler\n"
                 "(TOOLCHAIN_BIN_DIR). Leave blank to use build-and-deploy.sh's\n"
                 "own default (<repo>/toolchain/x-tools/.../bin).");
     toolchain_hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
     toolchain_hint.labelsize(11);
 
-    Fl_Input jobs_input(90, 95, 60, 24, "Jobs:");
+    Fl_Input jobs_input(90, 175, 60, 24, "Jobs:");
     jobs_input.align(FL_ALIGN_LEFT);
     jobs_input.value(jobs_.c_str());
 
-    Fl_Box jobs_hint(10, 125, 460, 40,
+    Fl_Box jobs_hint(10, 205, 460, 40,
                 "make -jN for the kernel build, and forwarded to\n"
                 "tools/build-userspace.sh's own JOBS. Leave blank to use\n"
                 "nproc (all detected cores).");
@@ -874,9 +928,9 @@ void BuildRunner::do_settings()
     ctx.dlg = &dlg;
     ctx.ok = &ok;
 
-    Fl_Button ok_btn(290, 170, 80, 26, "OK");
+    Fl_Button ok_btn(290, 250, 80, 26, "OK");
     ok_btn.callback(settings_ok_cb, &ctx);
-    Fl_Button cancel_btn(380, 170, 80, 26, "Cancel");
+    Fl_Button cancel_btn(380, 250, 80, 26, "Cancel");
     cancel_btn.callback(settings_cancel_cb, &ctx);
 
     dlg.end();
@@ -888,6 +942,7 @@ void BuildRunner::do_settings()
     if (!ok)
         return;
 
+    repo_root_ = repo_input.value() ? repo_input.value() : "";
     toolchain_bin_dir_ = toolchain_input.value() ? toolchain_input.value() : "";
 
     std::string jobs_text = jobs_input.value() ? jobs_input.value() : "";
@@ -927,8 +982,8 @@ void BuildRunner::do_run()
 
     struct stat st;
     if (stat(args[0].c_str(), &st) != 0) {
-        fl_alert("Cannot find %s.\nRun piko-sync-client from the piko repo root,\n"
-                 "or set PIKO_SYNC_REPO_ROOT.", args[0].c_str());
+        fl_alert("Cannot find %s.\n\n"
+                 "Set the piko checkout in Settings... -> Repo.", args[0].c_str());
         return;
     }
 
@@ -953,6 +1008,22 @@ void BuildRunner::do_run()
          * ${JOBS:-nproc} take over, unchanged. setenv() here only
          * affects this forked child's environment, never the running
          * GUI's own. */
+        /* Not just for build-and-deploy.sh (which locates the repo from
+         * its own $0 and doesn't need this): piko-sync-deploy, which that
+         * script execs at the end, defaults ctx.repo to its CWD and only
+         * overrides it from PIKO_SYNC_REPO_ROOT. Launched from a desktop
+         * icon the CWD is wherever the launcher happened to start us --
+         * $HOME, typically -- so without this the deploy stage would look
+         * for manifest.yaml and every source path under the wrong root.
+         * chdir() too, so anything else that inherits a CWD agrees. */
+        if (!repo_root_.empty()) {
+            setenv("PIKO_SYNC_REPO_ROOT", repo_root_.c_str(), 1);
+            if (chdir(repo_root_.c_str()) != 0) {
+                fprintf(stderr, "piko-sync-client: cannot enter %s: %s\n",
+                        repo_root_.c_str(), strerror(errno));
+                _exit(127);
+            }
+        }
         if (!toolchain_bin_dir_.empty())
             setenv("TOOLCHAIN_BIN_DIR", toolchain_bin_dir_.c_str(), 1);
         if (!jobs_.empty())
