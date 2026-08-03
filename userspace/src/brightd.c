@@ -155,6 +155,12 @@
  * which produces no input events for minutes at a time and would
  * otherwise dim in the user's face. A file rather than a signal because
  * there is no kill on this device.
+ *
+ * This also gates the 's' FIFO opcode below (X's own independent
+ * DPMS/screensaver timeout): X tracks idle time itself from the real
+ * input stream it grabs, so its timers keep running even while this file
+ * suppresses ours, and without this check its blank request would reach
+ * the panel anyway.
  */
 #define INHIBIT    "/tmp/brightd.inhibit"
 
@@ -183,7 +189,12 @@
  *        writer fd of its own, since real hardware blanking on this board
  *        stops at bl_power and brightd is the only thing that touches it.
  *        Must NOT count as activity, or go_blank() would be immediately
- *        undone by the activity handling below.
+ *        undone by the activity handling below. Subject to INHIBIT like
+ *        every other blank path: X's DPMS timers run off the real input
+ *        stream it grabs, independently of our own idle timer, so this
+ *        is the one blank request that does NOT already pass through the
+ *        "lid_closed || inhibited()" gate near the bottom of the main
+ *        loop -- it has to be checked here instead.
  *   'w'  screen saver OFF. Counts as activity: X only sends this because
  *        something legitimate happened (DPMSForceLevel, XSetScreenSaver
  *        reset, a future screensaver client, ...), same as 'u'/'d'.
@@ -911,8 +922,14 @@ main(int argc, char **argv)
 							break;
 						case 's':
 							/* Not activity -- see the
-							 * protocol comment above. */
-							if (state != ST_BLANKED)
+							 * protocol comment above.
+							 * inhibited(): Pikaffeine
+							 * means no blanking, and
+							 * this request came from
+							 * X's own idle timer, not
+							 * ours. */
+							if (state != ST_BLANKED &&
+							    !inhibited())
 								go_blank();
 							break;
 						case 'w':
