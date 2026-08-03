@@ -84,7 +84,17 @@ void TransferTable::draw_cell(TableContext ctx, int R, int C,
     case CONTEXT_CELL: {
         if (!queue_ || R < 0 || R >= queue_->count())
             return;
-        const TransferRow &row = queue_->row(R);
+        /* Newest-first display: reverse the visual row into the queue's
+         * own storage index, which stays append-only (oldest at index 0,
+         * newest at count()-1) -- that index is a STABLE HANDLE other
+         * code holds onto across a row's whole lifetime (Connection::row_
+         * on the server, FileSend's stored index on the client, both used
+         * for every later set_status()/set_progress() call), so it can't
+         * be reordered without invalidating every reference already held
+         * to an existing row the moment a new one is added. Flipping only
+         * where THIS table looks a row up for drawing gets newest-at-top
+         * without touching that invariant at all. */
+        const TransferRow &row = queue_->row(queue_->count() - 1 - R);
 
         fl_push_clip(X, Y, W, H);
         fl_color(FL_WHITE);
