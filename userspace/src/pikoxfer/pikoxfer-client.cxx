@@ -616,6 +616,12 @@ private:
     std::string script_path() const;
     void build_argv(std::vector<std::string> &args) const;
 
+    static void settings_cb(Fl_Widget *, void *v) { static_cast<BuildRunner *>(v)->do_settings(); }
+    void do_settings();
+
+    Fl_Button *settings_btn_;
+    std::string toolchain_bin_dir_; /* empty = inherit build-and-deploy.sh's own default */
+
     Fl_Choice *adapter_;
     Fl_Input *target_;
     Fl_Check_Button *kernel_only_;
@@ -698,6 +704,8 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
 
     run_btn_ = new Fl_Button(X + m, y, 140, 26, "Build && Deploy");
     run_btn_->callback(run_cb, this);
+    settings_btn_ = new Fl_Button(X + m + 150, y, 100, 26, "Settings...");
+    settings_btn_->callback(settings_cb, this);
     y += 34;
 
     bar_ = new Fl_Progress(X + m, y, W - 2 * m, 20);
@@ -760,6 +768,96 @@ void BuildRunner::build_argv(std::vector<std::string> &args) const
     }
 }
 
+namespace {
+
+/* Directory picker for the Toolchain field below -- a plain Fl_Input, not
+ * bundled into a context struct, since that's the only widget this
+ * callback needs to update. */
+void browse_toolchain_cb(Fl_Widget *, void *v)
+{
+    Fl_Input *input = static_cast<Fl_Input *>(v);
+    const char *start = (input->value() && input->value()[0]) ? input->value() : ".";
+
+    Fl_File_Chooser chooser(start, "*", Fl_File_Chooser::DIRECTORY,
+                             "Choose the toolchain bin directory");
+    chooser.show();
+    while (chooser.shown())
+        Fl::wait();
+    if (!chooser.value(1))
+        return; /* cancelled */
+
+    std::string picked = chooser.value(1);
+    /* Soft hint, not a hard block -- build-and-deploy.sh's own check is
+     * the one that actually matters and will fail loudly on its own if
+     * this is wrong; this just saves a build attempt's worth of time. */
+    std::string probe = picked + "/arm-unknown-linux-uclibcgnueabi-gcc";
+    struct stat st;
+    if (stat(probe.c_str(), &st) != 0) {
+        fl_alert("Note: arm-unknown-linux-uclibcgnueabi-gcc was not found directly in:\n%s\n\n"
+                 "build-and-deploy.sh may not find the cross compiler there.",
+                 picked.c_str());
+    }
+    input->value(picked.c_str());
+}
+
+struct OkCancelCtx {
+    Fl_Double_Window *dlg;
+    bool *ok;
+};
+
+void settings_ok_cb(Fl_Widget *, void *v)
+{
+    OkCancelCtx *ctx = static_cast<OkCancelCtx *>(v);
+    *ctx->ok = true;
+    ctx->dlg->hide();
+}
+
+void settings_cancel_cb(Fl_Widget *, void *v)
+{
+    static_cast<OkCancelCtx *>(v)->dlg->hide();
+}
+
+} /* anonymous namespace */
+
+void BuildRunner::do_settings()
+{
+    Fl_Double_Window dlg(480, 150, "Build settings");
+    dlg.begin();
+
+    Fl_Input toolchain_input(90, 15, 300, 24, "Toolchain:");
+    toolchain_input.align(FL_ALIGN_LEFT);
+    toolchain_input.value(toolchain_bin_dir_.c_str());
+
+    Fl_Button browse_btn(400, 15, 70, 24, "Browse...");
+    browse_btn.callback(browse_toolchain_cb, &toolchain_input);
+
+    Fl_Box hint(10, 45, 460, 55,
+                "Directory containing the arm-*-gcc cross compiler\n"
+                "(TOOLCHAIN_BIN_DIR). Leave blank to use build-and-deploy.sh's\n"
+                "own default (<repo>/toolchain/x-tools/.../bin).");
+    hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    hint.labelsize(11);
+
+    bool ok = false;
+    OkCancelCtx ctx;
+    ctx.dlg = &dlg;
+    ctx.ok = &ok;
+
+    Fl_Button ok_btn(290, 110, 80, 26, "OK");
+    ok_btn.callback(settings_ok_cb, &ctx);
+    Fl_Button cancel_btn(380, 110, 80, 26, "Cancel");
+    cancel_btn.callback(settings_cancel_cb, &ctx);
+
+    dlg.end();
+    dlg.set_modal();
+    dlg.show();
+    while (dlg.shown())
+        Fl::wait();
+
+    if (ok)
+        toolchain_bin_dir_ = toolchain_input.value() ? toolchain_input.value() : "";
+}
+
 void BuildRunner::append(const char *text)
 {
     log_buf_->append(text);
@@ -802,6 +900,13 @@ void BuildRunner::do_run()
         dup2(outp[1], STDOUT_FILENO);
         dup2(outp[1], STDERR_FILENO);
         close(outp[1]);
+
+        /* Only set if the user picked one via Settings -- otherwise
+         * build-and-deploy.sh's own ${TOOLCHAIN_BIN_DIR:-default} takes
+         * over, unchanged. setenv() here only affects this forked
+         * child's environment, never the running GUI's own. */
+        if (!toolchain_bin_dir_.empty())
+            setenv("TOOLCHAIN_BIN_DIR", toolchain_bin_dir_.c_str(), 1);
 
         std::vector<char *> argv;
         for (size_t i = 0; i < args.size(); i++)
