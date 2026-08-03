@@ -621,6 +621,7 @@ private:
 
     Fl_Button *settings_btn_;
     std::string toolchain_bin_dir_; /* empty = inherit build-and-deploy.sh's own default */
+    std::string jobs_; /* empty = inherit build-and-deploy.sh's own nproc-based default */
 
     Fl_Choice *adapter_;
     Fl_Input *target_;
@@ -821,7 +822,7 @@ void settings_cancel_cb(Fl_Widget *, void *v)
 
 void BuildRunner::do_settings()
 {
-    Fl_Double_Window dlg(480, 150, "Build settings");
+    Fl_Double_Window dlg(480, 210, "Build settings");
     dlg.begin();
 
     Fl_Input toolchain_input(90, 15, 300, 24, "Toolchain:");
@@ -831,21 +832,32 @@ void BuildRunner::do_settings()
     Fl_Button browse_btn(400, 15, 70, 24, "Browse...");
     browse_btn.callback(browse_toolchain_cb, &toolchain_input);
 
-    Fl_Box hint(10, 45, 460, 55,
+    Fl_Box toolchain_hint(10, 45, 460, 40,
                 "Directory containing the arm-*-gcc cross compiler\n"
                 "(TOOLCHAIN_BIN_DIR). Leave blank to use build-and-deploy.sh's\n"
                 "own default (<repo>/toolchain/x-tools/.../bin).");
-    hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-    hint.labelsize(11);
+    toolchain_hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    toolchain_hint.labelsize(11);
+
+    Fl_Input jobs_input(90, 95, 60, 24, "Jobs:");
+    jobs_input.align(FL_ALIGN_LEFT);
+    jobs_input.value(jobs_.c_str());
+
+    Fl_Box jobs_hint(10, 125, 460, 40,
+                "make -jN for the kernel build, and forwarded to\n"
+                "tools/build-userspace.sh's own JOBS. Leave blank to use\n"
+                "nproc (all detected cores).");
+    jobs_hint.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    jobs_hint.labelsize(11);
 
     bool ok = false;
     OkCancelCtx ctx;
     ctx.dlg = &dlg;
     ctx.ok = &ok;
 
-    Fl_Button ok_btn(290, 110, 80, 26, "OK");
+    Fl_Button ok_btn(290, 170, 80, 26, "OK");
     ok_btn.callback(settings_ok_cb, &ctx);
-    Fl_Button cancel_btn(380, 110, 80, 26, "Cancel");
+    Fl_Button cancel_btn(380, 170, 80, 26, "Cancel");
     cancel_btn.callback(settings_cancel_cb, &ctx);
 
     dlg.end();
@@ -854,8 +866,24 @@ void BuildRunner::do_settings()
     while (dlg.shown())
         Fl::wait();
 
-    if (ok)
-        toolchain_bin_dir_ = toolchain_input.value() ? toolchain_input.value() : "";
+    if (!ok)
+        return;
+
+    toolchain_bin_dir_ = toolchain_input.value() ? toolchain_input.value() : "";
+
+    std::string jobs_text = jobs_input.value() ? jobs_input.value() : "";
+    if (!jobs_text.empty()) {
+        char *end = 0;
+        long n = strtol(jobs_text.c_str(), &end, 10);
+        /* Soft warning, same call as the Toolchain field above: the
+         * real check is `make -jN` itself, which will misbehave on its
+         * own terms regardless; this just catches an obvious typo
+         * before a build attempt is spent on it. */
+        if (n <= 0 || !end || *end != '\0')
+            fl_alert("Note: \"%s\" doesn't look like a positive number.\n"
+                      "make -j will be passed this value as-is.", jobs_text.c_str());
+    }
+    jobs_ = jobs_text;
 }
 
 void BuildRunner::append(const char *text)
@@ -902,11 +930,14 @@ void BuildRunner::do_run()
         close(outp[1]);
 
         /* Only set if the user picked one via Settings -- otherwise
-         * build-and-deploy.sh's own ${TOOLCHAIN_BIN_DIR:-default} takes
-         * over, unchanged. setenv() here only affects this forked
-         * child's environment, never the running GUI's own. */
+         * build-and-deploy.sh's own ${TOOLCHAIN_BIN_DIR:-default} /
+         * ${JOBS:-nproc} take over, unchanged. setenv() here only
+         * affects this forked child's environment, never the running
+         * GUI's own. */
         if (!toolchain_bin_dir_.empty())
             setenv("TOOLCHAIN_BIN_DIR", toolchain_bin_dir_.c_str(), 1);
+        if (!jobs_.empty())
+            setenv("JOBS", jobs_.c_str(), 1);
 
         std::vector<char *> argv;
         for (size_t i = 0; i < args.size(); i++)

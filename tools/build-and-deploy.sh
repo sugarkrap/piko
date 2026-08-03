@@ -155,7 +155,14 @@ KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
 # buildroot checkout, which exists on no other machine -- including CI.
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
-JOBS="$(nproc 2>/dev/null || echo 4)"
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+# Exported (not just used locally) so tools/build-userspace.sh's own
+# ${JOBS:-nproc} default -- see its own header -- picks up the SAME
+# value this script settled on, instead of independently recomputing
+# nproc in its own subshell and silently ignoring whatever was chosen
+# here. tools/build-x11-stack.sh has no JOBS support of its own to
+# propagate to; out of scope here.
+export JOBS
 
 # pikodeploy itself needs building before either the probe below or the
 # final exec can use it -- unlike chunked-deploy.sh, a checked-in script
