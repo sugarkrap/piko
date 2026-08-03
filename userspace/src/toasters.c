@@ -77,22 +77,69 @@
  * reliably opens within a handful of frames -- invisible at ~100ms/frame
  * -- without ever compromising the zero-overlap guarantee to get there.
  *
- * BATTERY DEAD ZONE reserves the bottom-right corner (BATTERY_ICON_SIZE
- * square, inset BATTERY_MARGIN px from the right and bottom edges) for a
- * battery-status icon that lands separately -- this is prep, not that
- * feature. A sprite whose spawn box would land in that rectangle is
- * rejected by try_spawn() the same way an occupied (x+y) slot is, so it
- * gets the same treatment as the NO-OVERLAP case above: try elsewhere
- * this frame, or come back next frame if nothing was clear. It is
- * spawn-time only, same reasoning as NO-OVERLAP -- sprites drift down
- * and left, so one that does not spawn in or next to the corner does not
- * drift back into it later.
+ * BATTERY ICON lives in the bottom-right corner (a BATTERY_ICON_W x
+ * BATTERY_ICON_H pill, inset BATTERY_MARGIN px from the right and bottom
+ * edges) and is drawn by this program itself, not composited from
+ * elsewhere: toasters' window is a fullscreen override-redirect
+ * XMapRaised'd on top of everything (see the top of this file), so
+ * anything underneath -- a separate applet's own window included --
+ * would just be invisibly occluded for as long as the screensaver runs.
+ *
+ * Keeping sprites off it is NOT the same problem as NO-OVERLAP above, and
+ * reusing that reasoning unmodified was a bug caught in testing: a
+ * sprite that does not SPAWN on the icon can still fly through it later,
+ * because unlike two sprites (which move in lockstep, so their
+ * separation is frozen for life) the icon does not move -- the sprite
+ * drifts down-left across a stationary rectangle, and a spawn point
+ * outside it says nothing about the rest of that straight-line path.
+ *
+ * The fix is the same *shape* of argument as NO-OVERLAP, re-derived for
+ * a moving SPRITE_SIZE x SPRITE_SIZE box against a fixed, and not
+ * necessarily square, BATTERY_ICON_W x BATTERY_ICON_H one instead of two
+ * same-size moving boxes. Let Zd = battery_zone_x+battery_zone_y (the
+ * icon's own, unmoving, top-left corner sum) and D = x+y (the candidate
+ * sprite's, invariant for its whole flight as before). Writing dx,dy for
+ * the sprite's position relative to the icon's top-left corner, dx+dy =
+ * D-Zd is still constant along the flight -- the icon's own y no longer
+ * cancels out y(t) by itself, but D does, since D is already invariant.
+ * AABB overlap needs -SPRITE_SIZE<dx<BATTERY_ICON_W and -SPRITE_SIZE<dy<
+ * BATTERY_ICON_H; substituting shows a shared dx exists, for some point
+ * on the flight, exactly when -2*SPRITE_SIZE < D-Zd < BATTERY_ICON_W +
+ * BATTERY_ICON_H. Outside that range, overlap is impossible for the
+ * sprite's entire trajectory, not just its spawn point -- verified by
+ * exhaustively checking every achievable (spawn position, speed) pair
+ * against simulated frame-by-frame trajectories, the same way the
+ * NO-OVERLAP geometry was checked by direct construction. See
+ * battery_zone_clear(). A sprite whose candidate diag falls inside the
+ * forbidden range is rejected by try_spawn() the same way an occupied
+ * inter-sprite (x+y) slot is, so it gets the same treatment as the
+ * NO-OVERLAP case: try elsewhere this frame, or come back next frame if
+ * nothing was clear.
+ *
+ * Deliberately NOT a static icon image: draw_battery() procedurally
+ * paints a pill (draw_pill() -- two XFillArc end-caps plus an
+ * XFillRectangle body, there being no rounded-rect primitive in Xlib),
+ * filled left-to-right by percentage and coloured by the same thresholds
+ * (<=25% red, <=50% orange, else green, yellow track while on AC) that
+ * matchbox-panel's own mb-applet-battery.c uses in its paint_callback()
+ * -- one visual language for "how much battery is left" instead of two,
+ * even though the shape itself (a slim rounded bar rather than that
+ * applet's icon-plus-overlay) does not otherwise try to look like it.
+ * Battery state comes from the same source that applet uses on this
+ * board, /proc/apm (APM-emulation format; see read_battery()), polled
+ * every BATTERY_CHECK_TICKS frames and only actually redrawn when the
+ * percentage or AC state changes, the same early-return the applet's
+ * paint_callback does -- both because polling a proc file is
+ * comparatively expensive next to a memory read and because it keeps
+ * this on the same "don't touch pixels that didn't change" discipline as
+ * the DIRTY-RECTANGLE sprite repaint above.
  *
  * Opt-out, not opt-in: the icon is expected to be on screen whenever this
- * runs, so avoiding it is the default (battery_deadzone = 1). -B on the
- * command line turns it off, for builds shipping without the icon.
- * brightd passes -B when power-management.cfg says
- * toast_battery_deadzone=no; see brightd.c's CONFIGURATION section.
+ * runs, so drawing it -- and keeping sprites off of it -- is the default
+ * (battery_deadzone = 1). -B on the command line turns both off, for
+ * builds shipping without the icon. brightd passes -B when
+ * power-management.cfg says toast_battery_deadzone=no; see brightd.c's
+ * CONFIGURATION section.
  *
  * This program does not decide WHEN to run. brightd (userspace/src/
  * brightd.c) already has reliable, hardware-proven idle detection (see its
@@ -143,15 +190,18 @@
 #define MIN_SPEED       4     /* px per frame, so 40..80 px/s at 10fps */
 #define MAX_SPEED       8
 
-/* Reserved for a battery-status icon that does not exist yet: bottom-right
- * corner, MARGIN px in from the right and bottom edges. The icon is still
- * being chosen between 16x16 and 24x24, so this takes the larger
- * candidate -- shrinking it later only lets sprites spawn a little closer
- * to the corner than strictly necessary, never the other way round, so it
- * is the safe default to ship before the real icon lands. Bump ICON_SIZE
- * to match once it does. See the BATTERY DEAD ZONE header comment. */
-#define BATTERY_ICON_SIZE  24
-#define BATTERY_MARGIN     10
+/* Battery icon geometry: bottom-right corner, MARGIN px in from the right
+ * and bottom edges. Procedurally drawn (see BATTERY ICON header comment),
+ * not a fixed-resolution image asset, so these are just rendering
+ * parameters, not constraints inherited from artwork. A slim pill --
+ * ICON_H well under ICON_W -- rather than the square this started as:
+ * see draw_pill() for how the rounded ends are actually drawn. */
+#define BATTERY_ICON_W         32
+#define BATTERY_ICON_H         14
+#define BATTERY_MARGIN         10
+#define BATTERY_BORDER_INSET   2    /* border-to-fill gap on each side */
+#define BATTERY_CHECK_TICKS    20   /* ~2s at FRAME_MS=100 -- matches
+				      * mb-applet-battery.c's own poll rate */
 
 /* See the NO-OVERLAP header comment: two sprites can never touch as long
  * as their (x+y) values differ by at least this much, for as long as both
@@ -260,18 +310,180 @@ diag_clear(int diag, const Sprite *roster, int n, int self)
 	return 1;
 }
 
-/* True if a sprite spawning at (x,y) would land on the reserved
- * battery-icon rectangle -- see the BATTERY DEAD ZONE header comment.
- * Always false when battery_deadzone is off. */
+/* True if a sprite spawning with x+y == diag can never touch the battery
+ * icon rectangle for the rest of its flight (not just at this instant)
+ * -- see the derivation in the BATTERY ICON header comment. Always true
+ * when battery_deadzone is off. */
 static int
-battery_zone_clear(int x, int y)
+battery_zone_clear(int diag)
 {
+	int delta;
+
 	if (!battery_deadzone)
 		return 1;
-	return x + SPRITE_SIZE <= battery_zone_x
-	    || y + SPRITE_SIZE <= battery_zone_y
-	    || x >= battery_zone_x + BATTERY_ICON_SIZE
-	    || y >= battery_zone_y + BATTERY_ICON_SIZE;
+	delta = diag - (battery_zone_x + battery_zone_y);
+	return delta <= -2 * SPRITE_SIZE
+	    || delta >= BATTERY_ICON_W + BATTERY_ICON_H;
+}
+
+/* Read battery state out of /proc/apm, same source and same line format
+ * as matchbox-panel's mb-applet-battery.c (its read_apm(), which this
+ * mirrors): "driver-ver bios-ver flags ac-line batt-status batt-flag
+ * batt-life% time units", e.g. "1.13 1.2 0x03 0x01 0x03 0x09 98% -1 ?".
+ * Unlike that applet we have no use for time-left, so it is scanned past
+ * but not returned. Returns 0 (leaving percent/ac untouched) if the
+ * file is missing or unparsable -- draw_battery() just skips the redraw
+ * in that case, same as if nothing had changed. */
+static int
+read_battery(int *percent, int *ac)
+{
+	FILE *f;
+	char line[256];
+	char units[16];
+	int ac_raw = -1, batt_status = 0, batt_flag = 0, pct = -1,
+	    time_left = -1;
+
+	f = fopen("/proc/apm", "r");
+	if (!f)
+		return 0;
+	if (!fgets(line, sizeof(line), f)) {
+		fclose(f);
+		return 0;
+	}
+	fclose(f);
+
+	units[0] = '\0';
+	if (sscanf(line, "%*s %*s %*x %x %x %x %d%% %d %15s",
+		   &ac_raw, &batt_status, &batt_flag, &pct, &time_left,
+		   units) < 4)
+		return 0;
+
+	*percent = pct;
+	*ac = (ac_raw == 1);
+	return 1;
+}
+
+/* Fill a w x h pill (a rectangle with fully rounded, semicircular, short
+ * ends) at (x,y) in the GC's current foreground -- Xlib has no
+ * rounded-rect primitive, so this is two XFillArc end-caps plus an
+ * XFillRectangle body between them. Angles are in 64ths of a degree,
+ * standard Xlib convention (0 = 3 o'clock, positive = counterclockwise);
+ * 90*64 for 180*64 sweeps the left cap from 12 o'clock through 9 o'clock
+ * to 6 o'clock, -90*64 for 180*64 sweeps the right cap from 6 o'clock
+ * through 3 o'clock to 12 o'clock. h is assumed even (both call sites'
+ * heights are), so the radius (h/2) is exact. */
+static void
+draw_pill(int x, int y, int w, int h)
+{
+	XFillArc(dpy, backbuf, gc, x, y, (unsigned)h, (unsigned)h,
+		 90 * 64, 180 * 64);
+	XFillArc(dpy, backbuf, gc, x + w - h, y, (unsigned)h, (unsigned)h,
+		 -90 * 64, 180 * 64);
+	if (w > h)
+		XFillRectangle(dpy, backbuf, gc, x + h / 2, y,
+			       (unsigned)(w - h), (unsigned)h);
+}
+
+/* Fill only the left fill_w columns of a w x h pill: a full rounded left
+ * cap (matching the track's own cap so the fill's leading edge always
+ * looks like part of the same pill) plus a flat-edged rectangle out to
+ * fill_w -- i.e. a progress bar that reads as "this much of the pill",
+ * not a second, independently-rounded shape. Growing fill_w from 0 to w
+ * morphs it into the same shape draw_pill() would draw, so 100% and a
+ * plain draw_pill() call are visually identical. Slightly overstates
+ * very low non-zero percentages (under the cap radius' share of w) since
+ * the left cap is drawn whole rather than partially -- accepted, the
+ * error is a couple of pixels on an icon this size and drawing a
+ * partial-arc sliver correctly is not worth the complexity here. */
+static void
+draw_fill_bar(int x, int y, int w, int h, int fill_w)
+{
+	int r = h / 2;
+
+	if (fill_w <= 0)
+		return;
+	if (fill_w >= w) {
+		draw_pill(x, y, w, h);
+		return;
+	}
+	XFillArc(dpy, backbuf, gc, x, y, (unsigned)h, (unsigned)h,
+		 90 * 64, 180 * 64);
+	if (fill_w > r)
+		XFillRectangle(dpy, backbuf, gc, x + r, y,
+			       (unsigned)(fill_w - r), (unsigned)h);
+}
+
+/* Procedurally paint the battery icon: a bordered pill (see draw_pill()),
+ * its interior filled left-to-right by percentage (see draw_fill_bar())
+ * and colour-thresholded the same way mb-applet-battery.c's
+ * paint_callback() colours its own bar (<=25% red, <=50% orange, else
+ * green; a yellow track while on AC instead of black) -- see the BATTERY
+ * ICON header comment for why this reuses that applet's colour language
+ * without trying to match its shape.
+ *
+ * No-ops, without touching the screen, if the reading is unchanged from
+ * last time (mirroring that applet's own last_percentage/last_ac check)
+ * or unavailable. Restores the GC foreground to col_bg before returning
+ * -- draw_sprite()'s callers rely on that staying put between calls; see
+ * the comment where it is first set in main(). */
+static void
+draw_battery(void)
+{
+	static int last_percent = -2, last_ac = -1;
+	int percent, ac;
+	int in_x, in_y, in_w, in_h, fill_w;
+	unsigned long fill;
+	XColor c;
+
+	if (!read_battery(&percent, &ac))
+		return;
+	if (percent == last_percent && ac == last_ac)
+		return;
+	last_percent = percent;
+	last_ac = ac;
+
+	in_x = battery_zone_x + BATTERY_BORDER_INSET;
+	in_y = battery_zone_y + BATTERY_BORDER_INSET;
+	in_w = BATTERY_ICON_W - 2 * BATTERY_BORDER_INSET;
+	in_h = BATTERY_ICON_H - 2 * BATTERY_BORDER_INSET;
+
+	c.flags = DoRed | DoGreen | DoBlue;
+	c.red = 0xcccc; c.green = 0xcccc; c.blue = 0xcccc;
+	XAllocColor(dpy, DefaultColormap(dpy, screen), &c);
+	XSetForeground(dpy, gc, c.pixel);
+	draw_pill(battery_zone_x, battery_zone_y, BATTERY_ICON_W,
+		  BATTERY_ICON_H);
+
+	if (ac) {
+		c.red = 0xffff; c.green = 0xffff; c.blue = 0x0000;
+		XAllocColor(dpy, DefaultColormap(dpy, screen), &c);
+		XSetForeground(dpy, gc, c.pixel);
+	} else {
+		XSetForeground(dpy, gc, col_bg);
+	}
+	draw_pill(in_x, in_y, in_w, in_h);
+
+	if (percent > 0 && percent <= 100) {
+		if (percent <= 25) {
+			c.red = 0xffff; c.green = 0x0000; c.blue = 0x0000;
+		} else if (percent <= 50) {
+			c.red = 0xffff; c.green = 0x9999; c.blue = 0x3333;
+		} else {
+			c.red = 0x6666; c.green = 0xffff; c.blue = 0x3333;
+		}
+		XAllocColor(dpy, DefaultColormap(dpy, screen), &c);
+		fill = c.pixel;
+
+		fill_w = percent * in_w / 100;
+		XSetForeground(dpy, gc, fill);
+		draw_fill_bar(in_x, in_y, in_w, in_h, fill_w);
+	}
+
+	XCopyArea(dpy, backbuf, win, gc, battery_zone_x, battery_zone_y,
+		  BATTERY_ICON_W, BATTERY_ICON_H, battery_zone_x,
+		  battery_zone_y);
+
+	XSetForeground(dpy, gc, col_bg);
 }
 
 /* Try to bring sprite s to life: enter from the top or right edge and
@@ -285,7 +497,7 @@ battery_zone_clear(int x, int y)
  * from every other living sprite in roster[0..n), clear of the battery
  * dead zone, turned up in SPAWN_TRIES random attempts -- the caller is
  * expected to leave s dead and call again next frame. See the
- * NO-OVERLAP and BATTERY DEAD ZONE header comments for why that is a
+ * NO-OVERLAP and BATTERY ICON header comments for why that is a
  * real possibility this has to handle, not just defensive code. */
 static int
 try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
@@ -304,7 +516,7 @@ try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
 			y = -SPRITE_SIZE;
 		}
 		if (diag_clear(x + y, roster, n, self) &&
-		    battery_zone_clear(x, y)) {
+		    battery_zone_clear(x + y)) {
 			s->x = x;
 			s->y = y;
 			s->speed = MIN_SPEED + rand() % (MAX_SPEED - MIN_SPEED + 1);
@@ -338,8 +550,8 @@ main(int argc, char **argv)
 	width  = DisplayWidth(dpy, screen);
 	height = DisplayHeight(dpy, screen);
 	col_bg = BlackPixel(dpy, screen);
-	battery_zone_x = width - BATTERY_MARGIN - BATTERY_ICON_SIZE;
-	battery_zone_y = height - BATTERY_MARGIN - BATTERY_ICON_SIZE;
+	battery_zone_x = width - BATTERY_MARGIN - BATTERY_ICON_W;
+	battery_zone_y = height - BATTERY_MARGIN - BATTERY_ICON_H;
 
 	attrs.override_redirect = True;
 	attrs.background_pixel = col_bg;
@@ -361,9 +573,11 @@ main(int argc, char **argv)
 				(unsigned)DefaultDepth(dpy, screen));
 	gcv.graphics_exposures = False;
 	gc = XCreateGC(dpy, win, GCGraphicsExposures, &gcv);
-	/* Foreground stays col_bg for the whole run -- draw_sprite() only
-	 * ever touches the clip mask/origin, never the foreground, so this
-	 * does not need resetting per frame or per sprite. */
+	/* Foreground is col_bg between sprite frames -- draw_sprite() only
+	 * ever touches the clip mask/origin, never the foreground, so the
+	 * per-sprite loop does not need to reset it. draw_battery() is the
+	 * one other place that changes it (it needs several colours), and
+	 * always restores col_bg before returning to preserve this. */
 	XSetForeground(dpy, gc, col_bg);
 	XFillRectangle(dpy, backbuf, gc, 0, 0, (unsigned)width, (unsigned)height);
 
@@ -473,6 +687,9 @@ main(int argc, char **argv)
 				  (unsigned)(dx1 - dx0), (unsigned)(dy1 - dy0),
 				  dx0, dy0);
 		}
+
+		if (battery_deadzone && tick % BATTERY_CHECK_TICKS == 0)
+			draw_battery();
 
 		XFlush(dpy);
 		tick++;
