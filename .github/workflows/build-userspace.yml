@@ -70,6 +70,35 @@ jobs:
         run: |
           ./tools/build-uclibc-toolchain.sh
 
+      # This is the toolchain every userspace/ build and the kernel itself
+      # use (see this workflow's header) -- by far the biggest gap between
+      # "git clone" and a working local build, per
+      # tools/build-uclibc-toolchain.sh's own header ("tens of minutes to
+      # hours", "several GB of disk"). CI already has to build it from
+      # tracked config on every cache miss; publishing that output here
+      # means a fresh clone can just download a working toolchain instead
+      # of running crosstool-NG themselves.
+      #
+      # Only x-tools/ -- the actual usable toolchain -- ships here, not
+      # src/build/ctng (crosstool-NG's own scratch/intermediate dirs,
+      # unrelated bloat for anyone just wanting to cross-compile). zstd
+      # (preinstalled on GitHub-hosted runners) at its default level: this
+      # tree is large enough that upload/download time matters more than
+      # squeezing out the last few percent of ratio.
+      #
+      # Extract to toolchain/ at the repo root (or point TOOLCHAIN_BIN_DIR/
+      # PIKO_TOOLCHAIN_DIR at wherever it lands) to match what every build
+      # script here expects.
+      - name: Package toolchain for distribution
+        run: tar -I 'zstd -T0' -cf toolchain.tar.zst -C toolchain x-tools
+
+      - name: Upload toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uclibc-toolchain-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          path: toolchain.tar.zst
+          if-no-files-found: error
+
       - name: Build userspace (md5sum, ALSA, SDL/pikalibrate)
         env:
           TOOLCHAIN_BIN_DIR: ${{ github.workspace }}/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin
