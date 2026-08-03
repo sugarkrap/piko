@@ -100,7 +100,19 @@ rootfs/sbin/
 rootfs/usr/bin/
 rootfs/usr/share/
 rootfs/home/
-rootfs/root/
+# Not a bare "rootfs/root/" (trailing-slash directory excludes block git
+# from ever descending into the directory at all, so a child can never be
+# re-included by a later negation, no matter how it's written -- a
+# documented gitignore limitation). "/*" excludes contents individually
+# instead, which DOES allow the specific re-include below.
+rootfs/root/*
+# .matchbox/wallpaper is hand-written config (the default wallpaper CHOICE
+# pikodeploy seeds -- see manifest.yaml's core_scripts section), not a
+# copied-in build artifact like the rest of rootfs/root/ -- same
+# re-include pattern as flash/bin/.gitkeep below.
+!rootfs/root/.matchbox/
+rootfs/root/.matchbox/*
+!rootfs/root/.matchbox/wallpaper
 # usr/sbin is a mix of hand-written scripts and copied-in ELF binaries:
 # ignore everything, then re-include the scripts that ARE source-of-truth.
 rootfs/usr/sbin/*
@@ -222,3 +234,6 @@ userspace/.thirdparty-cache/
 # -- they use mb_tray_app_new()'s result without a NULL check, unlike
 # clock/launcher; see docs/HOWTO-MATCHBOX-DESKTOP.md)
 *.core
+
+# tools/build-pikoxfer.sh's default --out is the repo root
+/*.ipk

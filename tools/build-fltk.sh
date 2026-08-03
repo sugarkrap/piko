@@ -124,11 +124,6 @@ if [ ! -f "$STAGE/usr/include/X11/Xlib.h" ] || [ ! -f "$STAGE/usr/lib/pkgconfig/
     exit 1
 fi
 
-if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
-    echo "==> FLTK already staged, skipping ($MARKER)"
-    exit 0
-fi
-
 PATH="$TOOLCHAIN_BIN_DIR:$PATH"
 export PATH
 export CC="$HOST-gcc"
@@ -146,97 +141,113 @@ export CPPFLAGS="-I$STAGE/usr/include"
 # /lib at runtime. Same note as tools/build-thirdparty-deps.sh.
 export LDFLAGS="-L$STAGE/usr/lib -Wl,-rpath-link=$STAGE/usr/lib"
 
-echo "==> FLTK $(git -C "$FLTK_SRC_DIR" describe --tags 2>/dev/null || echo '(unknown revision)')"
+# Only the LIBRARY build is skipped when already staged -- fltktest,
+# matchbox-fbrun and mb-wallpaper-picker below each have their own
+# independent up-to-date check against their own binary, same as every
+# other per-component check in tools/build-x11-stack.sh (mb-volume,
+# mb-brightness, ...). This used to be a hard `exit 0` right here, which
+# meant a worktree that already had libfltk.so.1.3 staged from an earlier
+# build silently never got a NEWLY ADDED downstream binary at all -- found
+# 2026-08-03 when mb-wallpaper-picker was added to this script: every
+# worktree with FLTK already staged from before that change kept skipping
+# straight past its build, failing later at payload-assembly time with a
+# confusing "missing .../usr/bin/mb-wallpaper-picker" instead of building
+# it here where the fix actually belongs.
+if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
+    echo "==> FLTK library already staged, skipping build ($MARKER)"
+else
+    echo "==> FLTK $(git -C "$FLTK_SRC_DIR" describe --tags 2>/dev/null || echo '(unknown revision)')"
 
-(
-    cd "$FLTK_SRC_DIR"
+    (
+        cd "$FLTK_SRC_DIR"
 
-    if [ "$FORCE" -eq 1 ] && [ -f makeinclude ]; then
-        echo "    --force: make distclean"
-        make distclean >/dev/null 2>&1 || true
-    fi
-
-    # The submodule is a git checkout, so there is no generated configure --
-    # only configure.ac. autogen.sh runs autoconf/automake and then runs
-    # configure itself unless NOCONFIGURE is set; keep the two steps apart so
-    # the configure line below is the one that matters and is visible.
-    if [ ! -f configure ]; then
-        echo "    generating configure (autogen.sh)"
-        if ! command -v autoconf >/dev/null 2>&1; then
-            echo "tools/build-fltk.sh: autoconf not installed on this host" >&2
-            echo "FLTK ships no pre-generated configure in git." >&2
-            exit 1
+        if [ "$FORCE" -eq 1 ] && [ -f makeinclude ]; then
+            echo "    --force: make distclean"
+            make distclean >/dev/null 2>&1 || true
         fi
-        NOCONFIGURE=1 ./autogen.sh
+
+        # The submodule is a git checkout, so there is no generated configure --
+        # only configure.ac. autogen.sh runs autoconf/automake and then runs
+        # configure itself unless NOCONFIGURE is set; keep the two steps apart so
+        # the configure line below is the one that matters and is visible.
+        if [ ! -f configure ]; then
+            echo "    generating configure (autogen.sh)"
+            if ! command -v autoconf >/dev/null 2>&1; then
+                echo "tools/build-fltk.sh: autoconf not installed on this host" >&2
+                echo "FLTK ships no pre-generated configure in git." >&2
+                exit 1
+            fi
+            NOCONFIGURE=1 ./autogen.sh
+        fi
+
+        echo "    configuring"
+        ./configure \
+            --host="$HOST" \
+            --build="$BUILD_ARCH" \
+            --prefix=/usr \
+            --x-includes="$STAGE/usr/include" \
+            --x-libraries="$STAGE/usr/lib" \
+            --enable-shared \
+            --enable-threads \
+            --enable-xft \
+            --enable-xdbe \
+            --enable-xrender \
+            --enable-localjpeg \
+            --disable-localzlib \
+            --disable-localpng \
+            --disable-gl \
+            --disable-xinerama \
+            --disable-xfixes \
+            --disable-xcursor \
+            --disable-cairo
+
+        # IMAGEDIRS is whichever bundled image libraries configure decided to
+        # build (just jpeg/, given the --disable-local{zlib,png} above). Read it
+        # back rather than hardcoding, so flipping one of those flags later
+        # cannot silently leave a bundled lib unbuilt.
+        imagedirs="$(sed -n 's/^IMAGEDIRS[[:space:]]*=[[:space:]]*//p' makeinclude)"
+        echo "    building:$(printf ' %s' $imagedirs) src"
+        for d in $imagedirs src; do
+            make -C "$d" -j"$JOBS"
+        done
+
+        # DIRS override: upstream's install walks FL + IMAGEDIRS + src + fluid +
+        # test + documentation. Only the first three exist for us (see header).
+        echo "    installing into $STAGE"
+        make install DESTDIR="$STAGE" DIRS="$imagedirs src"
+    )
+
+    if [ ! -f "$MARKER" ]; then
+        echo "tools/build-fltk.sh: build finished but $MARKER is missing" >&2
+        exit 1
     fi
 
-    echo "    configuring"
-    ./configure \
-        --host="$HOST" \
-        --build="$BUILD_ARCH" \
-        --prefix=/usr \
-        --x-includes="$STAGE/usr/include" \
-        --x-libraries="$STAGE/usr/lib" \
-        --enable-shared \
-        --enable-threads \
-        --enable-xft \
-        --enable-xdbe \
-        --enable-xrender \
-        --enable-localjpeg \
-        --disable-localzlib \
-        --disable-localpng \
-        --disable-gl \
-        --disable-xinerama \
-        --disable-xfixes \
-        --disable-xcursor \
-        --disable-cairo
+    # Match the rest of the staging tree: .la files record an absolute
+    # libdir=/usr/lib and make the cross-linker prefer the HOST copy of a
+    # library over ours. FLTK does not generate any today; delete defensively so
+    # a future libtool-ised release cannot reintroduce the trap silently.
+    rm -f "$STAGE"/usr/lib/libfltk*.la 2>/dev/null || true
 
-    # IMAGEDIRS is whichever bundled image libraries configure decided to
-    # build (just jpeg/, given the --disable-local{zlib,png} above). Read it
-    # back rather than hardcoding, so flipping one of those flags later
-    # cannot silently leave a bundled lib unbuilt.
-    imagedirs="$(sed -n 's/^IMAGEDIRS[[:space:]]*=[[:space:]]*//p' makeinclude)"
-    echo "    building:$(printf ' %s' $imagedirs) src"
-    for d in $imagedirs src; do
-        make -C "$d" -j"$JOBS"
-    done
-
-    # DIRS override: upstream's install walks FL + IMAGEDIRS + src + fluid +
-    # test + documentation. Only the first three exist for us (see header).
-    echo "    installing into $STAGE"
-    make install DESTDIR="$STAGE" DIRS="$imagedirs src"
-)
-
-if [ ! -f "$MARKER" ]; then
-    echo "tools/build-fltk.sh: build finished but $MARKER is missing" >&2
-    exit 1
-fi
-
-# Match the rest of the staging tree: .la files record an absolute
-# libdir=/usr/lib and make the cross-linker prefer the HOST copy of a
-# library over ours. FLTK does not generate any today; delete defensively so
-# a future libtool-ised release cannot reintroduce the trap silently.
-rm -f "$STAGE"/usr/lib/libfltk*.la 2>/dev/null || true
-
-echo "==> verifying the staged library is ARM, soft-float, and shared"
-elf_flags="$("$HOST-readelf" -h "$MARKER" | sed -n 's/^ *Flags: *//p')"
-case "$elf_flags" in
-    0x5000200*) : ;;
-    *)
-        echo "tools/build-fltk.sh: unexpected ELF Flags: $elf_flags" >&2
-        echo "(want 0x5000200 -- Version5 EABI, soft-float, matching Xfbdev/libX11)" >&2
+    echo "==> verifying the staged library is ARM, soft-float, and shared"
+    elf_flags="$("$HOST-readelf" -h "$MARKER" | sed -n 's/^ *Flags: *//p')"
+    case "$elf_flags" in
+        0x5000200*) : ;;
+        *)
+            echo "tools/build-fltk.sh: unexpected ELF Flags: $elf_flags" >&2
+            echo "(want 0x5000200 -- Version5 EABI, soft-float, matching Xfbdev/libX11)" >&2
+            exit 1
+            ;;
+    esac
+    soname="$("$HOST-readelf" -d "$MARKER" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')"
+    if [ "$soname" != "libfltk.so.$FL_DSO_VERSION" ]; then
+        echo "tools/build-fltk.sh: SONAME is '$soname', expected libfltk.so.$FL_DSO_VERSION" >&2
+        echo "tools/build-matchbox-payload.sh ships the file under its own name and" >&2
+        echo "relies on that being the SONAME; a mismatch would deploy a library the" >&2
+        echo "dynamic linker can never find." >&2
         exit 1
-        ;;
-esac
-soname="$("$HOST-readelf" -d "$MARKER" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')"
-if [ "$soname" != "libfltk.so.$FL_DSO_VERSION" ]; then
-    echo "tools/build-fltk.sh: SONAME is '$soname', expected libfltk.so.$FL_DSO_VERSION" >&2
-    echo "tools/build-matchbox-payload.sh ships the file under its own name and" >&2
-    echo "relies on that being the SONAME; a mismatch would deploy a library the" >&2
-    echo "dynamic linker can never find." >&2
-    exit 1
+    fi
+    echo "    Flags: $elf_flags  SONAME: $soname"
 fi
-echo "    Flags: $elf_flags  SONAME: $soname"
 
 # --- the smoke-test app -------------------------------------------------
 # Same idea as tools/build-sdl.sh's sdltest: the smallest program that
