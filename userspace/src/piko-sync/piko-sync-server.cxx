@@ -135,12 +135,61 @@ static int mkdir_retry(const char *path, mode_t mode)
     }
 }
 
+/* open(O_CREAT|...) reserves space the same way write()/rename()/mkdir()
+ * do (jffs2_reserve_space, same EAGAIN-on-GC-stall contract) -- missed
+ * when write_retry/rename_retry/mkdir_retry were added, and copy_file()
+ * below is exactly the call site that needs it: it creates the
+ * cross-filesystem finalize's destination file with O_CREAT, on a
+ * chronically near-full root jffs2 (found 2026-08-03, root at 98% full,
+ * "could not finalize" reappearing even after write()/rename() were
+ * already covered). */
+static int open_retry(const char *path, int flags, mode_t mode)
+{
+    for (int attempt = 0; ; attempt++) {
+        int fd = open(path, flags, mode);
+        if (fd >= 0)
+            return fd;
+        if (errno == EAGAIN && attempt < JFFS2_EAGAIN_RETRIES) {
+            usleep(JFFS2_EAGAIN_DELAY_US);
+            continue;
+        }
+        return -1;
+    }
+}
+
 static std::string dirname_of(const std::string &path)
 {
     std::string::size_type slash = path.find_last_of('/');
     if (slash == std::string::npos || slash == 0)
         return "/";
     return path.substr(0, slash);
+}
+
+/* Free bytes on whatever filesystem `path` lives on. statvfs() needs a
+ * path that exists; a destination that hasn't been created yet is
+ * answered from its nearest existing ancestor instead -- same
+ * filesystem, same free space. Shared by handle_free_space() (the
+ * client's own explicit preflight, used today for the MPlayer/SDL
+ * section) and handle_put_offer()'s check below. Returns false if even
+ * "/" can't be statvfs'd, which should not happen. */
+static bool free_bytes_on(const std::string &path, uint64_t &out)
+{
+    std::string probe = path;
+    struct stat st;
+    while (!probe.empty() && stat(probe.c_str(), &st) != 0) {
+        std::string parent = dirname_of(probe);
+        if (parent == probe)
+            break;
+        probe = parent;
+    }
+    if (probe.empty())
+        probe = "/";
+
+    struct statvfs sv;
+    if (statvfs(probe.c_str(), &sv) != 0)
+        return false;
+    out = static_cast<uint64_t>(sv.f_bavail) * sv.f_frsize;
+    return true;
 }
 
 /* `mkdir -p` equivalent for piko-sync-deploy's PUT_OFFER/MKDIR -- absolute
@@ -230,7 +279,7 @@ static bool copy_file(const std::string &src, const std::string &dst)
     int in = open(src.c_str(), O_RDONLY);
     if (in < 0)
         return false;
-    int out = open(dst.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    int out = open_retry(dst.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (out < 0) { close(in); return false; }
 
     char buf[65536];
@@ -806,6 +855,35 @@ void Connection::handle_put_offer(const std::string &payload)
         }
     }
 
+    /* Fail fast and clearly here rather than discovering it much later at
+     * finalize time. Without this, a destination filesystem that is
+     * simply too full doesn't look different from a transient JFFS2 GC
+     * stall: both show up as EAGAIN from open()/write()/rename(), all of
+     * which retry for up to JFFS2_EAGAIN_RETRIES * JFFS2_EAGAIN_DELAY_US
+     * before giving up with "Resource temporarily unavailable" --
+     * technically correct, but useless for telling "wait a moment and
+     * retry" apart from "free up space first" (found 2026-08-03 with the
+     * root jffs2 at 98% full). Checking free space on the DESTINATION
+     * filesystem up front catches the durable case immediately, before
+     * spending any time/bandwidth staging a transfer that could never
+     * finalize anyway; a genuine transient stall still only shows up
+     * later, in the retry helpers, exactly as before. */
+    uint64_t dest_free = 0;
+    if (free_bytes_on(po.path, dest_free) && dest_free < po.total_size) {
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "not enough free space on the destination filesystem "
+                 "(need %llu bytes, %llu available)",
+                 static_cast<unsigned long long>(po.total_size),
+                 static_cast<unsigned long long>(dest_free));
+        PutOfferAckMsg ack;
+        ack.outcome = PUT_REJECTED;
+        ack.reason = msg;
+        send(MSG_PUT_OFFER_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
     /* Staged in the client-chosen tmp directory, NOT next to the
      * destination -- most deploy destinations live on NAND (/boot, /etc,
      * /usr/sbin, ...), and staging a multi-megabyte in-flight transfer
@@ -1073,24 +1151,8 @@ void Connection::handle_free_space(const std::string &payload)
     PathMsg m;
     if (!decode_path(payload, m)) { fail("malformed FREE_SPACE"); return; }
 
-    /* statvfs() needs a path that exists; a destination directory that
-     * hasn't been created yet is answered from its nearest existing
-     * ancestor instead -- same filesystem, same free space. */
-    std::string probe = m.path;
-    struct stat st;
-    while (!probe.empty() && stat(probe.c_str(), &st) != 0) {
-        std::string parent = dirname_of(probe);
-        if (parent == probe)
-            break;
-        probe = parent;
-    }
-    if (probe.empty())
-        probe = "/";
-
-    struct statvfs sv;
     FreeSpaceAckMsg ack;
-    if (statvfs(probe.c_str(), &sv) == 0)
-        ack.free_bytes = static_cast<uint64_t>(sv.f_bavail) * sv.f_frsize;
+    free_bytes_on(m.path, ack.free_bytes); /* leaves 0 on failure -- fine, same as before */
     send(MSG_FREE_SPACE_ACK, encode(ack));
     close_connection();
 }
