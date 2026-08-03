@@ -70,8 +70,8 @@ set -eu
 #                   that links libX11/libXft out of the stage this script
 #                   populates, and the payload ships it.
 #   FLTK            tools/build-fltk.sh, at the end -- libfltk*.so.1.3
-#                   plus fltktest and matchbox-fbrun, likewise X11
-#                   clients of this stage, likewise shipped.
+#                   plus fltktest, matchbox-fbrun and mb-wallpaper-picker,
+#                   likewise X11 clients of this stage, likewise shipped.
 #
 # st and FLTK are also built by tools/build-userspace.sh, which skips both
 # when the stage is not populated yet. That skip is what made the ordering
@@ -114,6 +114,7 @@ D_PANEL="${D_PANEL:-/tmp/mb-stage-panel}"
 D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
+D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 
 FORCE=0
 SKIP_ST=0
@@ -138,7 +139,8 @@ FULL_BUILD=0
 [ -n "$PKGS" ] || PKGS="xorg-macros xtrans libfontenc libXfont xcb-proto \
 libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
-matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume"
+matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume \
+mb-brightness"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -272,6 +274,7 @@ destdir_for() {
     matchbox-common)                 echo "$D_COMMON" ;;
     mb-applet-card)                  echo "$D_CARD" ;;
     mb-volume)                       echo "$D_VOLUME" ;;
+    mb-brightness)                   echo "$D_BRIGHT" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -306,6 +309,7 @@ marker_for() {
     matchbox-common)          echo "$D_COMMON/usr/bin/matchbox-session" ;;
     mb-applet-card)           echo "$D_CARD/usr/bin/mb-applet-card" ;;
     mb-volume)                echo "$D_VOLUME/usr/bin/mb-volume" ;;
+    mb-brightness)            echo "$D_BRIGHT/usr/bin/mb-brightness" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -327,7 +331,7 @@ submodule_dir_for() {
 # "no such file or directory".
 uses_autotools() {
     case "$1" in
-    mb-applet-card|mb-volume) return 1 ;;
+    mb-applet-card|mb-volume|mb-brightness) return 1 ;;
     *) return 0 ;;
     esac
 }
@@ -562,6 +566,17 @@ build_one() {
           [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC" ALSA_STAGE="$alsa_stage"
           ;;
+      mb-brightness)
+          # Same plain-Makefile shape as mb-applet-card, and simpler than
+          # mb-volume above: no ALSA, no second staging tree. libmb is the
+          # only dependency -- this applet only READS /sys/class/backlight
+          # and brightd owns everything else about the backlight.
+          #
+          # Same --force clean reasoning as mb-applet-card: no ./configure
+          # to delete, so an up-to-date .o would otherwise be reused.
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
+          ;;
       xserver)
           # CWARNFLAGS override: this 15-year-old codebase is full of
           # warnings modern GCC treats as errors by xserver's own default
@@ -622,8 +637,9 @@ done
 # --- X11 clients that are not X.Org/Matchbox packages ---------------------
 # st and FLTK link against the stage the loop above just populated, and
 # tools/build-matchbox-payload.sh ships everything they produce: st, the
-# libfltk*.so trio, fltktest and matchbox-fbrun. See this script's header
-# for why they live here rather than being every caller's problem.
+# libfltk*.so trio, fltktest, matchbox-fbrun and mb-wallpaper-picker. See
+# this script's header for why they live here rather than being every
+# caller's problem.
 #
 # Both are idempotent and exit 0 when already current, so this costs a pair
 # of marker checks on every subsequent run. Skipped entirely for an explicit
@@ -644,7 +660,7 @@ if [ "$FULL_BUILD" -eq 1 ]; then
     fi
 
     echo ""
-    echo "==> building FLTK + fltktest + matchbox-fbrun (tools/build-fltk.sh)"
+    echo "==> building FLTK + fltktest + matchbox-fbrun + mb-wallpaper-picker (tools/build-fltk.sh)"
     FORCE_ARG=""
     [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
     # shellcheck disable=SC2086

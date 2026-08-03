@@ -60,6 +60,9 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 # Same story for mb-volume: userspace/src/mb-volume, not part of
 # matchbox-panel proper.
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
+# And for mb-brightness (userspace/src/mb-brightness), the applet that
+# docks no icon and exists only to draw the backlight OSD.
+D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 
 DEPLOY=0
 TARGET=""
@@ -117,6 +120,14 @@ FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
 # opposed to a smoke test. Same staging location as fltktest -- put there
 # by tools/build-pikostore.sh, which must run after tools/build-fltk.sh.
 PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
+# found-file-browser ("Found") -- same staging location and build-after-
+# build-fltk.sh dependency as pikostore, put there by
+# tools/build-found-file-browser.sh.
+FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
+# mb-wallpaper-picker: the desktop's wallpaper setter. Same staging location
+# as fltktest/pikostore -- put there by tools/build-fltk.sh, which also
+# builds fltktest and matchbox-fbrun.
+WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -152,7 +163,8 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
-for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME"; do
+for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
+         "$D_BRIGHT"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2
@@ -177,6 +189,8 @@ $XEV_BIN:usr/local/bin/xev \
 $TOASTERS_BIN:usr/local/bin/toasters \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $PIKOSTORE_BIN:usr/local/bin/pikostore \
+$FOUND_BIN:usr/local/bin/found-file-browser \
+$WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -224,11 +238,14 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # listed by the picker and then fail to decode. See "Wallpaper: modes,
 # formats, and why it's cached raw" in docs/HOWTO-MATCHBOX-DESKTOP.md.
 #
-# FITTED, not cropped, and pre-rendered to exactly 640x480 -- the panel's
-# size -- with black bars where the aspect ratios disagree. Fitted rather
-# than filled so the whole picture is visible; with a landscape source on
-# this landscape panel the bars are 7px a side and it covers 97.7% of the
-# screen anyway.
+# FILLED, not fitted, and pre-rendered to exactly 640x480 -- the panel's
+# size -- with the overflow cropped off rather than padded with black bars.
+# Source (userspace/backgrounds/../../../wallpaper.jpg equivalent, 1200x921)
+# is landscape and so is this panel, so the aspect ratios are close (1.303
+# vs 1.333) and filling only crops ~2.3% off the top and bottom -- unlike
+# the fit-vs-fill tradeoff this repo hit earlier when the panel was
+# (wrongly) assumed portrait, cropping here is cheap enough that showing
+# the full screen wins over showing a hair more of the picture with bars.
 #
 # 640x480 LANDSCAPE. Getting this wrong is not subtle but it IS ambiguous
 # from the outside: /sys/class/graphics/fb0/modes says U:640x480p and the
@@ -243,11 +260,13 @@ cp -a "$STAGE/etc/fonts" "$PAYLOAD/etc/"
 # it is img-centered (see tools/chunked-deploy.sh), which scales nothing at
 # all: mbdesktop_view_init_bg() caches the composited result either way,
 # but this way even the first boot after a flash does no scaling on a
-# 400MHz part -- it is a straight blit.
+# 400MHz part -- it is a straight blit. img-centered still applies to a
+# filled file: the mode only controls how a mis-sized image would be
+# resolved, and this one never is.
 #
 # Regenerate with:
-#   magick <src> -resize 640x480 -background black -gravity center \
-#          -extent 640x480 -alpha off -strip -interlace none \
+#   magick <src> -resize 640x480^ -gravity center -extent 640x480 \
+#          -alpha off -strip -interlace none \
 #          -define png:exclude-chunk=all -define png:compression-level=9 \
 #          PNG24:piko-default.png
 mkdir -p "$PAYLOAD/usr/share/backgrounds"
@@ -292,8 +311,9 @@ done
 # desktop at all -- matchbox-desktop only reads the /usr/share/applications
 # this payload deploys. That is independent of where the BINARY comes from:
 # pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
-# libSDL, not this X11 stack), while st, xev, toasters and pikostore ship
-# from this payload. Only the launcher and icon belong here either way.
+# libSDL, not this X11 stack), while st, xev, toasters, pikostore and
+# mb-wallpaper-picker ship from this payload. Only the launcher and icon
+# belong here either way.
 #
 # The Categories= line in each file picks which app-folder it lands in:
 # Development matches the vfolder displayed as "Programming", System
@@ -304,6 +324,10 @@ done
 # pikostore needs a launcher more than most: it is the GUI for updating the
 # ROM, and expecting the user to open a terminal and type its name to reach
 # it would defeat the point (this keyboard cannot even produce a slash).
+#
+# mb-wallpaper-picker's Categories=Settings lands it in the Settings folder
+# instead of a launcher-worthy top-level folder -- same as the libmb/Xlib
+# version it replaces.
 #
 # st and xev are the conditional pair. Under --skip-st there is no st
 # binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
@@ -321,7 +345,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikalibrate pikostore toasters suspend reboot gototty"
+LAUNCHERS="pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else

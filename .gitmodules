@@ -96,3 +96,11 @@
 [submodule "libXpm"]
 	path = userspace/src/libXpm
 	url = https://gitlab.freedesktop.org/xorg/lib/libxpm.git
+[submodule "found-file-browser"]
+	path = userspace/src/found-file-browser
+	url = https://github.com/sugarkrap/found-file-browser.git
+	branch = main
+[submodule "mb-brightness"]
+	path = userspace/src/mb-brightness
+	url = https://github.com/sugarkrap/mb-brightness.git
+	branch = main

@@ -70,7 +70,8 @@
  * kbdconfig uses (matchbox-window-manager/src/keys.c). Lines starting
  * with '#' are comments; there is no quoting, escaping, or trailing-
  * comment support, so keep it to bare key=value per line. Recognised
- * keys: dim_secs, toast_secs, blank_secs, dim_level, suspend_on_lid.
+ * keys: dim_secs, toast_secs, blank_secs, dim_level, suspend_on_lid,
+ * toast_battery_deadzone.
  *
  * Reloaded automatically: the file's mtime is checked once per main-loop
  * iteration (see load_config()), so a saved edit takes effect within
@@ -83,8 +84,10 @@
  * -d/-b/-l on the command line always win over the config file, even
  * across a reload -- see dim_secs_cli et al. below -- so a manual test
  * ("brightd -d 5" while debugging) is never silently overridden by
- * whatever the file says. suspend_on_lid has no command-line equivalent;
- * it is config-only, for the reason in SUSPEND ON LID below.
+ * whatever the file says. suspend_on_lid and toast_battery_deadzone have
+ * no command-line equivalent; both are config-only, the former for the
+ * reason in SUSPEND ON LID below, the latter because it is a minor,
+ * rarely-touched knob not worth cluttering the CLI for.
  *
  * SUSPEND ON LID (opt-in, default off)
  * -------------------------------------
@@ -117,6 +120,14 @@
  * 0 disables it, same convention as dim_secs/blank_secs. Expected ordering
  * is dim_secs <= toast_secs <= blank_secs, but nothing enforces that --
  * set it outside that range and you get exactly what the numbers say.
+ *
+ * toast_battery_deadzone (default on) keeps the flying toasters clear of
+ * a battery-status icon's corner -- see the BATTERY DEAD ZONE comment in
+ * toasters.c for the geometry and why it is spawn-time-only. ON by
+ * default because the icon is expected to be on screen whenever this
+ * runs; set to no/0 only for a build that ships without it. Passed
+ * through as -B on toasters' own command line when off, since toasters
+ * has no config file of its own to read this from directly.
  */
 
 #include <errno.h>
@@ -185,6 +196,33 @@
  */
 #define FIFO_PATH  "/tmp/brightd.fifo"
 
+/*
+ * THE ON-SCREEN DISPLAY
+ *
+ * mb-brightness (a hidden panel applet -- it docks no icon and exists
+ * only to draw) shows a bar at the top of the screen with the backlight
+ * level in it. It owns none of the backlight: we poke it with one byte
+ * and it then READS /sys/class/backlight itself, so it can never
+ * disagree with what actually happened here. Same one-owner rule this
+ * daemon already has with /usr/sbin/bright.
+ *
+ *   's'  show the OSD, re-reading the level from sysfs
+ *
+ * Poked from run_bright() and nowhere else, which is exactly the set of
+ * EXPLICIT user changes -- Fn+3/Fn+4, whether they arrive from evdev
+ * directly (console) or over FIFO_PATH from the X server. Idle dimming,
+ * lid blanking and the DPMS path deliberately do NOT poke it: they call
+ * go_dim()/go_blank()/go_active(), which write sysfs directly and never
+ * go through run_bright(). An OSD lighting the screen up as it dims to
+ * save power would be both absurd and self-defeating.
+ *
+ * Opened per poke rather than held open like our own FIFO above: the
+ * applet comes and goes with the X session, so a cached descriptor would
+ * spend most of its life stale. At autorepeat rates the open/write/close
+ * is lost in the noise next to the fork+exec run_bright() already does.
+ */
+#define OSD_FIFO   "/tmp/mb-brightness.fifo"
+
 /* How long a heartbeat vouches for the X event source. Must be
  * comfortably longer than the sender's heartbeat interval. */
 #define HEARTBEAT_TTL 30
@@ -214,6 +252,7 @@ static int blank_secs = DEF_BLANK_SECS;
 static int dim_level  = DEF_DIM_LEVEL;
 static int verbose    = 0;
 static int suspend_on_lid = 0;
+static int toast_battery_deadzone = 1;   /* see SCREENSAVER CONTENT above */
 
 /* Set when the corresponding value came from the command line, so a
  * config (re)load never clobbers an explicit manual override. */
@@ -264,7 +303,8 @@ usage(void)
 	puts("Create /tmp/brightd.inhibit to suspend dimming (e.g. video).");
 	puts("");
 	puts("/etc/zaurus/power-management.cfg overrides dim_secs/blank_secs/");
-	puts("dim_level above and adds suspend_on_lid=yes; re-read live on change.");
+	puts("dim_level above and adds suspend_on_lid=yes and");
+	puts("toast_battery_deadzone=no; re-read live on change.");
 	puts("-d/-b/-l here always win over the config file.");
 }
 
@@ -431,6 +471,11 @@ load_config(void)
 				toast_secs = atoi(val);
 		} else if (!strcmp(key, "suspend_on_lid")) {
 			suspend_on_lid = !strcmp(val, "yes") || !strcmp(val, "1");
+		} else if (!strcmp(key, "toast_battery_deadzone")) {
+			/* Opt-out, default on -- unlike suspend_on_lid above,
+			 * false is what needs spelling out explicitly. */
+			toast_battery_deadzone =
+				!(!strcmp(val, "no") || !strcmp(val, "0"));
 		}
 		/* Unrecognised keys are ignored rather than rejected, so the
 		 * file can grow without an old brightd refusing to start. */
@@ -466,7 +511,12 @@ start_toaster(void)
 	}
 	if (toaster_pid == 0) {
 		setenv("DISPLAY", ":0", 1);
-		execl(TOASTERS_BIN, "toasters", (char *)NULL);
+		/* -B: see toast_battery_deadzone in SCREENSAVER CONTENT
+		 * above and the BATTERY DEAD ZONE comment in toasters.c. */
+		if (toast_battery_deadzone)
+			execl(TOASTERS_BIN, "toasters", (char *)NULL);
+		else
+			execl(TOASTERS_BIN, "toasters", "-B", (char *)NULL);
 		_exit(127);
 	}
 	say("brightd: toasters started");
@@ -595,6 +645,27 @@ do_suspend(void)
  * a step is. Waits for the child so two fast presses cannot race each
  * other's read-modify-write of the sysfs value.
  */
+/*
+ * Tell mb-brightness to show the OSD (see OSD_FIFO above). Entirely
+ * best-effort and silent: ENOENT means the applet has never run and
+ * ENXIO means it is not running now, both of which are the ordinary
+ * state of affairs on a console-only boot. O_NONBLOCK is what keeps
+ * those from becoming a blocking open, and SIGPIPE is already SIG_IGN
+ * here so a vanished reader gives EPIPE rather than killing us.
+ */
+static void
+notify_osd(void)
+{
+	int fd = open(OSD_FIFO, O_WRONLY | O_NONBLOCK);
+
+	if (fd < 0)
+		return;
+
+	/* Droppable by design -- a missed poke costs one un-drawn OSD. */
+	(void)write(fd, "s", 1);
+	close(fd);
+}
+
 static void
 run_bright(const char *arg)
 {
@@ -617,6 +688,11 @@ run_bright(const char *arg)
 
 	while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
 		;
+
+	/* After the wait, never before: the applet reads the level out of
+	 * sysfs for itself, so it has to be poked once the child has
+	 * actually written it or it would draw the previous step. */
+	notify_osd();
 }
 
 /*
