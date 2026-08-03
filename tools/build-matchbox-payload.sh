@@ -63,6 +63,9 @@ D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 # And for mb-brightness (userspace/src/mb-brightness), the applet that
 # docks no icon and exists only to draw the backlight OSD.
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
+# Same story again for mb-applet-pikaffeine (userspace/src/mb-applet-pikaffeine),
+# the screen-awake toggle. Own repo, own plain Makefile, own DESTDIR.
+D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
 
 DEPLOY=0
 TARGET=""
@@ -164,7 +167,7 @@ cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
 for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
-         "$D_BRIGHT"; do
+         "$D_BRIGHT" "$D_PIKAFFEINE"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first (see docs/HOWTO-MATCHBOX-DESKTOP.md)." >&2

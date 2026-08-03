@@ -115,6 +115,7 @@ D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
+D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
 
 FORCE=0
 SKIP_ST=0
@@ -140,7 +141,7 @@ FULL_BUILD=0
 libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
 matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume \
-mb-brightness"
+mb-brightness mb-applet-pikaffeine"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -275,6 +276,7 @@ destdir_for() {
     mb-applet-card)                  echo "$D_CARD" ;;
     mb-volume)                       echo "$D_VOLUME" ;;
     mb-brightness)                   echo "$D_BRIGHT" ;;
+    mb-applet-pikaffeine)            echo "$D_PIKAFFEINE" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -310,6 +312,7 @@ marker_for() {
     mb-applet-card)           echo "$D_CARD/usr/bin/mb-applet-card" ;;
     mb-volume)                echo "$D_VOLUME/usr/bin/mb-volume" ;;
     mb-brightness)            echo "$D_BRIGHT/usr/bin/mb-brightness" ;;
+    mb-applet-pikaffeine)     echo "$D_PIKAFFEINE/usr/bin/mb-applet-pikaffeine" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -323,15 +326,15 @@ submodule_dir_for() {
     esac
 }
 
-# uses_autotools NAME -- false only for mb-applet-card and mb-volume, both
-# one-or-two-source-file packages against a couple of pkg-config modules
-# that deliberately ship a plain Makefile instead of autotools (their own
-# Makefiles say why). Neither has a configure or an autogen.sh, so the
-# generate-and-run-configure step below would fail on them with a bare
-# "no such file or directory".
+# uses_autotools NAME -- false only for mb-applet-card, mb-volume,
+# mb-brightness and mb-applet-pikaffeine, all one-or-two-source-file
+# packages against a couple of pkg-config modules that deliberately ship a
+# plain Makefile instead of autotools (their own Makefiles say why).
+# Neither has a configure or an autogen.sh, so the generate-and-run-configure
+# step below would fail on them with a bare "no such file or directory".
 uses_autotools() {
     case "$1" in
-    mb-applet-card|mb-volume|mb-brightness) return 1 ;;
+    mb-applet-card|mb-volume|mb-brightness|mb-applet-pikaffeine) return 1 ;;
     *) return 0 ;;
     esac
 }
@@ -577,6 +580,14 @@ build_one() {
           [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
+      mb-applet-pikaffeine)
+          # Same plain-Makefile shape as mb-applet-card/mb-brightness:
+          # libmb is the only dependency, and it never touches the
+          # backlight itself -- it only pokes brightd's own
+          # /tmp/brightd.inhibit file. See that repo's README.
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
+          ;;
       xserver)
           # CWARNFLAGS override: this 15-year-old codebase is full of
           # warnings modern GCC treats as errors by xserver's own default
@@ -681,5 +692,5 @@ fi
 echo ""
 echo "==> X11/Matchbox stack ready."
 echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/"
-echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME"
+echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME $D_PIKAFFEINE"
 echo "    Package into a payload with:    tools/build-matchbox-payload.sh"
