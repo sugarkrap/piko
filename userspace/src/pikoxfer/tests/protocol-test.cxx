@@ -126,6 +126,7 @@ static void test_deploy_message_roundtrips()
 
     PutOfferMsg po; po.path = "/boot/zImage-full"; po.total_size = 1234567;
     po.mode = 0755; po.policy = PUT_ALWAYS; po.crc32 = 0xabcd1234u; po.backup = true;
+    po.staging = STAGE_SD;
     PutOfferMsg po2;
     check(decode_put_offer(encode(po), po2), "put_offer decodes");
     check_str(po2.path, "/boot/zImage-full", "put_offer path");
@@ -134,6 +135,10 @@ static void test_deploy_message_roundtrips()
     check(po2.policy == PUT_ALWAYS, "put_offer policy");
     check(po2.crc32 == 0xabcd1234u, "put_offer crc32");
     check(po2.backup, "put_offer backup flag");
+    check(po2.staging == STAGE_SD, "put_offer staging");
+
+    PutOfferMsg po_default;
+    check(po_default.staging == STAGE_NAND, "put_offer defaults to NAND staging");
 
     PutOfferMsg po3; po3.policy = PUT_IF_MISSING; po3.backup = false;
     PutOfferMsg po4;

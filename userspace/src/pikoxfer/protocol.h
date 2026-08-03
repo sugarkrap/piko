@@ -85,6 +85,24 @@ enum PutPolicy {
                           * current /etc/TZ and touchscreen.cfg handling */
 };
 
+/* Where the server stages a PUT_FILE's ".part" while it's being received,
+ * chosen by the client (the Build & Deploy tab's Destination dropdown /
+ * pikodeploy's --staging flag), not decided unilaterally by the server.
+ * Matters because most deploy DESTINATIONS live on NAND (/boot, /etc,
+ * /usr/sbin, ...) -- staging there too would reintroduce the exact
+ * ENOSPC problem chunked-deploy.sh's REMOTE_STAGE fix solved, just for
+ * deploy instead of plain transfer. See PutOfferAckMsg's finalize
+ * comment in pikoxfer-server.cxx for how staging on a different
+ * filesystem than the destination is reconciled (copy, then the same
+ * same-directory rename() every other case uses). */
+enum StagingKind {
+    STAGE_NAND = 0, /* /tmp -- always available, the safe zero-config default */
+    STAGE_SD   = 1, /* /mnt/card/.zaurus/tmp -- preferred when a card is in */
+    STAGE_CF   = 2  /* /mnt/cf/.zaurus/tmp -- not yet supported on real
+                      * hardware; the server rejects this today rather
+                      * than silently falling back, see AGENTS.md */
+};
+
 enum PutOutcome {
     PUT_RESUME            = 0, /* resume_offset valid, may be 0 (fresh) */
     PUT_ALREADY_SATISFIED = 1, /* nothing to send: content already matches
@@ -449,7 +467,10 @@ struct PutOfferMsg {
     uint32_t crc32;        /* whole-file CRC, sent up front so the server can
                             * answer ALREADY_SATISFIED without a transfer */
     bool backup;          /* copy the existing file to path+".bak" first */
-    PutOfferMsg() : total_size(0), mode(0), policy(PUT_ALWAYS), crc32(0), backup(false) {}
+    uint32_t staging;      /* StagingKind */
+    PutOfferMsg()
+        : total_size(0), mode(0), policy(PUT_ALWAYS), crc32(0), backup(false),
+          staging(STAGE_NAND) {}
 };
 inline std::string encode(const PutOfferMsg &m)
 {
@@ -460,6 +481,7 @@ inline std::string encode(const PutOfferMsg &m)
     put_u32(p, m.policy);
     put_u32(p, m.crc32);
     p.push_back(m.backup ? 1 : 0);
+    put_u32(p, m.staging);
     return p;
 }
 inline bool decode_put_offer(const std::string &p, PutOfferMsg &m)
@@ -472,7 +494,8 @@ inline bool decode_put_offer(const std::string &p, PutOfferMsg &m)
     if (p.size() - pos < 1)
         return false;
     m.backup = p[pos] != 0;
-    return true;
+    pos += 1;
+    return get_u32(p, pos, m.staging);
 }
 
 struct PutOfferAckMsg {

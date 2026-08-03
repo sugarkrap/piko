@@ -101,6 +101,82 @@ static bool is_sd_card_mounted()
     return found;
 }
 
+/* Turns an absolute destination into a flat, collision-safe name for the
+ * shared staging directory: unlike plain transfers (each with its own
+ * collision-resolved name already), many different deploy destinations
+ * can share a basename (e.g. two different "settings.conf" in different
+ * directories) but must not share a staging file. "/etc/foo.conf" ->
+ * "etc_foo.conf". Not a perfect hash -- a destination that legitimately
+ * contains an underscore in exactly the position a slash would have
+ * produced could theoretically collide with another; accepted as a
+ * documented edge case rather than engineered around, given this
+ * project's actual (small, known) manifest.yaml file set. */
+static std::string staging_filename_for(const std::string &dest)
+{
+    std::string s = dest;
+    if (!s.empty() && s[0] == '/')
+        s.erase(0, 1);
+    for (size_t i = 0; i < s.size(); i++)
+        if (s[i] == '/')
+            s[i] = '_';
+    return s;
+}
+
+/* Resolves a StagingKind to a real, ready-to-use directory -- verifying
+ * SD is actually mounted rather than assuming (pxamci's card-detect does
+ * not reliably signal insertion, same note as MPLAYER_DEST elsewhere),
+ * and refusing CF outright: real CF mounting does not exist anywhere in
+ * this ROM yet (no mdev rule, no driver confirmed enabled for this
+ * board), so silently falling back would hide that gap rather than
+ * surface it. */
+static bool resolve_staging_dir(uint32_t staging, std::string &dir, std::string &error)
+{
+    switch (staging) {
+    case STAGE_NAND:
+        dir = "/tmp";
+        return true;
+    case STAGE_SD:
+        system("mount /mnt/card >/dev/null 2>&1");
+        if (!is_sd_card_mounted()) { error = "SD card is not mounted"; return false; }
+        dir = "/mnt/card/.zaurus/tmp";
+        return mkdir_p(dir);
+    case STAGE_CF:
+        error = "CF staging is not yet supported on this device";
+        return false;
+    default:
+        error = "unknown staging kind";
+        return false;
+    }
+}
+
+/* Local copy for the cross-filesystem finalize case (staging and the
+ * destination on different devices, so rename() can't cross between
+ * them -- EXDEV). Plain local disk I/O, not the network, so this is
+ * cheap regardless of file size; the expensive, flaky-link-exposed part
+ * already happened during the chunked transfer into the staging file. */
+static bool copy_file(const std::string &src, const std::string &dst)
+{
+    int in = open(src.c_str(), O_RDONLY);
+    if (in < 0)
+        return false;
+    int out = open(dst.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (out < 0) { close(in); return false; }
+
+    char buf[65536];
+    ssize_t n;
+    bool ok = true;
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        ssize_t w = write(out, buf, static_cast<size_t>(n));
+        if (w != n) { ok = false; break; }
+    }
+    if (n < 0)
+        ok = false;
+
+    close(in);
+    close(out);
+    return ok;
+}
+
 class ServerApp;
 
 /* ---------------------------------------------------------------------- *
@@ -170,6 +246,7 @@ private:
     bool is_deploy_;
     uint32_t deploy_mode_;
     bool deploy_backup_;
+    std::string staging_part_path_; /* where part_fd_ actually lives -- see handle_put_offer */
 };
 
 /* ---------------------------------------------------------------------- *
@@ -629,31 +706,38 @@ void Connection::handle_put_offer(const std::string &payload)
         }
     }
 
-    if (!mkdir_p(dirname_of(po.path))) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "cannot create directory for %s: %s",
-                 po.path.c_str(), strerror(errno));
+    /* Staged in the client-chosen tmp directory, NOT next to the
+     * destination -- most deploy destinations live on NAND (/boot, /etc,
+     * /usr/sbin, ...), and staging a multi-megabyte in-flight transfer
+     * there too would reintroduce the exact ENOSPC problem
+     * chunked-deploy.sh's REMOTE_STAGE fix solved, just for deploy
+     * instead of plain transfer. handle_deploy_complete() below
+     * reconciles staging-vs-destination potentially being on different
+     * filesystems at finalize time. */
+    std::string staging_dir;
+    std::string staging_error;
+    if (!resolve_staging_dir(po.staging, staging_dir, staging_error)) {
         PutOfferAckMsg ack;
         ack.outcome = PUT_REJECTED;
-        ack.reason = msg;
+        ack.reason = staging_error;
         send(MSG_PUT_OFFER_ACK, encode(ack));
         close_connection();
         return;
     }
 
-    std::string part_path = po.path + PART_SUFFIX;
+    staging_part_path_ = staging_dir + "/" + staging_filename_for(po.path) + PART_SUFFIX;
     uint64_t resume_offset = 0;
     struct stat pst;
-    if (stat(part_path.c_str(), &pst) == 0) {
+    if (stat(staging_part_path_.c_str(), &pst) == 0) {
         resume_offset = static_cast<uint64_t>(pst.st_size);
         if (resume_offset > po.total_size) /* corrupt/stale part: restart clean */
             resume_offset = 0;
     }
 
-    part_fd_ = open(part_path.c_str(), O_CREAT | O_RDWR, 0644);
+    part_fd_ = open(staging_part_path_.c_str(), O_CREAT | O_RDWR, 0644);
     if (part_fd_ < 0) {
         char msg[256];
-        snprintf(msg, sizeof(msg), "cannot open %s: %s", part_path.c_str(), strerror(errno));
+        snprintf(msg, sizeof(msg), "cannot open %s: %s", staging_part_path_.c_str(), strerror(errno));
         PutOfferAckMsg ack;
         ack.outcome = PUT_REJECTED;
         ack.reason = msg;
@@ -714,23 +798,68 @@ void Connection::handle_deploy_complete(const FileCompleteMsg &fc)
     }
 
     const std::string &dest = original_name_;
-    std::string part_path = dest + PART_SUFFIX;
     close(part_fd_);
     part_fd_ = -1;
 
-    /* Rename, not copy -- efficient and atomic, and matches
-     * --create-backup-files' existing behaviour on the plain-transfer
-     * side. dropbear's manifest entry sets backup unconditionally
-     * (deploy_backup_ true regardless of the CLI flag): it is the one
-     * binary that can strand this board with no serial console and no
-     * USB, so it always gets a recoverable .bak. */
+    if (!mkdir_p(dirname_of(dest))) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cannot create directory for %s: %s", dest.c_str(), strerror(errno));
+        FileCompleteAckMsg ack;
+        ack.ok = false;
+        ack.reason = msg;
+        send(MSG_FILE_COMPLETE_ACK, encode(ack));
+        if (row_ >= 0) {
+            app_->queue().set_status(row_, XFER_ERROR, msg);
+            app_->sync_table();
+        }
+        close_connection();
+        return;
+    }
+
+    /* --create-backup-files' existing behaviour, unchanged: dropbear's
+     * manifest entry sets backup unconditionally (deploy_backup_ true
+     * regardless of the CLI flag) -- it is the one binary that can
+     * strand this board with no serial console and no USB, so it always
+     * gets a recoverable .bak. */
     if (deploy_backup_) {
         struct stat st;
         if (stat(dest.c_str(), &st) == 0)
             rename(dest.c_str(), (dest + ".bak").c_str()); /* best effort */
     }
 
-    if (rename(part_path.c_str(), dest.c_str()) != 0) {
+    /* rename() is atomic and never hits ETXTBSY (even replacing a
+     * running binary -- it repoints a directory entry, it never opens
+     * or truncates the target) as long as source and destination are on
+     * the SAME filesystem; cross-filesystem rename fails outright
+     * (EXDEV). Staging and the destination are frequently on different
+     * devices now (SD staging, NAND destination, say), so: same
+     * filesystem -> rename staging straight to dest, one step;
+     * different -> copy staging into dest's own directory first (an
+     * ordinary local disk copy, cheap regardless of size -- the
+     * network-flaky part already happened during the chunked transfer
+     * into staging), then that copy's rename to dest IS same-filesystem
+     * by construction. */
+    struct stat staging_dir_st, dest_dir_st;
+    std::string staging_dir = dirname_of(staging_part_path_);
+    std::string dest_dir = dirname_of(dest);
+    bool same_fs = (stat(staging_dir.c_str(), &staging_dir_st) == 0
+                     && stat(dest_dir.c_str(), &dest_dir_st) == 0
+                     && staging_dir_st.st_dev == dest_dir_st.st_dev);
+
+    bool finalized;
+    if (same_fs) {
+        finalized = (rename(staging_part_path_.c_str(), dest.c_str()) == 0);
+    } else {
+        std::string local_tmp = dest + PART_SUFFIX; /* same dir as dest -> its own rename is same-fs */
+        finalized = copy_file(staging_part_path_, local_tmp)
+                 && rename(local_tmp.c_str(), dest.c_str()) == 0;
+        if (finalized)
+            unlink(staging_part_path_.c_str()); /* the local copy is now authoritative */
+        else
+            unlink(local_tmp.c_str()); /* best effort; staging copy is left for the next resume attempt */
+    }
+
+    if (!finalized) {
         char msg[256];
         snprintf(msg, sizeof(msg), "could not finalize: %s", strerror(errno));
         FileCompleteAckMsg ack;

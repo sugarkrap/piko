@@ -148,11 +148,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 TARGET="${TARGET:-root@10.43.112.72}"
-KEY="${HOME}/.ssh/zaurus_ed25519"
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new"
-if [ -n "$ADAPTER" ]; then
-    SSH_OPTS="$SSH_OPTS -B $ADAPTER"
-fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
 # The toolchain tools/build-uclibc-toolchain.sh produces, same default every

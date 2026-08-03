@@ -43,6 +43,7 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Check_Button.H>
+#include <FL/Fl_Choice.H>
 #include <FL/Fl_Progress.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
@@ -52,6 +53,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -93,6 +95,32 @@ static uint32_t compute_file_crc32(const std::string &path)
         crc.update(buf, n);
     fclose(f);
     return crc.final_value();
+}
+
+/* Real local interface names for the Build & Deploy tab's Adapter
+ * dropdown, in first-seen order, each listed once regardless of how many
+ * addresses it has. getifaddrs() returns one entry per address (IPv4,
+ * IPv6, link-layer, ...), not one per interface, hence the dedup. */
+static std::vector<std::string> list_network_interfaces()
+{
+    std::vector<std::string> names;
+    struct ifaddrs *ifap = 0;
+    if (getifaddrs(&ifap) != 0)
+        return names;
+
+    for (struct ifaddrs *p = ifap; p; p = p->ifa_next) {
+        if (!p->ifa_name)
+            continue;
+        std::string n = p->ifa_name;
+        bool seen = false;
+        for (size_t i = 0; i < names.size(); i++) {
+            if (names[i] == n) { seen = true; break; }
+        }
+        if (!seen)
+            names.push_back(n);
+    }
+    freeifaddrs(ifap);
+    return names;
 }
 
 class ClientApp;
@@ -588,7 +616,7 @@ private:
     std::string script_path() const;
     void build_argv(std::vector<std::string> &args) const;
 
-    Fl_Input *adapter_;
+    Fl_Choice *adapter_;
     Fl_Input *target_;
     Fl_Check_Button *kernel_only_;
     Fl_Check_Button *force_kernel_src_;
@@ -596,6 +624,8 @@ private:
     Fl_Check_Button *skip_st_;
     Fl_Check_Button *skip_x11_;
     Fl_Check_Button *build_only_;
+    Fl_Check_Button *no_backup_;
+    Fl_Choice *destination_;
     Fl_Button *run_btn_;
     Fl_Progress *bar_;
     Fl_Text_Buffer *log_buf_;
@@ -614,8 +644,15 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     (void)tab;
     int m = 10, y = Y + m;
 
-    adapter_ = new Fl_Input(X + m + 70, y, 100, 22, "Adapter:");
+    adapter_ = new Fl_Choice(X + m + 70, y, 130, 22, "Adapter:");
     adapter_->align(FL_ALIGN_LEFT);
+    {
+        std::vector<std::string> ifaces = list_network_interfaces();
+        for (size_t i = 0; i < ifaces.size(); i++)
+            adapter_->add(ifaces[i].c_str());
+        if (!ifaces.empty())
+            adapter_->value(0); /* default to the first one, as asked */
+    }
     target_ = new Fl_Input(X + m + 260, y, 160, 22, "Target:");
     target_->align(FL_ALIGN_LEFT);
     /* Prefilled with a real user@host, not just an IP: a bare IP typed
@@ -636,6 +673,27 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     skip_st_ = new Fl_Check_Button(X + m, y, 90, 20, "skip-st");
     skip_x11_ = new Fl_Check_Button(X + m + 120, y, 90, 20, "skip-x11");
     build_only_ = new Fl_Check_Button(X + m + 260, y, 100, 20, "build-only");
+    y += 22;
+    /* Checked by default: matches --create-backup-files' own off-by-
+     * default (every file it touches ends up duplicated on the ~68 MiB
+     * root jffs2 if it's on -- see build-and-deploy.sh's flag comment).
+     * Unchecking is what actually passes --create-backup-files through. */
+    no_backup_ = new Fl_Check_Button(X + m, y, 110, 20, "no-backup");
+    no_backup_->value(1);
+    destination_ = new Fl_Choice(X + m + 190, y - 1, 90, 22, "Staging:");
+    destination_->align(FL_ALIGN_LEFT);
+    /* SD first (default): most deploy destinations live on the ~68 MiB
+     * NAND root, so staging there too risks the exact ENOSPC problem
+     * chunked-deploy.sh's REMOTE_STAGE fix solved, just for deploy
+     * instead of plain transfer -- see pikodeploy's own --staging
+     * default and pikoxfer-server.cxx's resolve_staging_dir(). CF is
+     * listed but disabled: real CF mounting does not exist anywhere in
+     * this ROM yet (no mdev rule, no confirmed driver), so it would be a
+     * selectable option that silently can't work. */
+    destination_->add("sd");
+    destination_->add("nand");
+    destination_->add("cf", 0, 0, 0, FL_MENU_INACTIVE);
+    destination_->value(0);
     y += 26;
 
     run_btn_ = new Fl_Button(X + m, y, 140, 26, "Build && Deploy");
@@ -669,9 +727,13 @@ std::string BuildRunner::script_path() const
 void BuildRunner::build_argv(std::vector<std::string> &args) const
 {
     args.push_back(script_path());
-    if (adapter_->value() && adapter_->value()[0]) {
+    /* Fl_Choice::text() (no args) is the selected item's label -- unlike
+     * the Fl_Input this used to be, value() here is the selected INDEX,
+     * not a string. No selection (empty interface list) means no
+     * --adapter, same as leaving the old text field blank. */
+    if (adapter_->text() && adapter_->text()[0]) {
         args.push_back("--adapter");
-        args.push_back(adapter_->value());
+        args.push_back(adapter_->text());
     }
     if (force_kernel_src_->value()) args.push_back("--force-kernel-src");
     if (kernel_only_->value())      args.push_back("--kernel-only");
@@ -679,6 +741,11 @@ void BuildRunner::build_argv(std::vector<std::string> &args) const
     if (skip_st_->value())          args.push_back("--skip-st");
     if (skip_x11_->value())         args.push_back("--skip-x11");
     if (build_only_->value())       args.push_back("--build-only");
+    if (!no_backup_->value())       args.push_back("--create-backup-files");
+    if (destination_->text() && destination_->text()[0]) {
+        args.push_back("--staging");
+        args.push_back(destination_->text());
+    }
     if (target_->value() && target_->value()[0]) {
         std::string t = target_->value();
         /* A bare host (no user@) is a completely reasonable thing to

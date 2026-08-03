@@ -157,7 +157,7 @@ mkdir -p "$ROOTFS_BUILD_DIR/bin" "$ROOTFS_BUILD_DIR/sbin" \
          "$ROOTFS_BUILD_DIR/usr/bin" "$ROOTFS_BUILD_DIR/usr/sbin" \
          "$ROOTFS_BUILD_DIR/dev" "$ROOTFS_BUILD_DIR/proc" \
          "$ROOTFS_BUILD_DIR/sys" "$ROOTFS_BUILD_DIR/tmp" \
-         "$ROOTFS_BUILD_DIR/root" "$ROOTFS_BUILD_DIR/mnt/sd"
+         "$ROOTFS_BUILD_DIR/root"
 
 cp "$BUILD_DIR/busybox" "$ROOTFS_BUILD_DIR/bin/busybox"
 chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"

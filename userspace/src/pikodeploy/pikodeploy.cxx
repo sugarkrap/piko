@@ -47,6 +47,13 @@ using namespace pikoxfer::deploy;
 
 static std::string g_adapter;
 static std::string g_host = "10.208.47.2"; /* same default as pikoxfer-client's Transfer tab */
+/* SD, not NAND: the whole point of this option is that most deploy
+ * destinations live on the ~68 MiB NAND root, and staging a transfer's
+ * .part there defeats the purpose of having a separate staging area at
+ * all whenever a card is available -- see resolve_staging_dir() in
+ * pikoxfer-server.cxx. Falls back to whatever the user picks explicitly
+ * (--staging nand) when no card is in. */
+static uint32_t g_staging = STAGE_SD;
 static int g_port = static_cast<int>(DEFAULT_PORT);
 
 /* ---------------------------------------------------------------------- *
@@ -97,8 +104,14 @@ static int connect_blocking(std::string &error)
         }
     }
 
+    /* 30s, matching the ConnectTimeout=30 this project's SSH-based
+     * scripts (chunked-deploy.sh, build-and-deploy.sh) already settled
+     * on for this exact link -- 10s turned out too short live: a
+     * blocking connect() with SO_SNDTIMEO set returns EINPROGRESS (not
+     * ETIMEDOUT) on timeout, a Linux-specific quirk, and this link's
+     * RTT is routinely 400-1700ms and occasionally much worse. */
     struct timeval tv;
-    tv.tv_sec = 10;
+    tv.tv_sec = 30;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -248,6 +261,7 @@ static bool send_put_file(const Step &s, std::string &error)
         po.policy = s.policy;
         po.crc32 = crc;
         po.backup = s.backup;
+        po.staging = g_staging;
         if (!send_frame_blocking(fd, MSG_PUT_OFFER, encode(po))) { close(fd); continue; }
 
         uint32_t type;
@@ -508,7 +522,16 @@ static void usage()
     fprintf(stderr,
         "Usage: pikodeploy [--adapter IFACE] [--kernel-only] [--no-userspace]\n"
         "                   [--create-backup-files] [--replace-dropbear]\n"
-        "                   [--dry-run] [--probe] [user@host]\n"
+        "                   [--staging nand|sd|cf] [--dry-run] [--probe] [user@host]\n"
+        "\n"
+        "--staging chooses where pikoxfer-server stages each file's .part while\n"
+        "it's being received -- NOT where it ends up (that's each file's own\n"
+        "destination, from manifest.yaml). Default sd: most deploy destinations\n"
+        "live on the ~68 MiB NAND root, so staging there too would risk the exact\n"
+        "ENOSPC problem chunked-deploy.sh's REMOTE_STAGE fix solved, just for\n"
+        "deploy instead of plain transfer. nand always works (/tmp); sd needs a\n"
+        "mounted card (/mnt/card/.zaurus/tmp, autocleaned by the ROM on boot); cf\n"
+        "is refused today -- real CF mounting does not exist in this ROM yet.\n"
         "\n"
         "--dry-run builds and prints the deploy plan (every put_file/mkdir/symlink/\n"
         "run step, in order) without connecting to the device at all -- useful to\n"
@@ -520,10 +543,25 @@ static void usage()
         "the device.\n");
 }
 
+/* A handful of retries, not the ~30 send_put_file allows itself: this is
+ * "fail fast before a long build", so it should still tolerate one bad
+ * moment on a known-flaky link rather than a single blip wasting the
+ * whole build -- but it should not spend minutes retrying either. */
+static const int PROBE_ATTEMPTS = 4;
+
 static int run_probe()
 {
     std::string error;
-    int fd = connect_blocking(error);
+    int fd = -1;
+    for (int attempt = 0; attempt < PROBE_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+            fprintf(stderr, "  (retrying, attempt %d/%d)\n", attempt + 1, PROBE_ATTEMPTS);
+            sleep(2);
+        }
+        fd = connect_blocking(error);
+        if (fd >= 0)
+            break;
+    }
     if (fd < 0) {
         fprintf(stderr, "FAILED: %s\n", error.c_str());
         return 1;
@@ -557,6 +595,16 @@ int main(int argc, char **argv)
         else if (a == "--no-userspace") { ctx.flags.no_userspace = true; }
         else if (a == "--create-backup-files") { ctx.flags.create_backup_files = true; }
         else if (a == "--replace-dropbear") { ctx.flags.replace_dropbear = true; }
+        else if (a == "--staging" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v == "nand") g_staging = STAGE_NAND;
+            else if (v == "sd") g_staging = STAGE_SD;
+            else if (v == "cf") g_staging = STAGE_CF;
+            else {
+                fprintf(stderr, "pikodeploy: --staging must be nand, sd, or cf (got \"%s\")\n", v.c_str());
+                return 1;
+            }
+        }
         else if (a == "--dry-run") { g_dry_run = true; }
         else if (a == "--probe") { g_probe = true; }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
@@ -636,8 +684,11 @@ int main(int argc, char **argv)
     if (!ctx.flags.kernel_only && !ctx.flags.no_userspace && !g_dry_run)
         append_mplayer_and_sdl_steps(ctx, plan);
 
+    const char *staging_name = g_staging == STAGE_SD ? "sd" : g_staging == STAGE_CF ? "cf" : "nand";
+
     if (g_dry_run) {
-        printf("%zu steps (dry run -- not connecting to %s:%d)\n", plan.size(), g_host.c_str(), g_port);
+        printf("%zu steps (dry run -- not connecting to %s:%d, staging=%s)\n",
+               plan.size(), g_host.c_str(), g_port, staging_name);
         printf("(MPlayer/SDL's card-mount-verified steps need a live connection to\n"
                " compute and are not shown here -- see append_mplayer_and_sdl_steps)\n\n");
         for (size_t i = 0; i < plan.size(); i++)
@@ -645,7 +696,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    printf("Target: %s:%d\n", g_host.c_str(), g_port);
+    printf("Target: %s:%d (staging=%s)\n", g_host.c_str(), g_port, staging_name);
     printf("%zu steps to run\n", plan.size());
 
     for (size_t i = 0; i < plan.size(); i++) {
