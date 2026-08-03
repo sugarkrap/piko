@@ -121,10 +121,22 @@ if [ "$BUILD_SERVER" = "1" ]; then
     echo "==> packaging piko-sync-server as an .ipk"
     PKGROOT="$(mktemp -d)"
     trap 'rm -rf "$PKGROOT"' EXIT INT TERM
-    mkdir -p "$PKGROOT/usr/bin" "$PKGROOT/usr/share/applications"
+    mkdir -p "$PKGROOT/usr/bin" "$PKGROOT/usr/share/applications" "$PKGROOT/usr/share/pixmaps"
     cp "$SRC/piko-sync-server" "$PKGROOT/usr/bin/piko-sync-server"
     cp "$REPO/userspace/desktop/piko-sync-server.desktop" \
         "$PKGROOT/usr/share/applications/piko-sync-server.desktop"
+    # Icon=piko-sync-server in that .desktop file is a lookup-by-name (the
+    # XDG convention, resolved against usr/share/pixmaps here) -- it was
+    # dangling before this, with no matching .png ever shipped, so
+    # matchbox-desktop fell back to a generic icon. This is ONLY for that
+    # launcher entry, which matchbox-desktop renders through its own
+    # image loading, unrelated to our own build -- the app's own FLTK
+    # window icon is a separate, compiled-in XPM (see
+    # userspace/src/piko-sync/icon_xpm.h) rather than this shipped file,
+    # since the staged libfltk.so.1.3 turned out to have no PNG codec
+    # support at all.
+    cp "$REPO/userspace/desktop/piko-sync-server.png" \
+        "$PKGROOT/usr/share/pixmaps/piko-sync-server.png"
 
     "$REPO/tools/make-ipk.sh" --name piko-sync-server --version "$VERSION" \
         --root "$PKGROOT" --desc "Resilient file transfer -- receiver" \

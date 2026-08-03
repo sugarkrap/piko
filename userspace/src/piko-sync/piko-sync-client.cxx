@@ -49,6 +49,8 @@
 #include <FL/Fl_Text_Buffer.H>
 #include <FL/Fl_File_Chooser.H>
 #include <FL/fl_ask.H>
+#include <FL/Fl_Image.H>
+#include <FL/Fl_Pixmap.H>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -72,6 +74,7 @@
 #include "transfer_queue.h"
 #include "transfer_table.h"
 #include "net_io.h"
+#include "icon_xpm.h"
 
 using namespace piko_sync;
 
@@ -1091,6 +1094,14 @@ int main(int argc, char **argv)
 
     win.end();
     win.resizable(tabs);
+
+    /* Same embedded icon as piko-sync-server -- see icon_xpm.h for why
+     * this is XPM (compiled into FLTK's core, always available) rather
+     * than a PNG loaded from a shipped file. */
+    static Fl_Pixmap icon_pixmap(piko_sync_icon_xpm);
+    static Fl_RGB_Image icon_img(&icon_pixmap);
+    win.icon(&icon_img);
+
     win.show(argc, argv);
 
     return Fl::run();
