@@ -46,17 +46,19 @@ APPLETS="$APPLETS,mb-volume"
 APPLETS="$APPLETS,mb-applet-system-monitor"
 APPLETS="$APPLETS,mb-applet-battery"
 APPLETS="$APPLETS,mb-applet-wireless"
+# Self-hiding: mb-applet-card shows a tray icon only while an SD or CF
+# card is actually inserted, so it costs nothing to always start it.
+APPLETS="$APPLETS,mb-applet-card"
 # mb-applet-pikaffeine: a caffeine-style toggle that tells brightd to stop
 # dimming/blanking/screensaving on idle, without touching brightness or the
 # lid switch (see that repo's README). Always docked, not self-hiding --
 # per docs/HOWTO-MATCHBOX-PANEL-APPLETS.md "Do NOT make it self-hiding", an
 # applet that hides before the main loop delays every applet listed after
 # it by the full session timeout. Starts showing the empty-cup (off) icon;
-# there is no persisted state, so every session starts disabled.
+# there is no persisted state, so every session starts disabled. Listed
+# after mb-applet-card so it lands to card's left (later --default-apps
+# entries dock further left, see the ORDER MATTERS note above).
 APPLETS="$APPLETS,mb-applet-pikaffeine"
-# Self-hiding: mb-applet-card shows a tray icon only while an SD or CF
-# card is actually inserted, so it costs nothing to always start it.
-APPLETS="$APPLETS,mb-applet-card"
 # mb-brightness docks NOTHING -- ever. It hides itself before the main
 # loop starts (the same trick mb-applet-card uses for an empty slot, but
 # permanent), so the panel never creates a window or reserves a pixel for
