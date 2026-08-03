@@ -97,6 +97,21 @@ set -eu
 # myself" -- CI, an offline update package, a dev with the board in a
 # drawer -- should use this rather than reimplementing the build order and
 # letting the two drift.
+#
+# --skip-build is --build-only's mirror image: skip the kernel/modules
+# build, the userspace build and the X11/Matchbox build entirely (not even
+# tools/setup-kernel-src.sh's idempotent reconstruction check runs), and
+# deploy whatever is already sitting in kernel-src/ and $PAYLOAD_TAR as-is.
+# Only pikodeploy itself (a small host binary, not the cross-built target)
+# still gets rebuilt, since it costs nothing and this script cannot
+# deploy without it. Useful for exactly what this project's own live
+# testing kept needing this session: retrying a deploy after fixing
+# something on the DEVICE side (freed NAND space, restarted
+# pikoxfer-server, ...) where nothing that was actually built changed, and
+# sitting through a from-scratch kernel/userspace/X11 rebuild just to
+# resend the same bytes is pure wasted time. Mutually exclusive with
+# --build-only -- one skips the build, the other skips everything BUT the
+# build, so combining them would build nothing and deploy nothing.
 
 ADAPTER=""
 FORCE_KERNEL_SRC=0
@@ -105,6 +120,7 @@ SKIP_USERSPACE=0
 SKIP_ST=0
 SKIP_X11=0
 BUILD_ONLY=0
+SKIP_BUILD=0
 CREATE_BACKUP_FILES=0
 TARGET=""
 while [ $# -gt 0 ]; do
@@ -137,6 +153,10 @@ while [ $# -gt 0 ]; do
             BUILD_ONLY=1
             shift
             ;;
+        --skip-build)
+            SKIP_BUILD=1
+            shift
+            ;;
         --create-backup-files)
             CREATE_BACKUP_FILES=1
             shift
@@ -148,6 +168,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 TARGET="${TARGET:-root@10.43.112.72}"
+
+if [ "$SKIP_BUILD" -eq 1 ] && [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "FAILED: --skip-build and --build-only are opposites (skip the build" >&2
+    echo "        and deploy vs. build and skip the deploy) -- pick one." >&2
+    exit 1
+fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
 # The toolchain tools/build-uclibc-toolchain.sh produces, same default every
@@ -198,6 +224,17 @@ else
         exit 1
     fi
 fi
+
+if [ "$SKIP_BUILD" -eq 1 ]; then
+    echo "==> --skip-build: deploying whatever is already built, nothing recompiled"
+    if [ ! -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
+        echo "FAILED: --skip-build was given but no built kernel exists at" >&2
+        echo "        $KERNEL_DIR/arch/arm/boot/zImage" >&2
+        echo "        Run a build first (or drop --skip-build)." >&2
+        exit 1
+    fi
+    X11_PAYLOAD_TAR="${PAYLOAD_TAR:-/tmp/matchbox-payload.tar}"
+else
 
 echo "==> reconstructing kernel-src (download + apply tracked patches)..."
 if [ "$FORCE_KERNEL_SRC" -eq 1 ]; then
@@ -371,6 +408,8 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
     fi
     echo "==> X11 payload OK ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
 fi
+
+fi # SKIP_BUILD
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
     echo ""
