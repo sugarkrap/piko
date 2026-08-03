@@ -21,7 +21,7 @@ an idea.
 | Drawn by | `modules/initramfs/init`, first command after `devtmpfs` |
 | Drawing tool | busybox `fbsplash` (`CONFIG_FBSPLASH=y` in `modules/initramfs/busybox.config`) |
 | Installed by | `tools/build-initramfs.sh` |
-| Console quieting | `CONFIG_CMDLINE` in `kernel.config-corgi-7.1.4-minimal` |
+| Console quieting | `CONFIG_CMDLINE` in `kernel.config-corgi-7.1.4-minimal` (stage 1) and `kernel.config-corgi-7.1.4` (stage 2) |
 
 ## The panel does not come on by itself
 
@@ -119,9 +119,18 @@ this busybox (`CONFIG_FEATURE_SEAMLESS_GZ` is off).
 The splash spans two kernels. Stage 1 draws it, `kexec`s, and stage 2 draws
 it again as early as `/dev` exists (`rootfs/etc/init.d/rcS`, right after the
 `devtmpfs` mount). That second draw is what makes it read as one continuous
-splash instead of a white flash between two boots. The stage-1 `kexec`
-`--append` also gained `quiet`, so stage 2's kernel does not immediately
-scribble its boot log across the picture it is about to redraw.
+splash instead of a white flash between two boots.
+
+The stage-1 `kexec --append` also carries `quiet`, but it is a no-op:
+stage 2's kernel config has `CONFIG_CMDLINE_FORCE=y`, so its compiled-in
+`CONFIG_CMDLINE` completely replaces whatever `kexec --append` passes — the
+append string is parsed and then thrown away. The fix has to live in
+`kernel.config-corgi-7.1.4` itself: `CONFIG_CMDLINE` there now ends in
+`quiet vt.global_cursor_default=0`, the same two flags stage 1 uses, so
+stage 2's own printk output and cursor stay off the redrawn picture too. If
+stage 2 ever starts scribbling over the splash again, check this config
+before touching `init` — a `FORCE`d cmdline is the kind of thing that looks
+like it should follow the append and quietly doesn't.
 
 Stage 2 cannot reuse the stage-1 mechanism, for reasons that are worth
 recording because none of them are obvious:
