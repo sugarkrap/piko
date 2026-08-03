@@ -231,11 +231,22 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 	 * what this board actually reports. See sharpsl_pm.c's battery_levels
 	 * tables for the matching revert; the disabled critical-suspend
 	 * trigger in sharpsl_battery_thread() is unrelated and stays as-is.
+	 *
+	 * status_low_acin/status_low_noac corrected 2026-08-03 to 181/178
+	 * (from mainline's 178/175) after cross-checking against the actual
+	 * Sharp-built kernels: SL-C760 and SL-C860 Cacko 1.23 zImage.bin
+	 * (kernel 2.4.18-rmk7-pxa3-embedix, both boards being the same
+	 * PXA255 hardware under different model-string ROMs) contain the
+	 * identical compiled comparison `voltage > 181` and `voltage > 178`
+	 * against the retry-averaged MAX1111 battery-voltage read, at the
+	 * byte-identical code address in both kernels. No equivalent
+	 * evidence was found for the two status_high_* thresholds, which
+	 * remain mainline's values.
 	 */
 	.status_high_acin = 188,
-	.status_low_acin  = 178,
+	.status_low_acin  = 181,
 	.status_high_noac = 185,
-	.status_low_noac  = 175,
+	.status_low_noac  = 178,
 };
 
 static struct platform_device *corgipm_device;
