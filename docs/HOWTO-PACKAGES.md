@@ -336,3 +336,19 @@ an absent card makes every `opkg update` fail noisily for nothing.
   refused as a duplicate.
 - **The device clock is 1970** with no RTC or NTP, so file timestamps are
   useless for working out what changed when.
+- **The SD card is FAT, and FAT has no symlinks.** opkg's `ar`/tar
+  extractor drops every symlink member silently — no error, no warning,
+  just a missing file. Any payload built on the usual "real versioned
+  file plus a `.so` → `.so.N` → `.so.N.M.P` symlink chain" layout (see
+  `userspace/stage-sdl-runtime`, e.g. `libfreetype.so.6 ->
+  libfreetype.so.6.20.1`) installs to the card with the real file present
+  but the SONAME the dynamic linker actually asks for missing, so the
+  consuming binary fails to start with no message anywhere near the
+  failure. NAND is jffs2 and tolerates the same package fine, which makes
+  this easy to miss if it's only tested on NAND.
+
+  Fix at package-build time, not by touching opkg: flatten the chain to
+  **one regular file per SONAME** — i.e. the file in the payload is
+  already named `libfreetype.so.6`, not `libfreetype.so.6.20.1` with a
+  symlink pointing to it. Nothing on the device ever asks for the
+  full versioned name, so nothing is lost by dropping it.
