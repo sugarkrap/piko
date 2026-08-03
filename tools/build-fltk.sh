@@ -410,6 +410,40 @@ else
     echo "==> skipping piko-settings (no $PIKO_SETTINGS_SRC)"
 fi
 
+# piko-player (see userspace/src/piko-player.cxx): the FLTK front-end for
+# MPlayer. It embeds MPlayer's -vo x11 video in a child window via -wid and
+# drives it in slave mode -- so unlike piko-settings/mb-wallpaper-picker it
+# decodes no images of its own and needs no libfltk_images: plain -lfltk,
+# the same link as fltktest and matchbox-fbrun. The X11 it uses (fl_xid) is
+# reached through libfltk's own DT_NEEDED, not linked here directly. Ships to
+# /usr/local/bin like the other FLTK apps; the MPlayer binary it drives is a
+# separate build (tools/build-mplayer.sh, X11 variant).
+PIKO_PLAYER_SRC="$SRC/piko-player.cxx"
+if [ -f "$PIKO_PLAYER_SRC" ]; then
+    echo "==> building piko-player"
+    player_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -o "$STAGE/usr/bin/piko-player" \
+        "$PIKO_PLAYER_SRC" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk $player_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-player" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-player does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-player (no $PIKO_PLAYER_SRC)"
+fi
+
 echo ""
 echo "==> done: FLTK staged in $STAGE"
 for f in "$STAGE"/usr/lib/libfltk*.so."$FL_DSO_VERSION"; do

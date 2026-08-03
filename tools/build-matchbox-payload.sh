@@ -136,6 +136,12 @@ WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker
 # mb-wallpaper-picker. Same staging location and same builder
 # (tools/build-fltk.sh) as mb-wallpaper-picker.
 PIKO_SETTINGS_BIN="${PIKO_SETTINGS_BIN:-$STAGE/usr/bin/piko-settings}"
+# piko-player: the FLTK front-end for MPlayer (see userspace/src/piko-
+# player.cxx). Same staging location and builder (tools/build-fltk.sh) as the
+# other FLTK apps. Only the GUI ships in the ROM -- the MPlayer engine it
+# drives stays on the SD card, too big for the NAND root (see the manifest's
+# card-only note and tools/build-mplayer.sh); piko-player finds it there.
+PIKO_PLAYER_BIN="${PIKO_PLAYER_BIN:-$STAGE/usr/bin/piko-player}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -200,6 +206,7 @@ $PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $PIKO_SETTINGS_BIN:usr/local/bin/piko-settings \
+$PIKO_PLAYER_BIN:usr/local/bin/piko-player \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -371,7 +378,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="piko-settings pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
+LAUNCHERS="piko-settings piko-player pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else
