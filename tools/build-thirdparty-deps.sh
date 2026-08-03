@@ -167,6 +167,17 @@ usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 configure_args() {
     case "$1" in
     libpng)     echo "--disable-static" ;;
+    xkeyboard-config)
+        # This package compiles nothing (protocol/keymap data only), but
+        # its configure still runs a pkg-config runtime-deps check for
+        # x11/xkbcomp -- tools this cross build hasn't produced yet at
+        # this point in the pipeline (libX11 comes later, in
+        # build-x11-stack.sh) and that the host may not have installed
+        # either. The check is for optional post-install cache
+        # generation, not for building, and configure's own error
+        # message names the flag that skips it.
+        echo "--disable-runtime-deps"
+        ;;
     freetype)
         # No harfbuzz (would be circular via pango), no brotli/bz2 (only
         # needed for compressed/WOFF2 fonts), no png (that's for colour
