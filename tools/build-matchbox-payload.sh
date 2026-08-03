@@ -131,6 +131,11 @@ FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
 # as fltktest/pikostore -- put there by tools/build-fltk.sh, which also
 # builds fltktest and matchbox-fbrun.
 WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
+# piko-settings: the settings window, which lists every .desktop file
+# carrying Categories=Settings -- currently pikalibrate and
+# mb-wallpaper-picker. Same staging location and same builder
+# (tools/build-fltk.sh) as mb-wallpaper-picker.
+PIKO_SETTINGS_BIN="${PIKO_SETTINGS_BIN:-$STAGE/usr/bin/piko-settings}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -194,6 +199,7 @@ $FLTKTEST_BIN:usr/local/bin/fltktest \
 $PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
+$PIKO_SETTINGS_BIN:usr/local/bin/piko-settings \
 $FBRUN_BIN:usr/sbin/matchbox-fbrun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -328,9 +334,20 @@ done
 # ROM, and expecting the user to open a terminal and type its name to reach
 # it would defeat the point (this keyboard cannot even produce a slash).
 #
-# mb-wallpaper-picker's Categories=Settings lands it in the Settings folder
-# instead of a launcher-worthy top-level folder -- same as the libmb/Xlib
-# version it replaces.
+# The settings entries are the exception to "a launcher here is a desktop
+# icon". pikalibrate and mb-wallpaper-picker both carry Categories=Settings
+# plus X-Piko-NoDesktop=true, which means their .desktop files are still
+# read by all three consumers but produce an icon in only two of them:
+#
+#   piko-settings               lists them, grouped under "Display"
+#   mb-applet-menu-launcher     lists them, under "Desktop Preferences"
+#   matchbox-desktop            skips them -- X-Piko-NoDesktop
+#
+# So they must still be shipped here, exactly as before; the file being in
+# /usr/share/applications is what all three read. What changed is only
+# where the icon shows up. piko-settings itself carries no X-Piko-NoDesktop
+# and is the one Settings entry that IS a desktop icon -- it is the door to
+# the other two.
 #
 # st and xev are the conditional pair. Under --skip-st there is no st
 # binary in the payload, and xev.desktop execs "st -e xev" (xev writes to
@@ -348,7 +365,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
+LAUNCHERS="piko-settings pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else
