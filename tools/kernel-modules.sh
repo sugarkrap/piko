@@ -70,16 +70,22 @@ kernel/lib/crypto/libarc4.ko
 # making it a separately-shipped, separately-insmod'd module, and every
 # device now probes during kernel init instead of racing rcS/mdev.
 
-# VFAT/NLS stack for SD cards. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA
-# are built into the kernel (not modules) specifically so the pxa2xx-mci
+# NLS stack for SD cards. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA are
+# built into the kernel (not modules) specifically so the pxa2xx-mci
 # platform device probes and the block device appears during kernel init,
 # before rcS's mdev daemon is even running -- see rcS's mdev-coldplug
-# comment for the race this avoids. VFAT/NLS covers the usual
-# Cacko-formatted SD cards; ext4 support is built into the kernel too.
+# comment for the race this avoids. FAT/VFAT (the usual Cacko-formatted SD
+# card filesystem) are built in for the exact same reason -- CONFIG_FAT_FS
+# and CONFIG_VFAT_FS are =y, not =m, so fs/fat/fat.ko and fs/fat/vfat.ko
+# never exist as separate files to begin with (their objects link straight
+# into the kernel image; see fs/fat/Makefile's fat-y/vfat-y). Listing them
+# here used to make pikodeploy/chunked-deploy.sh fail outright trying to
+# read a .ko that was never built (found 2026-08-03, deploy died on this
+# exact entry). Only CONFIG_MSDOS_FS stayed =m, and nothing on this device
+# mounts plain msdosfs (real cards are vfat), so msdos.ko is intentionally
+# not shipped either -- ext4 support is built into the kernel too.
 SD_MODULES="
 kernel/fs/nls/nls_cp437.ko
 kernel/fs/nls/nls_cp850.ko
 kernel/fs/nls/nls_iso8859-15.ko
-kernel/fs/fat/fat.ko
-kernel/fs/fat/vfat.ko
 "
