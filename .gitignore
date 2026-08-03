@@ -11,6 +11,12 @@
 # --- Large upstream/build trees (rebuilt from configs + patch files) ---
 kernel-src/
 qemu-spitz/
+# Emulator SD root built by tools/build-emulator-image.sh, and the QEMU-only
+# kernel variant tools/build-and-emulate.sh builds. Both are large and fully
+# regenerable; the *sources* that matter live in tools/qemu-corgi/.
+*-emulator-sd.img
+.emulator-sd.img
+zImage-qemu-testing
 
 # =====================================================================
 #  initramfs/  -- busybox source + built cpio images. Tracked
