@@ -471,11 +471,15 @@ unchanged. Same "budget for the actual hardware" instinct as `bright`'s
 no-fades rule above.
 
 It also grabs the keyboard and pointer and exits on its own if either
-sees input, purely as a safety net for running it by hand (there is a
-desktop launcher for exactly that, `userspace/desktop/
-toasters.desktop`/`Icon=toasters.png` — a manual preview, not the normal
-way it starts). The intended dismissal path is still `brightd` noticing
-activity and sending `SIGTERM`.
+sees input, purely as a safety net for running it by hand over SSH
+(`/usr/local/bin/toasters`) — a manual preview, not the normal way it
+starts. `userspace/desktop/toasters.desktop`/`Icon=toasters.png` used to
+give this a menu entry too, but that invited launching it by hand as a
+matter of course rather than as a deliberate preview, so
+`tools/build-matchbox-payload.sh`'s `LAUNCHERS` list no longer ships it —
+the binary still does, since `brightd` execs it directly with no
+`.desktop` involved. The intended dismissal path is still `brightd`
+noticing activity and sending `SIGTERM`.
 
 **Verified on hardware, 2026-08-01.** Watched running on the device under
 the normal Matchbox session: the XPM sheets decode, the shape masks
@@ -488,9 +492,9 @@ frame. (`fbgrab` is the only way to get the pixels: this panel's
 mmap is the sole path off the board. That is the same constraint
 `fbgrab.c`'s header comment already records.)
 
-Two things worth knowing before running it by hand from the launcher,
-both consequences of the preview being a path the design does not
-otherwise use:
+Two things worth knowing before running it by hand over SSH, both
+consequences of the preview being a path the design does not otherwise
+use:
 
 * **`brightd` keeps arming its own copy underneath you.** `toast_secs` is
   120s and SSH is not evdev input, so a board being driven entirely over

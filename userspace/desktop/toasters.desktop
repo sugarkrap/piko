@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Flying Toasters
-Comment=Preview the idle screensaver (brightd normally launches this itself)
-Exec=/usr/local/bin/toasters
-Icon=toasters.png
-Terminal=false
-Categories=System;
