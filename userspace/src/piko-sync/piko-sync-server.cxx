@@ -1,5 +1,5 @@
 /*
- * pikoxfer-server -- runs on the Zaurus. Listens for pikoxfer-client
+ * piko-sync-server -- runs on the Zaurus. Listens for piko-sync-client
  * connections and writes incoming files into /mnt/card/Transfers. FLTK
  * 1.3, X11, built against the staged libfltk (see pikostore.cxx / piko's
  * docs/HOWTO-FLTK.md) -- same toolkit, same target, same conventions.
@@ -15,11 +15,11 @@
  * FLTK calls back again immediately if more is still buffered.
  *
  * Why resume state is in memory, not on disk. See transfer_state.h's
- * header comment: a .pikoxfer-part file's size on disk says how far a
+ * header comment: a .piko-sync-part file's size on disk says how far a
  * transfer got, never how far it is supposed to go, so "what total size
  * was promised" only lives in this process's TransferMap for as long as
  * it keeps running. That is an intentional, documented scope limit, not
- * an oversight -- see the pikoxfer README.
+ * an oversight -- see the piko-sync README.
  *
  * Why a CRC mismatch resets the part file to empty. The alternative --
  * leaving it half-verified -- would make every future resume offer this
@@ -57,10 +57,10 @@
 #include "transfer_table.h"
 #include "net_io.h"
 
-using namespace pikoxfer;
+using namespace piko_sync;
 
 static const char *TRANSFERS_DIR = "/mnt/card/Transfers";
-static const char *PART_SUFFIX = ".pikoxfer-part";
+static const char *PART_SUFFIX = ".piko-sync-part";
 
 /* The device's root (and /boot) is JFFS2 on raw NAND. Its reserve-space
  * path can transiently return EAGAIN from write()/rename()/mkdir() when
@@ -143,7 +143,7 @@ static std::string dirname_of(const std::string &path)
     return path.substr(0, slash);
 }
 
-/* `mkdir -p` equivalent for pikodeploy's PUT_OFFER/MKDIR -- absolute
+/* `mkdir -p` equivalent for piko-sync-deploy's PUT_OFFER/MKDIR -- absolute
  * deploy paths land anywhere in the filesystem, unlike plain transfers
  * which only ever write into the one pre-existing TRANSFERS_DIR. */
 static bool mkdir_p(const std::string &path)
@@ -266,7 +266,7 @@ public:
 
 private:
     /* WAIT_OFFER is really "wait for the client to say what this
-     * connection is for" -- a plain FILE_OFFER (unchanged), a pikodeploy
+     * connection is for" -- a plain FILE_OFFER (unchanged), a piko-sync-deploy
      * PUT_OFFER (its chunked-transfer counterpart, sharing RECEIVING and
      * handle_chunk() below -- see is_deploy_), or one of the lightweight
      * single-request deploy ops (MKDIR/SYMLINK/RUN/QUERY_EXISTING/
@@ -312,7 +312,7 @@ private:
     int row_;
     int part_fd_;
 
-    /* pikodeploy (MSG_PUT_OFFER) state -- original_name_ doubles as the
+    /* piko-sync-deploy (MSG_PUT_OFFER) state -- original_name_ doubles as the
      * absolute destination path in this mode, part_fd_/next_offset_/
      * total_size_ are shared with the plain-transfer path unchanged. */
     bool is_deploy_;
@@ -739,7 +739,7 @@ void Connection::handle_complete(const std::string &payload)
 }
 
 /* ---------------------------------------------------------------------- *
- * pikodeploy: PUT_OFFER shares RECEIVING/handle_chunk() with plain        *
+ * piko-sync-deploy: PUT_OFFER shares RECEIVING/handle_chunk() with plain        *
  * transfers above (is_deploy_ skips the collision-map bookkeeping that    *
  * only makes sense for the shared Transfers/ folder); its own offer       *
  * decision and finalize are different enough to need their own code.      *
@@ -1258,7 +1258,7 @@ int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
 
-    Fl_Double_Window win(640, 480, "pikoxfer");
+    Fl_Double_Window win(640, 480, "Piko Sync");
     win.begin();
     ServerApp app(0, 0, 640, 480);
     win.end();

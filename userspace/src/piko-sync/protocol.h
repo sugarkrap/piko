@@ -1,6 +1,6 @@
 /*
- * protocol.h -- the pikoxfer wire format, shared by pikoxfer-server (runs
- * on the Zaurus) and pikoxfer-client (runs on the host). Depends on
+ * protocol.h -- the piko-sync wire format, shared by piko-sync-server (runs
+ * on the Zaurus) and piko-sync-client (runs on the host). Depends on
  * nothing but libc/POSIX, so it builds and is tested on the build host
  * with no FLTK, no X and no device -- see tests/protocol-test.cxx, same
  * split as pikostore's romstate.h.
@@ -27,8 +27,8 @@
  * little-endian (the host) or the device's ARM EABI target.
  */
 
-#ifndef PIKOXFER_PROTOCOL_H
-#define PIKOXFER_PROTOCOL_H
+#ifndef PIKO_SYNC_PROTOCOL_H
+#define PIKO_SYNC_PROTOCOL_H
 
 #include <arpa/inet.h>
 #include <stdint.h>
@@ -36,7 +36,7 @@
 
 #include <string>
 
-namespace pikoxfer {
+namespace piko_sync {
 
 const unsigned short DEFAULT_PORT = 7862;
 const uint32_t FRAME_MAGIC = 0x504b5846u; /* "PKXF" */
@@ -56,13 +56,13 @@ enum MessageType {
     MSG_FILE_COMPLETE_ACK = 8, /* server -> client */
     MSG_ERROR             = 9, /* either direction */
 
-    /* pikodeploy's message set, sharing this same connection/frame format.
+    /* piko-sync-deploy's message set, sharing this same connection/frame format.
      * MSG_DATA_CHUNK/MSG_CHUNK_ACK/MSG_FILE_COMPLETE/MSG_FILE_COMPLETE_ACK
      * above are reused as-is for the actual bytes of a MSG_PUT_OFFER --
      * only the offer/finalize semantics differ from a plain MSG_FILE_OFFER
      * (an absolute destination path instead of a collision-resolved name,
      * an explicit mode, and an ALWAYS/IF_MISSING policy). See
-     * pikodeploy/README.md. */
+     * piko-sync-deploy/README.md. */
     MSG_PUT_OFFER          = 10, /* client -> server */
     MSG_PUT_OFFER_ACK      = 11, /* server -> client */
     MSG_MKDIR              = 12, /* client -> server */
@@ -92,12 +92,12 @@ enum PutPolicy {
 
 /* Where the server stages a PUT_FILE's ".part" while it's being received,
  * chosen by the client (the Build & Deploy tab's Destination dropdown /
- * pikodeploy's --staging flag), not decided unilaterally by the server.
+ * piko-sync-deploy's --staging flag), not decided unilaterally by the server.
  * Matters because most deploy DESTINATIONS live on NAND (/boot, /etc,
  * /usr/sbin, ...) -- staging there too would reintroduce the exact
  * ENOSPC problem chunked-deploy.sh's REMOTE_STAGE fix solved, just for
  * deploy instead of plain transfer. See PutOfferAckMsg's finalize
- * comment in pikoxfer-server.cxx for how staging on a different
+ * comment in piko-sync-server.cxx for how staging on a different
  * filesystem than the destination is reconciled (copy, then the same
  * same-directory rename() every other case uses). */
 enum StagingKind {
@@ -461,7 +461,7 @@ inline bool decode_error(const std::string &p, ErrorMsg &m)
 }
 
 /* ---------------------------------------------------------------------- *
- * pikodeploy messages                                                     *
+ * piko-sync-deploy messages                                                     *
  * ---------------------------------------------------------------------- */
 
 struct PutOfferMsg {
@@ -533,7 +533,7 @@ inline bool decode_put_offer_ack(const std::string &p, PutOfferAckMsg &m)
  * the aggregate bar could read 100% between files while 100 more were
  * still queued behind it (seen live 2026-08-03: the bar sat at 100% for
  * most of a 119-step deploy). total_bytes is the sum of every step's
- * bytes as pikodeploy's own plan sees it -- put_tar_tree steps (the
+ * bytes as piko-sync-deploy's own plan sees it -- put_tar_tree steps (the
  * X11/Matchbox payload) count the tar's own archive size as a stand-in
  * for its expanded contents, since the tar is not extracted (and its
  * true expanded size not known) until execute_step() actually reaches
@@ -664,6 +664,6 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
     return get_u64(p, pos, m.free_bytes);
 }
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKOXFER_PROTOCOL_H */
+#endif /* PIKO_SYNC_PROTOCOL_H */

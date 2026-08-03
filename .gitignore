@@ -107,7 +107,7 @@ rootfs/home/
 # instead, which DOES allow the specific re-include below.
 rootfs/root/*
 # .matchbox/wallpaper is hand-written config (the default wallpaper CHOICE
-# pikodeploy seeds -- see manifest.yaml's core_scripts section), not a
+# piko-sync-deploy seeds -- see manifest.yaml's core_scripts section), not a
 # copied-in build artifact like the rest of rootfs/root/ -- same
 # re-include pattern as flash/bin/.gitkeep below.
 !rootfs/root/.matchbox/
@@ -235,5 +235,5 @@ userspace/.thirdparty-cache/
 # clock/launcher; see docs/HOWTO-MATCHBOX-DESKTOP.md)
 *.core
 
-# tools/build-pikoxfer.sh's default --out is the repo root
+# tools/build-piko-sync.sh's default --out is the repo root
 /*.ipk

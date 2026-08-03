@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=pikoxfer
+Name=Piko Sync
 Comment=Receive files sent from a computer
-Exec=pikoxfer-server
-Icon=pikoxfer-server
+Exec=piko-sync-server
+Icon=piko-sync-server
 Terminal=false
 Categories=System;

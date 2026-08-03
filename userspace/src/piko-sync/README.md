@@ -1,4 +1,4 @@
-# pikoxfer — resilient file transfer, with a build/deploy front end
+# piko-sync — resilient file transfer, with a build/deploy front end
 
 A small custom client/server pair for getting files onto a Sharp Zaurus
 SL-C760/C860 running the [piko](https://github.com/sugarkrap/piko) ROM,
@@ -7,17 +7,17 @@ show live progress, and no resume when the device's flaky WiFi drops
 mid-transfer. FLTK 1.3, C++98.
 
 Unlike `pikostore`, this is **not** a git submodule — it lives directly
-in the `piko` tree at `userspace/src/pikoxfer`, built and shipped by
-`tools/build-pikoxfer.sh` there.
+in the `piko` tree at `userspace/src/piko-sync`, built and shipped by
+`tools/build-piko-sync.sh` there.
 
 ## The two apps
 
-**`pikoxfer-server`** runs *on the Zaurus*. It shows the device's own
+**`piko-sync-server`** runs *on the Zaurus*. It shows the device's own
 WiFi address and listens for connections; incoming files land in
 `/mnt/card/Transfers`. Cross-compiled against the staged FLTK/X11 tree,
 same as `pikostore`.
 
-**`pikoxfer-client`** runs on the host. It queues files to send (a
+**`piko-sync-client`** runs on the host. It queues files to send (a
 FileZilla-style list: queued / sending / reconnecting / done / error,
 each with its own progress bar, plus one aggregate bar for the whole
 queue) and, on a second tab, is a GUI front end for the existing
@@ -61,10 +61,10 @@ scope here.
 Normally:
 
 ```sh
-tools/build-pikoxfer.sh                    # both apps
-tools/build-pikoxfer.sh --server-only
-tools/build-pikoxfer.sh --client-only
-tools/build-pikoxfer.sh --deploy user@host # also installs the .ipk onto the SD card
+tools/build-piko-sync.sh                    # both apps
+tools/build-piko-sync.sh --server-only
+tools/build-piko-sync.sh --client-only
+tools/build-piko-sync.sh --deploy user@host # also installs the .ipk onto the SD card
 ```
 
 Directly:
@@ -77,8 +77,8 @@ make client HOST_FLTK_CXXFLAGS="$(fltk-config --cxxflags)" \
 make test   # protocol/transfer_state/transfer_queue, no FLTK, no device
 ```
 
-Run `pikoxfer-client` from the piko repo root (or set
-`PIKOXFER_REPO_ROOT`) so its Build & Deploy tab can find
+Run `piko-sync-client` from the piko repo root (or set
+`PIKO_SYNC_REPO_ROOT`) so its Build & Deploy tab can find
 `tools/build-and-deploy.sh`.
 
 ## Notes

@@ -17,8 +17,8 @@
  * hold -- paths, octal modes, enum names -- ever needs one).
  */
 
-#ifndef PIKODEPLOY_YAML_LITE_H
-#define PIKODEPLOY_YAML_LITE_H
+#ifndef PIKO_SYNC_DEPLOY_YAML_LITE_H
+#define PIKO_SYNC_DEPLOY_YAML_LITE_H
 
 #include <stdio.h>
 
@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-namespace pikoxfer {
+namespace piko_sync {
 namespace yaml {
 
 struct Entry {
@@ -193,6 +193,6 @@ inline bool parse(const std::string &text, std::vector<Section> &out, std::strin
 }
 
 } /* namespace yaml */
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKODEPLOY_YAML_LITE_H */
+#endif /* PIKO_SYNC_DEPLOY_YAML_LITE_H */
