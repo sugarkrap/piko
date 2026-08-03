@@ -156,30 +156,24 @@ static unsigned long corgipm_read_devdata(int type)
 {
 	switch(type) {
 	case SHARPSL_STATUS_ACIN: {
-		int raw = gpio_get_value(CORGI_GPIO_AC_IN);
-		int acin;
 		/*
-		 * FIXED (2026-07-27): the previous unconditional `!raw` here
-		 * assumed AC_IN is active-low, matching mainline's Corgi/Shepherd
-		 * wiring (see spitz_pm.c's equivalent, also `!raw` -- same
-		 * convention). Live testing on this actual Husky board (charger
-		 * plugged in AND actively charging) showed raw=1 the whole time,
-		 * which `!raw` turned into acin=0 (offline) -- sharpsl_ac_isr()
-		 * then believed the charger had been removed and called
-		 * sharpsl_charge_off(), which explicitly forces the orange LED's
-		 * sharpsl-charge trigger to LED_OFF every time, even though real
-		 * charging kept happening (CORGI_GPIO_CHRG_ON is permanently held
-		 * open in corgi_charger_init(), so hardware charging wasn't
-		 * actually gated by this software mistake) -- this is what made
-		 * the LED appear to not light up all the time. Same class of
-		 * bug as the Husky SD write-protect polarity quirk in corgi.c's
-		 * husky_mci_gpio_table (GPIO_ACTIVE_HIGH override) -- Husky wiring
-		 * for this GPIO simply differs from stock Corgi/Shepherd. Only
-		 * flip polarity for Husky so real Corgi/Shepherd boards (if ever
-		 * used with this kernel) keep the mainline-correct behavior.
+		 * REVERTED (2026-08-03): the 2026-07-27 change below special-cased
+		 * Husky to `raw` (active-high) based on one observation of the
+		 * orange LED not lighting during charging. That diagnosis doesn't
+		 * hold up: since 2026-07-31 (commit 9571005) the LED is driven
+		 * directly by hardware -- GPIO13 is an enable, not something
+		 * software touches -- so a lit LED is ground truth for real
+		 * charger presence, independent of this GPIO entirely. Live
+		 * testing now (charger connected, orange LED lit, confirmed by
+		 * reseating the cable) shows `raw` reads 0 the whole time, which
+		 * under the Husky special case produced acin=0 (offline) while
+		 * actually charging -- the exact inverted reading that made
+		 * mb-applet-battery show the wrong icon. Plain `!raw`, matching
+		 * mainline's Corgi/Shepherd/Spitz convention (see spitz_pm.c's
+		 * equivalent), reports this correctly. Whatever caused the
+		 * original LED symptom, it wasn't AC_IN polarity.
 		 */
-		acin = machine_is_husky() ? raw : !raw;
-		return acin;
+		return !gpio_get_value(CORGI_GPIO_AC_IN);
 	}
 	case SHARPSL_STATUS_LOCK:
 		return gpio_get_value(sharpsl_pm.machinfo->gpio_batlock);
