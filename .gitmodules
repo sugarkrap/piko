@@ -104,3 +104,7 @@
 	path = userspace/src/mb-brightness
 	url = https://github.com/sugarkrap/mb-brightness.git
 	branch = main
+[submodule "mb-applet-pikaffeine"]
+	path = userspace/src/mb-applet-pikaffeine
+	url = https://github.com/sugarkrap/mb-applet-pikaffeine
+	branch = main
