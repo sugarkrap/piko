@@ -85,17 +85,32 @@ else
     try_versions="14 13 12 11"
 fi
 
+# crosstool-NG's own bootstrap does NOT just look for bare `gcc`/`g++` --
+# it generates its internal "buildtools" wrapper by preferring the
+# build-machine-triplet-prefixed name (autoconf convention: on this Arch
+# box, `x86_64-pc-linux-gnu-gcc`), which exists here as its own symlink to
+# the same too-new system compiler and is found before a bare `gcc` shim
+# ever comes into play. Both forms have to be shimmed, or the triplet one
+# silently wins and the whole point of this is defeated -- which is
+# exactly what happened the first time this was written.
+MACHINE="$(gcc -dumpmachine 2>/dev/null || echo unknown)"
+
 rm -rf "$SHIM_DIR"
 original_gcc_version="$(gcc --version 2>/dev/null | head -1 || echo unknown)"
 for v in $try_versions; do
     if command -v "gcc-$v" >/dev/null 2>&1 && command -v "g++-$v" >/dev/null 2>&1; then
         mkdir -p "$SHIM_DIR"
-        for tool in cc:gcc gcc:gcc c++:g++ g++:g++ cpp:cpp; do
+        for tool in cc:gcc gcc:gcc c++:g++ g++:g++ cpp:cpp \
+                    "$MACHINE-gcc:gcc" "$MACHINE-g++:g++"; do
             link="${tool%%:*}"
             real="${tool#*:}-$v"
-            ln -sf "$(command -v "$real")" "$SHIM_DIR/$link"
+            # Prefer the triplet-versioned binary itself if it exists
+            # (e.g. x86_64-pc-linux-gnu-gcc-14); otherwise the plain
+            # versioned one works identically under any invoked name.
+            target="$(command -v "$MACHINE-$real" || command -v "$real")"
+            ln -sf "$target" "$SHIM_DIR/$link"
         done
-        echo "==> host gcc is $original_gcc_version, shimming gcc-$v ($("$SHIM_DIR/gcc" --version | head -1)) onto PATH for the build"
+        echo "==> host gcc is $original_gcc_version, shimming gcc-$v ($("$SHIM_DIR/gcc" --version | head -1)) onto PATH for the build (bare and $MACHINE-prefixed)"
         PATH="$SHIM_DIR:$PATH"
         export PATH
         break
