@@ -23,6 +23,32 @@ mount -t sysfs    sysfs    /sys             2>/dev/null
 # devtmpfs is auto-mounted by the kernel (CONFIG_DEVTMPFS_MOUNT), but mount
 # again harmlessly in case it wasn't.
 mount -t devtmpfs devtmpfs /dev             2>/dev/null
+
+# --- boot splash, continued from stage 1 ---
+# The bootstrap draws this same picture before it kexecs (see
+# docs/HOWTO-BOOT-SPLASH.md); redrawing it here as early as /dev exists is
+# what makes it look like one continuous splash rather than a white flash
+# between two kernels.
+#
+# Drawn with piko-splash, not `cat`. This rootfs's busybox is prebuilt in
+# the mtd3 image with no fbsplash applet and no gzip/gunzip/zcat -- so the
+# obvious move is a raw RGB565 dump piped straight to the device. That does
+# not work here: w100fb has no usable write() path and `cat` fails with
+#
+#     cat: write error: Invalid argument
+#
+# The framebuffer has to be mmap'd (which is also why fbsplash works in
+# stage 1). piko-splash is the smallest thing that does that -- see
+# userspace/src/piko-splash.c. The image is emitted from the same master
+# artwork as the stage-1 PPM by tools/make-splash.py, so the two halves of
+# the splash cannot drift apart.
+#
+# Never fatal, and it must not hold up boot: if /dev/fb0 is missing or the
+# asset is gone, we lose a picture, not the system.
+if test -x /usr/sbin/piko-splash && test -f /usr/share/piko/splash.raw; then
+    /usr/sbin/piko-splash /usr/share/piko/splash.raw 2>/dev/null || true
+fi
+
 mkdir -p /dev/pts
 mount -t devpts   devpts   /dev/pts  -o mode=0620,ptmxmode=0666  2>/dev/null
 # dropbear opens /dev/ptmx to allocate a pseudo-terminal, but devtmpfs does

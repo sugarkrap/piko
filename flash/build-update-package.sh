@@ -249,6 +249,7 @@ pkillx:usr/sbin/pkillx:755
 cardswap:usr/sbin/cardswap:755
 hwclock:usr/sbin/hwclock:755
 ntpsync:usr/sbin/ntpsync:755
+piko-splash:usr/sbin/piko-splash:755
 "
 for entry in $STANDALONE_TOOLS; do
     name="${entry%%:*}"

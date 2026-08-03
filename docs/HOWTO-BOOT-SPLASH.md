@@ -49,6 +49,34 @@ Note the SSP port is shared — `ads7846` (touchscreen), `corgi-lcd`
 `tools/setup-kernel-src.sh` already patches `spi-pxa2xx-platform.c` for a
 double-`pxa_ssp_request()` bug. Stage 1 only needs the LCD half.
 
+## And `/dev/fb0` does not exist by itself either
+
+This one cost a second flash, and it is worth stating as its own rule:
+**`FB_W100=y` gives you a working framebuffer, not a device node.**
+
+`CONFIG_FB_DEVICE` (Linux 6.7+) is the symbol that creates `/dev/fbN`. It
+was `# not set` in the minimal config. The result is a system where
+everything looks right and the splash still cannot happen:
+
+- `fbcon` renders console text perfectly — the panel is visibly alive, so
+  "the display works" seems obviously true;
+- but `/dev/fb0` is absent, so `fbsplash` has nothing to open, fails, and
+  the `|| true` in `init` swallows it without a trace.
+
+The tell was a photo of the panel showing kernel messages and *no* splash,
+on a boot that reached stage 2 fine. Panel on + no picture + no error =
+suspect the device node, not the driver.
+
+Stage 2 never hit this because its config has `CONFIG_FB_DEVICE=y` — which
+is also why the exact same `fbsplash` binary and asset render correctly
+there. If the splash ever works in stage 2 but not stage 1, compare these
+two configs first; the driver being present in both is not the question.
+
+Enabling it costs ~4 kB. Note it is `/dev/fb0` that was missing, not mmap
+support: `w100fb` supplies its own `.fb_mmap` (`w100fb_ops` in
+`drivers/video/fbdev/w100fb.c`), so it does not need `FB_IOMEM_FOPS` or
+`FB_IOMEM_HELPERS` the way stage 2's config happens to have them.
+
 The backlight is then set explicitly from `init`, reading the panel's own
 `max_brightness` (47 on this hardware) rather than hardcoding it. Stage 2
 takes brightness policy over within seconds — see
@@ -86,6 +114,58 @@ the cpio is gzipped as a whole immediately afterwards — storing it
 compressed would be gzip-on-gzip, which is both bigger and unreadable to
 this busybox (`CONFIG_FEATURE_SEAMLESS_GZ` is off).
 
+## Stage 2 draws the same picture
+
+The splash spans two kernels. Stage 1 draws it, `kexec`s, and stage 2 draws
+it again as early as `/dev` exists (`rootfs/etc/init.d/rcS`, right after the
+`devtmpfs` mount). That second draw is what makes it read as one continuous
+splash instead of a white flash between two boots. The stage-1 `kexec`
+`--append` also gained `quiet`, so stage 2's kernel does not immediately
+scribble its boot log across the picture it is about to redraw.
+
+Stage 2 cannot reuse the stage-1 mechanism, for reasons that are worth
+recording because none of them are obvious:
+
+- **No `fbsplash` applet.** This rootfs's busybox is prebuilt inside the
+  mtd3 image and is not built from this repo, so enabling an applet is not
+  a config change available here.
+- **No `gzip`/`gunzip`/`zcat`.** Only `cat` and `dd`. (No `cut` or `awk`
+  either — see `flash/run-stage2-smf-update.sh`.)
+- **And `cat` to the framebuffer does not work.** The obvious fallback,
+  pre-rendering raw RGB565 and piping it in, fails:
+
+      cat: write error: Invalid argument
+
+  `w100fb` has no usable `write()` path. The framebuffer must be **mmap**'d
+  — which is precisely why `fbsplash` succeeds in stage 1, and why a
+  `dd`-based workaround fails the same way.
+
+So stage 2 gets `userspace/src/piko-splash.c`: open, mmap, memcpy row by
+row, exit. It honours `var.yoffset` and `fix.line_length` rather than
+assuming a packed 640x480 buffer, because this panel reports a doubled
+virtual height (640x960) and the visible region can sit at a pan offset —
+the same reasoning as `fbtest.c`.
+
+Its asset is `rootfs/usr/share/piko/splash.raw`: a headerless dump of
+exactly the visible screen, `width*height*2` bytes of little-endian RGB565.
+Headerless deliberately — nothing to parse means nothing to get wrong at
+boot, and the geometry is checked against the framebuffer instead. It is
+614400 bytes uncompressed, which is fine: it lives on mtd3, a 68 MB
+partition, not in the mtd1 slot the bootstrap fights over. Git stores the
+blob compressed, so the repo cost is nearer the gzipped figure.
+
+`tools/make-splash.py` emits both the stage-1 PPM and the stage-2 raw dump
+from the same master artwork in one run, so the two halves cannot drift.
+
+Both are tracked, which needs one `.gitignore` subtlety: `rootfs/usr/share/`
+is ignored wholesale, so the rule is written as `rootfs/usr/share/*` plus a
+`!rootfs/usr/share/piko/` negation. Git never descends into an excluded
+*directory*, so excluding the directory itself would make the exception
+impossible to express — and since `flash/build-update-package.sh` ships
+`rootfs/` by walking the disk, an untracked asset would work on the machine
+that generated it and silently produce a splash-less package everywhere
+else.
+
 ## The size budget is the entire design
 
 The initramfs is linked *into* the bootstrap kernel
@@ -109,14 +189,16 @@ including `CONFIG_SPI_PXA2XX` and `PXA_SSP`, without which none of it is
 visible:
 
 ```
-bootstrap zImage : 1282392 bytes
+bootstrap zImage : 1286408 bytes
 mtd1 slot budget : 1294336 bytes
-headroom left    :   11944 bytes
+headroom left    :    7928 bytes
 ```
 
-Roughly a third of that went on the SPI master alone. The ~12 kB left is the
-whole remaining margin for anything the bootstrap ever wants to carry —
-treat it as close to spent, and re-measure before adding anything.
+Of the ~17 kB the splash alone left, roughly 11 kB went on the SPI master
+(`SPI_PXA2XX` + `PXA_SSP`) and ~4 kB on `FB_DEVICE` — that is, most of the
+budget was spent not on the picture but on being able to *display* it. The
+~8 kB left is the entire remaining margin for anything the bootstrap ever
+wants to carry. Treat it as spent, and re-measure before adding anything.
 
 Both the cpio and the zImage are gzipped, so what costs flash is the
 *compressed* size of the asset. That is why `--colors` in

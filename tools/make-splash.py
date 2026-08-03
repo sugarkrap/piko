@@ -89,6 +89,8 @@ def main():
                    help="palette size; 0 keeps truecolor (much larger)")
     p.add_argument("--budget", type=int, default=40000,
                    help="fail if the compressed asset exceeds this many bytes")
+    p.add_argument("--raw-out", default="rootfs/usr/share/piko/splash.raw",
+                   help="stage-2 raw RGB565 output; '' to skip")
     args = p.parse_args()
 
     canvas, logo = build(args.src, args.width, args.height,
@@ -111,6 +113,32 @@ def main():
     print(f"  uncompressed PPM : {len(raw)} bytes")
     print(f"  gzipped (flash)  : {len(packed)} bytes "
           f"(budget {args.budget})")
+
+    # Stage 2 gets the same picture in a form it can draw with `cat`.
+    #
+    # It cannot use the PPM: its busybox has no fbsplash applet (that
+    # busybox is prebuilt in the mtd3 image, not built here), and no
+    # gzip/gunzip/zcat either -- only cat and dd. But the panel is RGB565,
+    # so a raw framebuffer dump needs no decoder at all:
+    #
+    #     cat splash.raw > /dev/fb0
+    #
+    # Uncompressed and therefore large (614400 bytes at 640x480x2), which is
+    # fine: this one lives on mtd3, a 68 MB partition, not in the mtd1 slot
+    # the bootstrap has to squeeze into. Git stores the blob compressed, so
+    # the repo cost is closer to the gzipped figure above.
+    if args.raw_out:
+        px = canvas.load()
+        rgb565 = bytearray()
+        for y in range(args.height):
+            for x in range(args.width):
+                r, g, b = px[x, y]
+                v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+                rgb565 += bytes((v & 0xFF, v >> 8))    # little-endian
+        with open(args.raw_out, "wb") as fh:
+            fh.write(rgb565)
+        print(f"{args.raw_out}: raw RGB565 {len(rgb565)} bytes "
+              f"(stage 2, cat straight to /dev/fb0)")
 
     if len(packed) > args.budget:
         sys.exit(f"make-splash.py: asset is {len(packed)} bytes compressed, "

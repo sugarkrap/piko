@@ -43,7 +43,8 @@ done
 # Deliberately non-fatal and deliberately quiet: a bootstrap that cannot
 # draw a picture must still boot. If /dev/fb0 is missing or the panel is not
 # up, we lose the splash, not the machine.
-/bin/fbsplash -s /splash.ppm 2>/dev/null || true
+/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
+SPLASH_RC=$?
 
 mount -t proc proc /proc
 
@@ -84,6 +85,18 @@ LOG=/mnt/home/debug.log
 if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 	echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG"
 
+	# First durable record of whether the splash actually drew. Everything
+	# stage 1 prints on the normal path goes to a tmpfs buffer that the
+	# kexec destroys, so without this there is no way to tell "fbsplash
+	# failed" from "fbsplash worked and you blinked" -- the two look
+	# identical from the far side of a reboot. This is the first line
+	# written once /mnt/home is actually writable.
+	echo "fbsplash rc=$SPLASH_RC" >> "$LOG"
+	if test -s /tmp/fbsplash.err; then
+		echo "fbsplash stderr:" >> "$LOG"
+		cat /tmp/fbsplash.err >> "$LOG"
+	fi
+
 	# JFFS2's background scan/GC keeps processing nodes after mount()
 	# returns, so a nested-path test -f can briefly fail. Poll (quietly)
 	# until both payload files are actually accessible.
@@ -102,7 +115,7 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 	echo "--- kexec -d -l output ---"
 	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
 		--atags \
-		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw" \
+		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw quiet" \
 		> /tmp/kexec-l.out 2>&1
 	KEXEC_LOAD_RC=$?
 	cat /tmp/kexec-l.out
