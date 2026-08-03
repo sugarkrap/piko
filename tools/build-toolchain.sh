@@ -24,6 +24,22 @@ set -eu
 #    makes the second caller fail fast with a clear message instead of
 #    racing silently.
 #
+# 3. THE HOST'S OWN gcc IS TOO NEW. crosstool-NG's first stage builds a
+#    "core" cross-gcc using the BUILD machine's plain `gcc`/`g++` on PATH
+#    -- it does not isolate itself from the host toolchain the way the
+#    final cross-compiler is isolated from the target's. On a
+#    rolling-release box that plain `gcc` can be far newer than GCC
+#    13.4.0's own build scripts were ever tested against; concretely,
+#    GCC 16's reworked libstdc++ <bits/locale_facets.h> conflicts with
+#    GCC 13's fixincludes/build process (toupper/isgraph/etc. macro vs.
+#    template redeclaration errors), and the "core C gcc compiler" stage
+#    dies. CI never hits this because GitHub's runner image ships a much
+#    older stock gcc. The fix is not a crosstool-NG option -- it is
+#    simply "don't let the too-new gcc be the one found on PATH": if an
+#    older versioned gcc package (gcc14, gcc13, ...) is installed
+#    alongside the system one, a tiny shim directory of cc/gcc/c++/g++/
+#    cpp symlinks pointing at it is prepended to PATH for the build only.
+#
 # Usage:
 #   tools/build-toolchain.sh [--force]
 #
@@ -55,7 +71,41 @@ if [ -f "$LOCK" ]; then
     echo "==> stale lock from pid ${owner:-unknown}, taking it over"
 fi
 echo "$$" > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT INT TERM
+SHIM_DIR="$TOOLCHAIN_DIR/.build-host-cc-shim"
+trap 'rm -f "$LOCK"; rm -rf "$SHIM_DIR"' EXIT INT TERM
+
+# Prefer the newest versioned gcc package that is NOT the system default --
+# gcc14 first (known-good against this project's crosstool-NG/GCC-13.4.0
+# combination), falling back through older ones if that is not installed.
+# HOST_CC_VERSION overrides the search entirely for whoever hits a
+# different bad combination later.
+if [ -n "${HOST_CC_VERSION:-}" ]; then
+    try_versions="$HOST_CC_VERSION"
+else
+    try_versions="14 13 12 11"
+fi
+
+rm -rf "$SHIM_DIR"
+original_gcc_version="$(gcc --version 2>/dev/null | head -1 || echo unknown)"
+for v in $try_versions; do
+    if command -v "gcc-$v" >/dev/null 2>&1 && command -v "g++-$v" >/dev/null 2>&1; then
+        mkdir -p "$SHIM_DIR"
+        for tool in cc:gcc gcc:gcc c++:g++ g++:g++ cpp:cpp; do
+            link="${tool%%:*}"
+            real="${tool#*:}-$v"
+            ln -sf "$(command -v "$real")" "$SHIM_DIR/$link"
+        done
+        echo "==> host gcc is $original_gcc_version, shimming gcc-$v ($("$SHIM_DIR/gcc" --version | head -1)) onto PATH for the build"
+        PATH="$SHIM_DIR:$PATH"
+        export PATH
+        break
+    fi
+done
+if [ ! -d "$SHIM_DIR" ]; then
+    echo "==> no older gcc[0-9]+ package found to shim (tried: $try_versions)" >&2
+    echo "    building with the system gcc ($(gcc --version | head -1)) as-is -- if it is" >&2
+    echo "    too new for crosstool-NG's core-gcc stage, install e.g. gcc14 first." >&2
+fi
 
 if ! command -v systemd-inhibit >/dev/null 2>&1; then
     echo "==> systemd-inhibit not found -- proceeding WITHOUT a sleep inhibitor" >&2
