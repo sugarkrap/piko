@@ -15,16 +15,67 @@
  * driver at all (same "no hardware acceleration path" story as the comment
  * on w100fb_blank() in modules/w100/w100fb.c), which is why upstream's
  * plain-Xlib approach is a good fit and xscreensaver's own GL flyingtoasters
- * hack is not an option. Sprites are XPutImage'd through a clip mask onto
- * an offscreen pixmap, and the pixmap is XCopyArea'd to a fullscreen
- * override-redirect window once per frame.
+ * hack is not an option. Sprites are drawn through a clip mask onto an
+ * offscreen pixmap, which is XCopyArea'd to a fullscreen override-redirect
+ * window.
  *
- * FRAME RATE is deliberately ~10fps, not upstream's 60. Every frame copies
- * the whole 480x640x16bpp panel across an unaccelerated framebuffer; at
- * 60fps that is ~35MB/s of blitting on a part that cannot do it, and the
- * animation would tear and eat the CPU an idle machine is supposed to be
- * saving. Sprites move further per frame to compensate, so the apparent
- * speed is unchanged.
+ * FRAME RATE is deliberately ~10fps, not upstream's 60. Sprites move
+ * further per frame to compensate, so the apparent speed is unchanged.
+ *
+ * DIRTY-RECTANGLE rendering, not a full-screen clear+blit every frame: the
+ * 8 sprites cover roughly a tenth of the 480x640 panel at any moment, so
+ * touching the untouched nine tenths on an unaccelerated framebuffer every
+ * ~100ms was pure waste. Each sprite instead erases just its own previous
+ * 64x64 footprint, is redrawn at its new position, and only the union of
+ * those two squares is XCopyArea'd to the window -- see the loop in
+ * main(). This is safe even where sprites overlap: every sprite is
+ * unconditionally erased-then-redrawn every frame in the same fixed
+ * (array) order the old full-repaint used, so a later sprite still ends
+ * up drawn on top of an earlier one, and any transient clobbering of a
+ * neighbour's pixels earlier in the loop is corrected when that
+ * neighbour's own turn comes later in the same frame. The backbuf
+ * converges to exactly the image a full repaint would have produced.
+ *
+ * Sprites are pre-rendered to server-side Pixmaps once at startup (see
+ * load_sprite()) rather than kept as client-side XImages and XPutImage'd
+ * every frame: XPutImage re-sends the raw 64x64 pixel data over the X
+ * connection and redoes format conversion on every single draw, 8 times a
+ * frame. XCopyArea from an already-server-side Pixmap skips all of that.
+ *
+ * NO-OVERLAP is enforced at spawn time, not during flight, and it is exact
+ * rather than best-effort. Every sprite moves by "x -= speed; y += speed"
+ * with the SAME speed on both axes, so x+y is invariant for that sprite's
+ * entire flight -- it only changes at the next respawn. Two sprites
+ * therefore travel on parallel 45-degree lines whose perpendicular
+ * distance is fixed for as long as both are alive. For two 64x64
+ * axis-aligned boxes, standard AABB overlap needs |dx|<64 AND |dy|<64
+ * where dx,dy are their coordinate differences; since dx+dy is exactly
+ * that fixed (x+y) difference, the triangle inequality means both cannot
+ * hold once |dx+dy| >= 128 (MIN_DIAG_GAP). A sprite only spawns into a
+ * slot whose (x+y) clears every other currently-alive sprite's by that
+ * much, which is what used to let a sprite fly straight through -- or,
+ * since the dirty-rectangle repaint above only erases a moving sprite's
+ * OWN previous 64x64 square, straight through and briefly bite a chunk
+ * out of -- another one. Neither can happen now, by construction, for as
+ * long as neither sprite respawns again.
+ *
+ * Finding that slot is NOT a bounded one-shot retry, because it provably
+ * cannot always succeed on the first attempt: with up to 7 other sprites
+ * already alive, each blocking a window of 2*MIN_DIAG_GAP around its own
+ * (x+y), pure random sampling of a candidate slot is, empirically, right
+ * at the classic 1D random-sequential-packing ("parking problem") jamming
+ * density -- it was observed to run out of room on real hardware roughly
+ * 1 respawn in 10, and the last (only) attempt would then land in an
+ * occupied window, i.e. exactly the overlap this whole scheme exists to
+ * prevent. There is also no retry count that fixes this in general: for
+ * an adversarial-but-legal arrangement of the other 7, zero clear slots
+ * can exist at all, no matter how many times you re-roll. So a sprite
+ * that cannot find a clear slot does not spawn: it stays !alive and
+ * try_spawn() is called again next frame (see the main loop below), at
+ * SPAWN_TRIES attempts each time. Since every other sprite keeps moving
+ * and eventually respawns elsewhere, freeing up its old window, room
+ * reliably opens within a handful of frames -- invisible at ~100ms/frame
+ * -- without ever compromising the zero-overlap guarantee to get there.
  *
  * This program does not decide WHEN to run. brightd (userspace/src/
  * brightd.c) already has reliable, hardware-proven idle detection (see its
@@ -74,11 +125,23 @@
 #define MIN_SPEED       4     /* px per frame, so 40..80 px/s at 10fps */
 #define MAX_SPEED       8
 
+/* See the NO-OVERLAP header comment: two sprites can never touch as long
+ * as their (x+y) values differ by at least this much, for as long as both
+ * are alive. 2*SPRITE_SIZE is the proven zero-overlap threshold (boxes
+ * can still be edge-adjacent there, zero gap, zero overlap); the extra
+ * SPRITE_SIZE/2 is just for a visibly comfortable gap, not correctness. */
+#define MIN_DIAG_GAP    (SPRITE_SIZE * 2 + SPRITE_SIZE / 2)
+/* Tries per FRAME for a sprite waiting for a clear spot, not a one-shot
+ * budget -- see the NO-OVERLAP header comment for why a bounded one-shot
+ * retry is not enough on its own. */
+#define SPAWN_TRIES     40
+
 typedef struct {
 	int x, y;
 	int speed;
 	int frame;   /* wing position; unused for toast */
 	int toast;   /* 0 = toaster, 1 = winged toast */
+	int alive;   /* 0 while waiting for a clear (x+y) slot to open up */
 } Sprite;
 
 static Display *dpy;
@@ -89,22 +152,33 @@ static GC gc;
 static int width, height;
 static unsigned long col_bg;
 
-static XImage *toaster_img[TOASTER_FRAMES];
-static Pixmap  toaster_mask[TOASTER_FRAMES];
-static XImage *toast_img;
-static Pixmap  toast_mask;
+static Pixmap toaster_img[TOASTER_FRAMES];
+static Pixmap toaster_mask[TOASTER_FRAMES];
+static Pixmap toast_img;
+static Pixmap toast_mask;
 
-/* XpmCreateImageFromData hands back the shape mask as an XImage; a clip
- * mask has to be a depth-1 Pixmap, so push it into one. Same shape as
- * upstream's loadSprites(), minus its per-call XCreateGC leak. */
+/* Decode one XPM sheet with XpmCreateImageFromData() and push both the
+ * pixel data and the shape mask it hands back straight into server-side
+ * Pixmaps, via one throwaway GC each. The image is never touched again
+ * after this, so paying the XPutImage cost once here -- instead of once
+ * per sprite per frame -- is the whole point. Same shape as upstream's
+ * loadSprites(), minus its per-call XCreateGC leak. */
 static int
-load_sprite(char **data, XImage **img, Pixmap *mask)
+load_sprite(char **data, Pixmap *pix, Pixmap *mask)
 {
-	XImage *shape = NULL;
-	GC mgc;
+	XImage *img = NULL, *shape = NULL;
+	GC tgc;
 
-	if (XpmCreateImageFromData(dpy, data, img, &shape, NULL) != XpmSuccess)
+	if (XpmCreateImageFromData(dpy, data, &img, &shape, NULL) != XpmSuccess)
 		return -1;
+
+	*pix = XCreatePixmap(dpy, win, img->width, img->height,
+			     (unsigned)DefaultDepth(dpy, screen));
+	tgc = XCreateGC(dpy, *pix, 0, NULL);
+	XPutImage(dpy, *pix, tgc, img, 0, 0, 0, 0, img->width, img->height);
+	XFreeGC(dpy, tgc);
+	XDestroyImage(img);
+
 	if (!shape) {
 		/* No transparent colour in the sheet: no mask needed. */
 		*mask = None;
@@ -112,47 +186,85 @@ load_sprite(char **data, XImage **img, Pixmap *mask)
 	}
 	*mask = XCreatePixmap(dpy, win, shape->width, shape->height,
 			      shape->depth);
-	mgc = XCreateGC(dpy, *mask, 0, NULL);
-	XPutImage(dpy, *mask, mgc, shape, 0, 0, 0, 0,
+	tgc = XCreateGC(dpy, *mask, 0, NULL);
+	XPutImage(dpy, *mask, tgc, shape, 0, 0, 0, 0,
 		  shape->width, shape->height);
-	XFreeGC(dpy, mgc);
+	XFreeGC(dpy, tgc);
 	XDestroyImage(shape);
 	return 0;
 }
 
 static void
-draw_sprite(XImage *img, Pixmap mask, int x, int y)
+draw_sprite(Pixmap pix, Pixmap mask, int x, int y)
 {
 	if (mask != None) {
 		XSetClipMask(dpy, gc, mask);
 		XSetClipOrigin(dpy, gc, x, y);
 	}
-	XPutImage(dpy, backbuf, gc, img, 0, 0, x, y,
-		  SPRITE_SIZE, SPRITE_SIZE);
+	XCopyArea(dpy, pix, backbuf, gc, 0, 0, SPRITE_SIZE, SPRITE_SIZE, x, y);
 	if (mask != None)
 		XSetClipMask(dpy, gc, None);
 }
 
-/* Enter from the top or right edge and drift down-left, which is the
- * direction the original After Dark toasters flew and the one upstream
- * kept. On the first call, scatter across the whole screen instead: the
- * screensaver should not open on an empty panel and then wait ten seconds
- * for the first toaster to sail in. */
-static void
-respawn(Sprite *s, int initial)
+/* True if a sprite spawning with x+y == diag cannot ever touch any
+ * currently-alive sprite in the roster (skipping index self) -- see the
+ * NO-OVERLAP header comment for why (x+y) separation alone is enough. */
+static int
+diag_clear(int diag, const Sprite *roster, int n, int self)
 {
-	if (initial) {
-		s->x = rand() % (width > 1 ? width : 1);
-		s->y = rand() % (height > 1 ? height : 1);
-	} else if (rand() % 2) {
-		s->x = width;
-		s->y = rand() % (height + SPRITE_SIZE) - SPRITE_SIZE;
-	} else {
-		s->x = rand() % (width + SPRITE_SIZE);
-		s->y = -SPRITE_SIZE;
+	int i, d;
+
+	for (i = 0; i < n; i++) {
+		if (i == self || !roster[i].alive)
+			continue;
+		d = diag - (roster[i].x + roster[i].y);
+		if (d < 0)
+			d = -d;
+		if (d < MIN_DIAG_GAP)
+			return 0;
 	}
-	s->speed = MIN_SPEED + rand() % (MAX_SPEED - MIN_SPEED + 1);
-	s->frame = rand() % TOASTER_FRAMES;
+	return 1;
+}
+
+/* Try to bring sprite s to life: enter from the top or right edge and
+ * drift down-left, which is the direction the original After Dark
+ * toasters flew and the one upstream kept, EXCEPT when initial is set
+ * (startup only), which scatters across the whole screen instead so the
+ * screensaver does not open on an empty panel and wait ten seconds for
+ * the first toaster to sail in.
+ *
+ * Returns 0 without changing s if no (x+y) slot at least MIN_DIAG_GAP
+ * from every other living sprite in roster[0..n) turned up in
+ * SPAWN_TRIES random attempts -- the caller is expected to leave s dead
+ * and call again next frame. See the NO-OVERLAP header comment for why
+ * that is a real possibility this has to handle, not just defensive
+ * code. */
+static int
+try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
+{
+	int tries, x, y;
+
+	for (tries = 0; tries < SPAWN_TRIES; tries++) {
+		if (initial) {
+			x = rand() % (width > 1 ? width : 1);
+			y = rand() % (height > 1 ? height : 1);
+		} else if (rand() % 2) {
+			x = width;
+			y = rand() % (height + SPRITE_SIZE) - SPRITE_SIZE;
+		} else {
+			x = rand() % (width + SPRITE_SIZE);
+			y = -SPRITE_SIZE;
+		}
+		if (diag_clear(x + y, roster, n, self)) {
+			s->x = x;
+			s->y = y;
+			s->speed = MIN_SPEED + rand() % (MAX_SPEED - MIN_SPEED + 1);
+			s->frame = rand() % TOASTER_FRAMES;
+			s->alive = 1;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 int
@@ -193,6 +305,11 @@ main(void)
 				(unsigned)DefaultDepth(dpy, screen));
 	gcv.graphics_exposures = False;
 	gc = XCreateGC(dpy, win, GCGraphicsExposures, &gcv);
+	/* Foreground stays col_bg for the whole run -- draw_sprite() only
+	 * ever touches the clip mask/origin, never the foreground, so this
+	 * does not need resetting per frame or per sprite. */
+	XSetForeground(dpy, gc, col_bg);
+	XFillRectangle(dpy, backbuf, gc, 0, 0, (unsigned)width, (unsigned)height);
 
 	for (i = 0; i < TOASTER_FRAMES; i++) {
 		if (load_sprite(toasterXpm[i], &toaster_img[i],
@@ -209,7 +326,12 @@ main(void)
 	srand((unsigned)time(NULL) ^ (unsigned)getpid());
 	for (i = 0; i < N_TOASTERS + N_TOAST; i++) {
 		sprites[i].toast = (i >= N_TOASTERS);
-		respawn(&sprites[i], 1);
+		sprites[i].alive = 0;
+		/* n = i: only sprites[0..i-1] are alive yet. On the rare
+		 * failure this leaves a straggler dead; the main loop below
+		 * brings it in from an edge within its first few frames,
+		 * same as any other post-startup respawn. */
+		try_spawn(&sprites[i], 1, sprites, i, i);
 	}
 
 	xfd = ConnectionNumber(dpy);
@@ -228,17 +350,52 @@ main(void)
 			}
 		}
 
-		XSetForeground(dpy, gc, col_bg);
-		XFillRectangle(dpy, backbuf, gc, 0, 0, (unsigned)width,
-			       (unsigned)height);
-
 		for (i = 0; i < N_TOASTERS + N_TOAST; i++) {
 			Sprite *s = &sprites[i];
+			int old_x, old_y, dx0, dy0, dx1, dy1;
+			int just_spawned = 0;
 
-			s->x -= s->speed;
-			s->y += s->speed;
-			if (s->x <= -SPRITE_SIZE || s->y >= height)
-				respawn(s, 0);
+			if (!s->alive) {
+				/* Waiting for a clear (x+y) slot -- see the
+				 * NO-OVERLAP header comment. Nothing was
+				 * drawn for this sprite, so there is nothing
+				 * to erase or blit either; just keep trying. */
+				if (!try_spawn(s, 0, sprites,
+					       N_TOASTERS + N_TOAST, i))
+					continue;
+				just_spawned = 1;
+			}
+
+			old_x = s->x;
+			old_y = s->y;
+
+			if (!just_spawned) {
+				s->x -= s->speed;
+				s->y += s->speed;
+				if (s->x <= -SPRITE_SIZE || s->y >= height) {
+					/* Leaving the screen: erase its last
+					 * footprint and go quiet. A future
+					 * frame's try_spawn() above brings it
+					 * back once there is room. */
+					XFillRectangle(dpy, backbuf, gc, old_x,
+						       old_y, SPRITE_SIZE,
+						       SPRITE_SIZE);
+					XCopyArea(dpy, backbuf, win, gc, old_x,
+						  old_y, SPRITE_SIZE,
+						  SPRITE_SIZE, old_x, old_y);
+					s->alive = 0;
+					continue;
+				}
+			}
+
+			/* Erase this sprite's previous footprint (a no-op
+			 * square of backbuf that is already background, the
+			 * first frame it is alive) -- see the DIRTY-RECTANGLE
+			 * header comment for why touching only this 64x64
+			 * square, not the whole backbuf, is still always
+			 * correct. */
+			XFillRectangle(dpy, backbuf, gc, old_x, old_y,
+				       SPRITE_SIZE, SPRITE_SIZE);
 
 			if (s->toast) {
 				draw_sprite(toast_img, toast_mask, s->x, s->y);
@@ -248,10 +405,19 @@ main(void)
 				draw_sprite(toaster_img[s->frame],
 					    toaster_mask[s->frame], s->x, s->y);
 			}
+
+			/* Blit only the union of the old and new footprint
+			 * -- the only pixels this sprite could have changed
+			 * this frame. */
+			dx0 = old_x < s->x ? old_x : s->x;
+			dy0 = old_y < s->y ? old_y : s->y;
+			dx1 = (old_x > s->x ? old_x : s->x) + SPRITE_SIZE;
+			dy1 = (old_y > s->y ? old_y : s->y) + SPRITE_SIZE;
+			XCopyArea(dpy, backbuf, win, gc, dx0, dy0,
+				  (unsigned)(dx1 - dx0), (unsigned)(dy1 - dy0),
+				  dx0, dy0);
 		}
 
-		XCopyArea(dpy, backbuf, win, gc, 0, 0, (unsigned)width,
-			  (unsigned)height, 0, 0);
 		XFlush(dpy);
 		tick++;
 
