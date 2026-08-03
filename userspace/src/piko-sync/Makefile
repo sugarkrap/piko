@@ -1,12 +1,12 @@
-# pikoxfer -- resilient file transfer between the host and the Zaurus.
+# piko-sync -- resilient file transfer between the host and the Zaurus.
 #
 # Two binaries share this Makefile:
-#   pikoxfer-server   cross-compiled against the staged FLTK/X11 tree,
+#   piko-sync-server   cross-compiled against the staged FLTK/X11 tree,
 #                     runs ON the Zaurus (see docs/HOWTO-FLTK.md in piko).
-#   pikoxfer-client   built against the HOST's own FLTK, runs on the
+#   piko-sync-client   built against the HOST's own FLTK, runs on the
 #                     build machine.
 #
-# Normally built by tools/build-pikoxfer.sh in the piko repo, which knows
+# Normally built by tools/build-piko-sync.sh in the piko repo, which knows
 # where the cross toolchain and the staged FLTK/X11 tree live. This
 # Makefile exists so either binary can also be built directly:
 #
@@ -36,29 +36,29 @@ COMMON_HDRS := protocol.h transfer_state.h transfer_queue.h transfer_table.h net
 
 all: server client
 
-server: pikoxfer-server
+server: piko-sync-server
 
 # -isystem, not -I: FLTK 1.3's own headers emit hundreds of
 # -Wunused-parameter warnings that would bury any real warning in this
 # app's own code -- same reasoning as pikostore/Makefile.
-pikoxfer-server: pikoxfer-server.cxx transfer_table.cxx $(COMMON_HDRS)
+piko-sync-server: piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
 	$(CXX) $(CXXFLAGS) \
 	    -isystem $(STAGE)/usr/include \
-	    -o $@ pikoxfer-server.cxx transfer_table.cxx \
+	    -o $@ piko-sync-server.cxx transfer_table.cxx \
 	    -L$(STAGE)/usr/lib -Wl,-rpath-link=$(STAGE)/usr/lib \
 	    -lfltk $(FLTK_LDLIBS)
 
-client: pikoxfer-client
+client: piko-sync-client
 
-pikoxfer-client: pikoxfer-client.cxx transfer_table.cxx $(COMMON_HDRS)
+piko-sync-client: piko-sync-client.cxx transfer_table.cxx $(COMMON_HDRS)
 	$(HOSTCXX) $(HOSTCXXFLAGS) $(HOST_FLTK_CXXFLAGS) \
-	    -o $@ pikoxfer-client.cxx transfer_table.cxx \
+	    -o $@ piko-sync-client.cxx transfer_table.cxx \
 	    $(HOST_FLTK_LDFLAGS)
 
 clean:
-	rm -f pikoxfer-server pikoxfer-client
+	rm -f piko-sync-server piko-sync-client
 
 .PHONY: test
 test:
-	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/pikoxfer-protocol-test tests/protocol-test.cxx
-	/tmp/pikoxfer-protocol-test
+	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-protocol-test tests/protocol-test.cxx
+	/tmp/piko-sync-protocol-test

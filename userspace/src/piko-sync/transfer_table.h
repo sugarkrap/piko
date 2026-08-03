@@ -1,6 +1,6 @@
 /*
  * transfer_table.h -- the Fl_Table that renders a TransferQueue, shared by
- * pikoxfer-server (incoming files) and pikoxfer-client (outgoing files).
+ * piko-sync-server (incoming files) and piko-sync-client (outgoing files).
  * Same table-of-rows-with-a-drawn-progress-bar technique as pikostore's
  * HistoryTable, which itself draws its (always-disabled) Revert buttons
  * inside draw_cell rather than as real widgets -- see pikostore.cxx's file
@@ -8,15 +8,15 @@
  * for something that is redrawn on every wire update, not clicked.
  */
 
-#ifndef PIKOXFER_TRANSFER_TABLE_H
-#define PIKOXFER_TRANSFER_TABLE_H
+#ifndef PIKO_SYNC_TRANSFER_TABLE_H
+#define PIKO_SYNC_TRANSFER_TABLE_H
 
 #include <FL/Fl_Table.H>
 #include <FL/Enumerations.H>
 
 #include "transfer_queue.h"
 
-namespace pikoxfer {
+namespace piko_sync {
 
 class TransferTable : public Fl_Table {
 public:
@@ -44,6 +44,6 @@ private:
     TransferQueue *queue_;
 };
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKOXFER_TRANSFER_TABLE_H */
+#endif /* PIKO_SYNC_TRANSFER_TABLE_H */

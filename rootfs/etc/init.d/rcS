@@ -161,8 +161,8 @@ insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
 # well past this window).
 mdev -s 2>/dev/null
 
-# pikoxfer-server's deploy staging area (see resolve_staging_dir() in
-# pikoxfer-server.cxx) holds in-flight ".part" files for whatever deploy
+# piko-sync-server's deploy staging area (see resolve_staging_dir() in
+# piko-sync-server.cxx) holds in-flight ".part" files for whatever deploy
 # was running when the device last went down -- a reboot means that
 # deploy session is definitely over, so anything left here is dead
 # weight, not something to resume. Cleared every boot rather than left to

@@ -1,14 +1,14 @@
 /*
- * net_io.h -- thin socket glue shared by pikoxfer-server and
- * pikoxfer-client: setting O_NONBLOCK, sending a whole frame, and reading
+ * net_io.h -- thin socket glue shared by piko-sync-server and
+ * piko-sync-client: setting O_NONBLOCK, sending a whole frame, and reading
  * wlan0's own address. Deliberately NOT covered by tests/protocol-test.cxx
  * -- it is a few lines of syscalls, not logic, same reasoning pikostore
  * has for not testing UpdateDialog's pipe/fork code directly and only
  * testing the parsing behind it (romstate.h).
  */
 
-#ifndef PIKOXFER_NET_IO_H
-#define PIKOXFER_NET_IO_H
+#ifndef PIKO_SYNC_NET_IO_H
+#define PIKO_SYNC_NET_IO_H
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -25,7 +25,7 @@
 
 #include "protocol.h"
 
-namespace pikoxfer {
+namespace piko_sync {
 
 inline void set_nonblock(int fd)
 {
@@ -102,6 +102,6 @@ inline std::string wlan0_address()
     return result;
 }
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKOXFER_NET_IO_H */
+#endif /* PIKO_SYNC_NET_IO_H */

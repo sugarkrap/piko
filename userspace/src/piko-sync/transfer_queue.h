@@ -7,15 +7,15 @@
  * app -- see protocol.h and transfer_state.h.
  */
 
-#ifndef PIKOXFER_TRANSFER_QUEUE_H
-#define PIKOXFER_TRANSFER_QUEUE_H
+#ifndef PIKO_SYNC_TRANSFER_QUEUE_H
+#define PIKO_SYNC_TRANSFER_QUEUE_H
 
 #include <stdint.h>
 
 #include <string>
 #include <vector>
 
-namespace pikoxfer {
+namespace piko_sync {
 
 enum TransferStatus {
     XFER_QUEUED,
@@ -49,7 +49,7 @@ public:
 
     /* Like add(), but reuses an existing row for the same name instead of
      * appending a duplicate. A dropped connection mid-transfer (expected
-     * on this project's known-flaky link -- pikodeploy alone retries a
+     * on this project's known-flaky link -- piko-sync-deploy alone retries a
      * single file up to 30 times) re-offers the identical name on
      * reconnect; without this, every attempt left its own permanent row
      * behind, so a file that needed 3 tries showed up 3 times and its
@@ -117,7 +117,7 @@ private:
  * even get a TransferQueue row. Without an upfront total, the bar reads
  * 100% between files while dozens more are still queued behind it (seen
  * live 2026-08-03). MSG_DEPLOY_BEGIN (protocol.h) carries that upfront
- * total from pikodeploy once, before the first PUT_OFFER; this class is
+ * total from piko-sync-deploy once, before the first PUT_OFFER; this class is
  * just the arithmetic, kept apart from Connection/App so it's covered by
  * tests/protocol-test.cxx without FLTK or a socket. */
 class DeploySession {
@@ -166,6 +166,6 @@ private:
     bool active_;
 };
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKOXFER_TRANSFER_QUEUE_H */
+#endif /* PIKO_SYNC_TRANSFER_QUEUE_H */

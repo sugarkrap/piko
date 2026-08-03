@@ -1,11 +1,11 @@
 /*
  * Host-side tests for protocol.h, transfer_state.h and transfer_queue.h --
  * the wire format, the resume/collision decision, and the row bookkeeping
- * behind both pikoxfer apps' transfer lists.
+ * behind both piko-sync apps' transfer lists.
  *
  * These run on the BUILD machine, with no FLTK, no X, no socket and no
  * device -- same reasoning as pikostore's romstate-test.cxx: this is the
- * only part of pikoxfer that can be exercised before it reaches the one
+ * only part of piko-sync that can be exercised before it reaches the one
  * spare Zaurus, or before a real flaky link is involved at all.
  *
  *   g++ -O2 -Wall -Wextra -o protocol-test tests/protocol-test.cxx && ./protocol-test
@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-using namespace pikoxfer;
+using namespace piko_sync;
 
 static int failures = 0;
 static int checks = 0;
@@ -122,7 +122,7 @@ static void test_message_roundtrips()
 
 static void test_deploy_message_roundtrips()
 {
-    printf("pikodeploy: every new message type round-trips through encode/decode\n");
+    printf("piko-sync-deploy: every new message type round-trips through encode/decode\n");
 
     PutOfferMsg po; po.path = "/boot/zImage-full"; po.total_size = 1234567;
     po.mode = 0755; po.policy = PUT_ALWAYS; po.crc32 = 0xabcd1234u; po.backup = true;
@@ -280,7 +280,7 @@ static void test_frame_reader_desync()
 {
     printf("frame reader: garbage instead of the magic is DESYNC, not a hang\n");
     FrameReader r;
-    std::string garbage = "not a pikoxfer frame at all, just noise....";
+    std::string garbage = "not a piko-sync frame at all, just noise....";
     r.feed(garbage.data(), garbage.size());
 
     uint32_t type = 0;

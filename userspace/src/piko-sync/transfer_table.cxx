@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 
-namespace pikoxfer {
+namespace piko_sync {
 
 static const int COL_NAME = 0;
 static const int COL_STATUS = 1;
@@ -139,4 +139,4 @@ void TransferTable::draw_cell(TableContext ctx, int R, int C,
     }
 }
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */

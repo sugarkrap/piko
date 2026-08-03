@@ -3,19 +3,19 @@ set -eu
 
 # Cross-compiles the stage-2 kernel + all modules with our buildroot
 # toolchain, then deploys the result (zImage + sound modules + WiFi/PCMCIA
-# modules + helper scripts) to a reachable Zaurus by calling pikodeploy
-# (userspace/src/pikodeploy/pikodeploy.cxx). This is the ROUTINE path for
+# modules + helper scripts) to a reachable Zaurus by calling piko-sync-deploy
+# (userspace/src/piko-sync-deploy/piko-sync-deploy.cxx). This is the ROUTINE path for
 # updating the running "home"-partition kernel: no NAND flash, no
 # recovery menu, no reboot to a service menu. See
 # docs/HOWTO-BUILD-DEPLOY-KERNEL.md.
 #
-# pikodeploy replaced tools/chunked-deploy.sh's hand-rolled SSH chunking
+# piko-sync-deploy replaced tools/chunked-deploy.sh's hand-rolled SSH chunking
 # here -- same idea (chunked, resumable, verified transfer) as a real
 # protocol instead of shell driving `ssh`/`cat` pipelines by hand. One
-# consequence worth knowing: it talks to pikoxfer-server over TCP, not
-# SSH, so the device needs pikoxfer-server OPEN (the GUI app, on the
+# consequence worth knowing: it talks to piko-sync-server over TCP, not
+# SSH, so the device needs piko-sync-server OPEN (the GUI app, on the
 # desktop) for a deploy to work at all -- unlike chunked-deploy.sh, which
-# only ever needed dropbear running. See userspace/src/pikodeploy/'s own
+# only ever needed dropbear running. See userspace/src/piko-sync-deploy/'s own
 # README for the wire protocol and manifest.yaml for the actual file list.
 #
 # kernel-src/ itself is reconstructed by flash/setup-kernel-src.sh before
@@ -42,7 +42,7 @@ set -eu
 # --adapter IFACE binds the SSH connection to a specific local network
 # interface (ssh -B), useful when the build machine has multiple network
 # adapters and the Zaurus is only reachable via one of them.
-# --create-backup-files forwards to pikodeploy, which then keeps a
+# --create-backup-files forwards to piko-sync-deploy, which then keeps a
 # "$remote_path.bak" copy of whatever each transferred file replaces.
 # Previously only reachable by invoking chunked-deploy.sh directly -- any
 # flag this script's own arg parser doesn't recognize silently becomes the
@@ -54,7 +54,7 @@ set -eu
 # tracked patch even if kernel-src/ already looks patched -- use this if
 # you've changed one of the tracked patch files under modules/.
 # --kernel-only builds only zImage (skips `make modules`) and forwards
-# --kernel-only to pikodeploy, which then only ships
+# --kernel-only to piko-sync-deploy, which then only ships
 # /boot/zImage-full and skips every module/script/helper deploy step.
 # Faster iteration when you're only touching kernel/.config, e.g. verifying
 # a JFFS2 compressor fix, and don't need to redeploy unchanged modules.
@@ -69,7 +69,7 @@ set -eu
 # --skip-userspace skips building the cross-compiled userspace
 # (tools/build-userspace.sh: md5sum + scp/sftp-server + ALSA + MPlayer + SDL
 # + st + FLTK) and forwards
-# --no-userspace to pikodeploy so it does not ship a stale staged
+# --no-userspace to piko-sync-deploy so it does not ship a stale staged
 # payload either. The userspace build is idempotent and therefore cheap once
 # built, so this is mainly for when the toolchain or a vendored source tree
 # is in a knowingly broken state and you just need the kernel out.
@@ -88,7 +88,7 @@ set -eu
 # --build-only builds everything this script would normally build (kernel,
 # modules, userspace, the X11/Matchbox payload) and then STOPS, without
 # contacting the device at all -- no reachability probe up front and no
-# pikodeploy handoff at the end. No target argument is needed or used.
+# piko-sync-deploy handoff at the end. No target argument is needed or used.
 #
 # That exists because CI has no device to deploy to, and because building
 # and shipping are genuinely separate concerns: without it, the only way to
@@ -102,12 +102,12 @@ set -eu
 # build, the userspace build and the X11/Matchbox build entirely (not even
 # tools/setup-kernel-src.sh's idempotent reconstruction check runs), and
 # deploy whatever is already sitting in kernel-src/ and $PAYLOAD_TAR as-is.
-# Only pikodeploy itself (a small host binary, not the cross-built target)
+# Only piko-sync-deploy itself (a small host binary, not the cross-built target)
 # still gets rebuilt, since it costs nothing and this script cannot
 # deploy without it. Useful for exactly what this project's own live
 # testing kept needing this session: retrying a deploy after fixing
 # something on the DEVICE side (freed NAND space, restarted
-# pikoxfer-server, ...) where nothing that was actually built changed, and
+# piko-sync-server, ...) where nothing that was actually built changed, and
 # sitting through a from-scratch kernel/userspace/X11 rebuild just to
 # resend the same bytes is pure wasted time. Mutually exclusive with
 # --build-only -- one skips the build, the other skips everything BUT the
@@ -190,13 +190,13 @@ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # propagate to; out of scope here.
 export JOBS
 
-# pikodeploy itself needs building before either the probe below or the
+# piko-sync-deploy itself needs building before either the probe below or the
 # final exec can use it -- unlike chunked-deploy.sh, a checked-in script
 # that was simply always there, this is a compiled binary. Plain host
-# g++, no cross toolchain, no FLTK/X11 stage: see tools/build-pikodeploy.sh.
-echo "==> building pikodeploy"
-"$REPO/tools/build-pikodeploy.sh"
-PIKODEPLOY="$REPO/userspace/src/pikodeploy/pikodeploy"
+# g++, no cross toolchain, no FLTK/X11 stage: see tools/build-piko-sync-deploy.sh.
+echo "==> building piko-sync-deploy"
+"$REPO/tools/build-piko-sync-deploy.sh"
+PIKO_SYNC_DEPLOY="$REPO/userspace/src/piko-sync-deploy/piko-sync-deploy"
 
 # --build-only never touches the device, so the probe that exists purely to
 # fail fast before a long build would be both pointless and, in CI, a
@@ -205,19 +205,19 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     echo "==> --build-only: building without contacting any device"
 else
     echo "==> checking $TARGET is reachable before spending time building..."
-    # Not an SSH probe anymore: pikodeploy talks to pikoxfer-server over
+    # Not an SSH probe anymore: piko-sync-deploy talks to piko-sync-server over
     # its own TCP port, not dropbear, so an SSH reachability check would
     # be testing the wrong protocol -- it could pass while the actual
-    # deploy path (pikoxfer-server not open on the device) still fails,
+    # deploy path (piko-sync-server not open on the device) still fails,
     # or fail while a deploy would have worked fine.
     PROBE_ARGS=""
     if [ -n "$ADAPTER" ]; then
         PROBE_ARGS="--adapter $ADAPTER"
     fi
-    if ! "$PIKODEPLOY" $PROBE_ARGS --probe "$TARGET"; then
-        echo "FAILED: $TARGET is not reachable, or pikoxfer-server is not open" >&2
+    if ! "$PIKO_SYNC_DEPLOY" $PROBE_ARGS --probe "$TARGET"; then
+        echo "FAILED: $TARGET is not reachable, or piko-sync-server is not open" >&2
         echo "on the device -- deploy needs it open (unlike the old SSH-based" >&2
-        echo "chunked-deploy.sh). Open pikoxfer-server from the desktop and retry." >&2
+        echo "chunked-deploy.sh). Open piko-sync-server from the desktop and retry." >&2
         echo "If the device is unreachable/unbootable, or you need to change" >&2
         echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
         echo "procedure instead: docs/FLASH-MTD1-MTD3-SAFE.md" >&2
@@ -298,7 +298,7 @@ echo "==> build OK"
 # md5sum used to be deployed first specifically so chunked-deploy.sh could
 # content-verify every later transfer instead of only byte-counting it
 # (silent truncation over this WiFi link is a real, repeatedly-observed
-# failure mode). pikodeploy no longer needs that bootstrap step -- every
+# failure mode). piko-sync-deploy no longer needs that bootstrap step -- every
 # PUT_FILE already carries a whole-file CRC32 the device verifies before
 # finalizing, natively, not via a separately-shipped external tool -- so
 # this is now just "build userspace", not "build userspace, and also
@@ -338,7 +338,7 @@ fi
 # (idempotent -- skips anything already built, so this is cheap on every
 # subsequent run, same as tools/setup-kernel-src.sh/build-userspace.sh
 # above), then tools/build-matchbox-payload.sh collects the result into
-# the single tar pikodeploy extracts locally and ships file-by-file (see
+# the single tar piko-sync-deploy extracts locally and ships file-by-file (see
 # manifest.yaml's x11_matchbox section and manifest.h's header for why
 # individual resumable transfers replaced shipping+unpacking one tar).
 # See docs/HOWTO-MATCHBOX-DESKTOP.md.
@@ -347,7 +347,7 @@ fi
 # machine without the X11 toolchain provisioned should still get a kernel
 # out. What that actually produced was a deploy which printed one warning
 # line, carried on through several minutes of kernel/module transfers, and
-# ended with pikodeploy's cheerful
+# ended with piko-sync-deploy's cheerful
 #
 #     ==> no X11 payload at /tmp/matchbox-payload.tar -- skipping
 #         (build it with tools/build-matchbox-payload.sh)
@@ -424,8 +424,8 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
         echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
     echo ""
-    echo "    Deploy it later with:  userspace/src/pikodeploy/pikodeploy [user@host]"
-    echo "    (pikoxfer-server must be open on the device first)"
+    echo "    Deploy it later with:  userspace/src/piko-sync-deploy/piko-sync-deploy [user@host]"
+    echo "    (piko-sync-server must be open on the device first)"
     exit 0
 fi
 
@@ -441,7 +441,7 @@ fi
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     set -- --kernel-only "$@"
 fi
-# Nothing was built, so don't let pikodeploy ship a stale staged payload.
+# Nothing was built, so don't let piko-sync-deploy ship a stale staged payload.
 if [ "$SKIP_USERSPACE" -eq 1 ]; then
     set -- --no-userspace "$@"
 fi
@@ -450,8 +450,8 @@ if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
 fi
 # The two scripts spell the same file with different variable names --
 # PAYLOAD_TAR when producing it, X11_PAYLOAD when shipping it. Pin them
-# together so overriding the producer cannot leave pikodeploy sending
+# together so overriding the producer cannot leave piko-sync-deploy sending
 # whatever happens to be at the default path instead.
 X11_PAYLOAD="${X11_PAYLOAD:-$X11_PAYLOAD_TAR}"
 export REPO KERNEL_DIR X11_PAYLOAD
-exec "$PIKODEPLOY" "$@"
+exec "$PIKO_SYNC_DEPLOY" "$@"

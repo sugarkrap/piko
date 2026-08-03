@@ -1,0 +1,4 @@
+# Build output. Produced by tools/build-piko-sync.sh; never committed.
+piko-sync-server
+piko-sync-client
+*.o

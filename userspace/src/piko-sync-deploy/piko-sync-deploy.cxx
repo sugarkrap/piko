@@ -1,10 +1,10 @@
 /*
- * pikodeploy -- replaces tools/chunked-deploy.sh's "ship it over SSH"
+ * piko-sync-deploy -- replaces tools/chunked-deploy.sh's "ship it over SSH"
  * job. Plain headless CLI (no FLTK, no GUI event loop -- it's a
  * synchronous, one-thing-at-a-time program, so plain blocking sockets are
- * simpler and sufficient here, unlike pikoxfer-client's FLTK-driven
- * FileSend). Talks to pikoxfer-server (which must already be open on the
- * device) over the same wire protocol pikoxfer's file transfer uses, just
+ * simpler and sufficient here, unlike piko-sync-client's FLTK-driven
+ * FileSend). Talks to piko-sync-server (which must already be open on the
+ * device) over the same wire protocol piko-sync's file transfer uses, just
  * the deploy message set (MSG_PUT_OFFER etc, see protocol.h).
  *
  * Same flag surface chunked-deploy.sh accepts today: --adapter IFACE,
@@ -13,10 +13,10 @@
  * line execs this instead of chunked-deploy.sh -- see that script's own
  * comment at the exec call.
  *
- * WHY A CLEAR "pikoxfer-server isn't open" MESSAGE MATTERS: unlike SSH,
+ * WHY A CLEAR "piko-sync-server isn't open" MESSAGE MATTERS: unlike SSH,
  * which chunked-deploy.sh could always reach as long as dropbear was
  * running, deploy now needs the GUI app open on the device (see
- * manifest.h and the pikodeploy plan) -- a bare connection-refused here
+ * manifest.h and the piko-sync-deploy plan) -- a bare connection-refused here
  * would be a confusing regression from "just works over SSH" without an
  * explicit nudge toward the actual fix.
  */
@@ -38,20 +38,20 @@
 #include <string>
 #include <vector>
 
-#include "../pikoxfer/protocol.h"
-#include "../pikoxfer/net_io.h"
+#include "../piko-sync/protocol.h"
+#include "../piko-sync/net_io.h"
 #include "manifest.h"
 
-using namespace pikoxfer;
-using namespace pikoxfer::deploy;
+using namespace piko_sync;
+using namespace piko_sync::deploy;
 
 static std::string g_adapter;
-static std::string g_host = "10.208.47.2"; /* same default as pikoxfer-client's Transfer tab */
+static std::string g_host = "10.208.47.2"; /* same default as piko-sync-client's Transfer tab */
 /* SD, not NAND: the whole point of this option is that most deploy
  * destinations live on the ~68 MiB NAND root, and staging a transfer's
  * .part there defeats the purpose of having a separate staging area at
  * all whenever a card is available -- see resolve_staging_dir() in
- * pikoxfer-server.cxx. Falls back to whatever the user picks explicitly
+ * piko-sync-server.cxx. Falls back to whatever the user picks explicitly
  * (--staging nand) when no card is in. */
 static uint32_t g_staging = STAGE_SD;
 static int g_port = static_cast<int>(DEFAULT_PORT);
@@ -99,7 +99,7 @@ static int connect_blocking(std::string &error)
             local.sin_addr = local_addr;
             bind(fd, reinterpret_cast<struct sockaddr *>(&local), sizeof(local)); /* best effort */
         } else {
-            fprintf(stderr, "pikodeploy: warning: no IPv4 address found on interface %s\n",
+            fprintf(stderr, "piko-sync-deploy: warning: no IPv4 address found on interface %s\n",
                     g_adapter.c_str());
         }
     }
@@ -128,7 +128,7 @@ static int connect_blocking(std::string &error)
 
     if (connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
         error = std::string("connect to ") + g_host + " failed: " + strerror(errno)
-                + " (is pikoxfer-server open on the device?)";
+                + " (is piko-sync-server open on the device?)";
         close(fd);
         return -1;
     }
@@ -177,7 +177,7 @@ static bool do_hello(int fd, FrameReader &reader, std::string &error)
 
 /* One connection, one request/response -- used by mkdir/symlink/run/
  * query_existing/free_space, all cheap enough that a fresh connection per
- * call costs nothing that matters (see pikoxfer-server.cxx's Connection
+ * call costs nothing that matters (see piko-sync-server.cxx's Connection
  * class header comment for why one-op-per-connection was kept simple
  * rather than a request loop). */
 static bool simple_request(uint32_t req_type, const std::string &req_payload,
@@ -208,7 +208,7 @@ static bool simple_request(uint32_t req_type, const std::string &req_payload,
 /* ---------------------------------------------------------------------- *
  * Chunked, resumable file transfer -- the client side of MSG_PUT_OFFER.   *
  * Retries with backoff across a dropped connection (reconnect + re-offer *
- * -> server reports how far it already got), same resilience pikoxfer's  *
+ * -> server reports how far it already got), same resilience piko-sync's  *
  * plain file transfer already proved live.                                *
  * ---------------------------------------------------------------------- */
 
@@ -438,7 +438,7 @@ static bool execute_step(const Step &s, std::string &error)
 
     case STEP_EXTRACT_TAR_TREE: {
         printf("==> X11/Matchbox payload (%s)\n", s.local_tar_path.c_str());
-        char tmpl[] = "/tmp/pikodeploy-x11.XXXXXX";
+        char tmpl[] = "/tmp/piko-sync-deploy-x11.XXXXXX";
         if (!mkdtemp(tmpl)) { error = "mkdtemp failed"; return false; }
         std::string tmpdir = tmpl;
         if (!run_tar(s.local_tar_path, tmpdir)) {
@@ -541,14 +541,38 @@ static void append_mplayer_and_sdl_steps(const DeployContext &ctx, std::vector<S
 static bool g_dry_run = false;
 static bool g_probe = false;
 
+struct AdHocPut {
+    std::string local_path, remote_path;
+    uint32_t mode;
+};
+/* --put LOCAL:REMOTE[:MODE], repeatable -- an escape hatch out of
+ * manifest.yaml for exactly the case that doesn't belong there: shipping
+ * one specific file to one specific path right now, the same way
+ * piko-sync-client's Transfer tab already lets you drop an arbitrary file
+ * on the device, except this goes through PUT_OFFER (an absolute
+ * destination + resume + CRC verify + atomic same-fs rename) instead of
+ * FILE_OFFER (a collision-resolved name under /mnt/card/Transfers). Same
+ * "local:remote:mode" shape manifest.h's put_tree_from_list already
+ * parses, for one less format to remember. */
+static std::vector<AdHocPut> g_ad_hoc_puts;
+
 static void usage()
 {
     fprintf(stderr,
-        "Usage: pikodeploy [--adapter IFACE] [--kernel-only] [--no-userspace]\n"
+        "Usage: piko-sync-deploy [--adapter IFACE] [--kernel-only] [--no-userspace]\n"
         "                   [--create-backup-files] [--replace-dropbear]\n"
-        "                   [--staging nand|sd|cf] [--dry-run] [--probe] [user@host]\n"
+        "                   [--staging nand|sd|cf] [--dry-run] [--probe]\n"
+        "                   [--put LOCAL:REMOTE[:MODE] ...] [user@host]\n"
         "\n"
-        "--staging chooses where pikoxfer-server stages each file's .part while\n"
+        "--put LOCAL:REMOTE[:MODE] ships exactly that one file to that one\n"
+        "absolute path, bypassing manifest.yaml entirely -- repeat --put for more\n"
+        "than one file in the same run. MODE is an octal permission string, e.g.\n"
+        "0755; omit it to keep LOCAL's own permission bits. Still goes through\n"
+        "the resilient PUT_OFFER protocol (resume, CRC verify, --staging,\n"
+        "--create-backup-files all apply), just without needing a manifest entry\n"
+        "or a full deploy plan for a one-off file.\n"
+        "\n"
+        "--staging chooses where piko-sync-server stages each file's .part while\n"
         "it's being received -- NOT where it ends up (that's each file's own\n"
         "destination, from manifest.yaml). Default sd: most deploy destinations\n"
         "live on the ~68 MiB NAND root, so staging there too would risk the exact\n"
@@ -559,11 +583,11 @@ static void usage()
         "\n"
         "--dry-run builds and prints the deploy plan (every put_file/mkdir/symlink/\n"
         "run step, in order) without connecting to the device at all -- useful to\n"
-        "preview what a run would do, and needs no pikoxfer-server open anywhere.\n"
+        "preview what a run would do, and needs no piko-sync-server open anywhere.\n"
         "\n"
         "--probe just connects and does the HELLO handshake, then exits 0 or 1 --\n"
         "no manifest, no repo tree needed. build-and-deploy.sh uses this to fail\n"
-        "fast, before spending time building, if pikoxfer-server isn't open on\n"
+        "fast, before spending time building, if piko-sync-server isn't open on\n"
         "the device.\n");
 }
 
@@ -597,7 +621,7 @@ static int run_probe()
         return 1;
     }
     close(fd);
-    printf("%s:%d is reachable and speaking the pikoxfer protocol.\n", g_host.c_str(), g_port);
+    printf("%s:%d is reachable and speaking the piko-sync protocol.\n", g_host.c_str(), g_port);
     return 0;
 }
 
@@ -609,7 +633,7 @@ int main(int argc, char **argv)
     char cwd[4096];
     if (getcwd(cwd, sizeof(cwd)))
         ctx.repo = cwd;
-    if (const char *root = getenv("PIKOXFER_REPO_ROOT"))
+    if (const char *root = getenv("PIKO_SYNC_REPO_ROOT"))
         if (*root) ctx.repo = root;
 
     for (int i = 1; i < argc; i++) {
@@ -625,18 +649,37 @@ int main(int argc, char **argv)
             else if (v == "sd") g_staging = STAGE_SD;
             else if (v == "cf") g_staging = STAGE_CF;
             else {
-                fprintf(stderr, "pikodeploy: --staging must be nand, sd, or cf (got \"%s\")\n", v.c_str());
+                fprintf(stderr, "piko-sync-deploy: --staging must be nand, sd, or cf (got \"%s\")\n", v.c_str());
                 return 1;
             }
         }
         else if (a == "--dry-run") { g_dry_run = true; }
         else if (a == "--probe") { g_probe = true; }
+        else if (a == "--put" && i + 1 < argc) {
+            std::string v = argv[++i];
+            std::string::size_type c1 = v.find(':');
+            std::string::size_type c2 = (c1 == std::string::npos) ? std::string::npos : v.find(':', c1 + 1);
+            if (c1 == std::string::npos) {
+                fprintf(stderr, "piko-sync-deploy: --put needs LOCAL:REMOTE[:MODE] (got \"%s\")\n", v.c_str());
+                return 1;
+            }
+            AdHocPut p;
+            p.local_path = v.substr(0, c1);
+            p.remote_path = (c2 == std::string::npos) ? v.substr(c1 + 1) : v.substr(c1 + 1, c2 - c1 - 1);
+            if (c2 != std::string::npos) {
+                p.mode = parse_mode(v.substr(c2 + 1));
+            } else {
+                struct stat st;
+                p.mode = (stat(p.local_path.c_str(), &st) == 0) ? (st.st_mode & 0777) : 0644;
+            }
+            g_ad_hoc_puts.push_back(p);
+        }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (!a.empty() && a[0] != '-') {
             std::string::size_type at = a.find('@');
             g_host = (at == std::string::npos) ? a : a.substr(at + 1);
         } else {
-            fprintf(stderr, "pikodeploy: unknown option %s\n", a.c_str());
+            fprintf(stderr, "piko-sync-deploy: unknown option %s\n", a.c_str());
             usage();
             return 1;
         }
@@ -644,6 +687,57 @@ int main(int argc, char **argv)
 
     if (g_probe)
         return run_probe();
+
+    if (!g_ad_hoc_puts.empty()) {
+        const char *staging_name = g_staging == STAGE_SD ? "sd" : g_staging == STAGE_CF ? "cf" : "nand";
+        std::vector<Step> plan;
+        uint64_t total_bytes = 0;
+        for (size_t i = 0; i < g_ad_hoc_puts.size(); i++) {
+            Step s;
+            s.type = STEP_PUT_FILE;
+            s.local_path = g_ad_hoc_puts[i].local_path;
+            s.remote_path = g_ad_hoc_puts[i].remote_path;
+            s.mode = g_ad_hoc_puts[i].mode;
+            s.policy = PUT_ALWAYS;
+            s.backup = ctx.flags.create_backup_files;
+            plan.push_back(s);
+
+            struct stat st;
+            if (stat(s.local_path.c_str(), &st) == 0)
+                total_bytes += static_cast<uint64_t>(st.st_size);
+        }
+
+        if (g_dry_run) {
+            printf("%zu step(s) (dry run -- not connecting to %s:%d, staging=%s)\n",
+                   plan.size(), g_host.c_str(), g_port, staging_name);
+            for (size_t i = 0; i < plan.size(); i++)
+                printf("%s\n", describe_step(plan[i]).c_str());
+            return 0;
+        }
+
+        printf("Target: %s:%d (staging=%s)\n", g_host.c_str(), g_port, staging_name);
+        printf("%zu step(s) to run\n", plan.size());
+
+        {
+            DeployBeginMsg begin;
+            begin.total_bytes = total_bytes;
+            std::string resp, begin_error;
+            if (!simple_request(MSG_DEPLOY_BEGIN, encode(begin), MSG_DEPLOY_BEGIN_ACK, resp, begin_error))
+                fprintf(stderr, "  (note: could not announce deploy size to the server: %s)\n",
+                        begin_error.c_str());
+        }
+
+        std::string error;
+        for (size_t i = 0; i < plan.size(); i++) {
+            if (!execute_step(plan[i], error)) {
+                fprintf(stderr, "FAILED: %s\n", error.c_str());
+                return 1;
+            }
+        }
+
+        printf("\nAll file(s) deployed and verified.\n");
+        return 0;
+    }
 
     ctx.kernel_dir = ctx.repo + "/kernel-src/linux-7.1.4";
     ctx.ssh_stage = ctx.repo + "/userspace/stage-ssh";
@@ -667,28 +761,28 @@ int main(int argc, char **argv)
     }
 
     if (!path_exists(ctx.kernel_dir + "/arch/arm/boot/zImage")) {
-        fprintf(stderr, "pikodeploy: expected built kernel image missing under %s\n", ctx.kernel_dir.c_str());
-        fprintf(stderr, "Run tools/build-and-deploy.sh (which builds first), or set PIKOXFER_REPO_ROOT.\n");
+        fprintf(stderr, "piko-sync-deploy: expected built kernel image missing under %s\n", ctx.kernel_dir.c_str());
+        fprintf(stderr, "Run tools/build-and-deploy.sh (which builds first), or set PIKO_SYNC_REPO_ROOT.\n");
         return 1;
     }
 
-    std::string manifest_path = ctx.repo + "/userspace/src/pikodeploy/manifest.yaml";
+    std::string manifest_path = ctx.repo + "/userspace/src/piko-sync-deploy/manifest.yaml";
     std::string manifest_text;
     if (!read_whole_file(manifest_path, manifest_text)) {
-        fprintf(stderr, "pikodeploy: cannot read %s\n", manifest_path.c_str());
+        fprintf(stderr, "piko-sync-deploy: cannot read %s\n", manifest_path.c_str());
         return 1;
     }
     std::vector<yaml::Section> sections;
     std::string error;
     if (!yaml::parse(manifest_text, sections, error)) {
-        fprintf(stderr, "pikodeploy: %s\n", error.c_str());
+        fprintf(stderr, "piko-sync-deploy: %s\n", error.c_str());
         return 1;
     }
 
     std::vector<std::string> which = select_sections(ctx.flags);
     std::vector<Step> plan;
     if (!build_plan(sections, which, ctx, plan, error)) {
-        fprintf(stderr, "pikodeploy: %s\n", error.c_str());
+        fprintf(stderr, "piko-sync-deploy: %s\n", error.c_str());
         return 1;
     }
 

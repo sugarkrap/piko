@@ -1,10 +1,10 @@
 /*
- * pikoxfer-client -- runs on the host. Two unrelated jobs share one
+ * piko-sync-client -- runs on the host. Two unrelated jobs share one
  * window because they are both "things you do while iterating against
- * the one spare Zaurus": queuing files to a running pikoxfer-server, and
+ * the one spare Zaurus": queuing files to a running piko-sync-server, and
  * triggering the existing tools/build-and-deploy.sh. FLTK 1.3, built
- * against the HOST's own FLTK (see the pikoxfer Makefile), not the
- * cross-compiled/staged one pikoxfer-server uses.
+ * against the HOST's own FLTK (see the piko-sync Makefile), not the
+ * cross-compiled/staged one piko-sync-server uses.
  *
  * DESIGN NOTES THAT ARE NOT OBVIOUS
  *
@@ -73,7 +73,7 @@
 #include "transfer_table.h"
 #include "net_io.h"
 
-using namespace pikoxfer;
+using namespace piko_sync;
 
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
 
@@ -334,7 +334,7 @@ void FileSend::terminate(TransferStatus status, const std::string &detail, bool 
         app_->schedule_retry(file_index_);
     app_->forget_attempt(this);
 
-    /* Deferred for the same reason as pikoxfer-server's Connection: this
+    /* Deferred for the same reason as piko-sync-server's Connection: this
      * call is frequently still on the stack of one of this object's own
      * member functions. */
     Fl::add_timeout(0.0, deferred_delete_cb, this);
@@ -698,8 +698,8 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     /* SD first (default): most deploy destinations live on the ~68 MiB
      * NAND root, so staging there too risks the exact ENOSPC problem
      * chunked-deploy.sh's REMOTE_STAGE fix solved, just for deploy
-     * instead of plain transfer -- see pikodeploy's own --staging
-     * default and pikoxfer-server.cxx's resolve_staging_dir(). CF is
+     * instead of plain transfer -- see piko-sync-deploy's own --staging
+     * default and piko-sync-server.cxx's resolve_staging_dir(). CF is
      * listed but disabled: real CF mounting does not exist anywhere in
      * this ROM yet (no mdev rule, no confirmed driver), so it would be a
      * selectable option that silently can't work. */
@@ -744,7 +744,7 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
 
 std::string BuildRunner::script_path() const
 {
-    const char *root = getenv("PIKOXFER_REPO_ROOT");
+    const char *root = getenv("PIKO_SYNC_REPO_ROOT");
     std::string base = root && *root ? root : ".";
     return base + "/tools/build-and-deploy.sh";
 }
@@ -924,8 +924,8 @@ void BuildRunner::do_run()
 
     struct stat st;
     if (stat(args[0].c_str(), &st) != 0) {
-        fl_alert("Cannot find %s.\nRun pikoxfer-client from the piko repo root,\n"
-                 "or set PIKOXFER_REPO_ROOT.", args[0].c_str());
+        fl_alert("Cannot find %s.\nRun piko-sync-client from the piko repo root,\n"
+                 "or set PIKO_SYNC_REPO_ROOT.", args[0].c_str());
         return;
     }
 
@@ -961,7 +961,7 @@ void BuildRunner::do_run()
         argv.push_back(0);
 
         execv(argv[0], &argv[0]);
-        fprintf(stderr, "pikoxfer-client: cannot run %s: %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "piko-sync-client: cannot run %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
 
@@ -1072,7 +1072,7 @@ int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
 
-    Fl_Double_Window win(720, 520, "pikoxfer");
+    Fl_Double_Window win(720, 520, "Piko Sync");
     win.begin();
 
     Fl_Tabs tabs(0, 0, 720, 520);

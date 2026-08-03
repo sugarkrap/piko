@@ -79,7 +79,7 @@ kernel/lib/crypto/libarc4.ko
 # and CONFIG_VFAT_FS are =y, not =m, so fs/fat/fat.ko and fs/fat/vfat.ko
 # never exist as separate files to begin with (their objects link straight
 # into the kernel image; see fs/fat/Makefile's fat-y/vfat-y). Listing them
-# here used to make pikodeploy/chunked-deploy.sh fail outright trying to
+# here used to make piko-sync-deploy/chunked-deploy.sh fail outright trying to
 # read a .ko that was never built (found 2026-08-03, deploy died on this
 # exact entry). Only CONFIG_MSDOS_FS stayed =m, and nothing on this device
 # mounts plain msdosfs (real cards are vfat), so msdos.ko is intentionally

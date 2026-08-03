@@ -1,4 +1,4 @@
-# pikodeploy's manifest -- the file list that used to live inline in
+# piko-sync-deploy's manifest -- the file list that used to live inline in
 # tools/chunked-deploy.sh, now data instead of shell control flow so it can
 # be edited without touching (or recompiling) any code. Parsed by
 # yaml_lite.h into sections; manifest.cxx decides which sections run for a

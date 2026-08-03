@@ -4,7 +4,7 @@
  * tracked manifest.yaml (not a copy), so a change to either the parser,
  * the interpreter, or the manifest itself that breaks the expected plan
  * is caught here before it ever reaches the one spare Zaurus. No sockets,
- * no FLTK, no device -- same reasoning as pikoxfer's own
+ * no FLTK, no device -- same reasoning as piko-sync's own
  * tests/protocol-test.cxx.
  *
  *   g++ -O2 -Wall -Wextra -I.. -o manifest-test tests/manifest-test.cxx && ./manifest-test
@@ -20,8 +20,8 @@
 #include <fstream>
 #include <string>
 
-using namespace pikoxfer;
-using namespace pikoxfer::deploy;
+using namespace piko_sync;
+using namespace piko_sync::deploy;
 
 static int failures = 0;
 static int checks = 0;

@@ -1,6 +1,6 @@
 /*
  * transfer_state.h -- the server's decision logic for "what happens when
- * this filename+size gets offered", kept apart from pikoxfer-server.cxx
+ * this filename+size gets offered", kept apart from piko-sync-server.cxx
  * so it can be exercised without a socket, a listener or a filesystem --
  * see tests/protocol-test.cxx. Same split as pikostore's romstate.h.
  *
@@ -10,7 +10,7 @@
  * THAT IS STILL RUNNING -- surviving a server restart is out of scope
  * (matches the SFTP/scp status quo this replaces, which offers no resume
  * at all). Within one run, the map below is the only place "this
- * .pikoxfer-part on disk was promised to be N bytes total" is recorded,
+ * .piko-sync-part on disk was promised to be N bytes total" is recorded,
  * since a partial file's own size on disk tells you how far it got, not
  * how far it is supposed to go. Keying by (original_name, total_size)
  * rather than original_name alone is what lets two unrelated files that
@@ -19,8 +19,8 @@
  * second clobbering the first's resume state.
  */
 
-#ifndef PIKOXFER_TRANSFER_STATE_H
-#define PIKOXFER_TRANSFER_STATE_H
+#ifndef PIKO_SYNC_TRANSFER_STATE_H
+#define PIKO_SYNC_TRANSFER_STATE_H
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-namespace pikoxfer {
+namespace piko_sync {
 
 struct TransferRecord {
     std::string final_name;
@@ -90,7 +90,7 @@ inline std::string resolve_collision(const std::string &name,
     }
 }
 
-/* The one entry point pikoxfer-server.cxx calls on FILE_OFFER. Inserts a
+/* The one entry point piko-sync-server.cxx calls on FILE_OFFER. Inserts a
  * fresh record into `map` for a never-seen (name, total_size), or
  * returns the existing record's resume point unchanged. Mutates `map` in
  * place rather than returning a copy, since the record needs to keep
@@ -120,6 +120,6 @@ inline OfferDecision decide_offer(TransferMap &map,
     return d;
 }
 
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKOXFER_TRANSFER_STATE_H */
+#endif /* PIKO_SYNC_TRANSFER_STATE_H */

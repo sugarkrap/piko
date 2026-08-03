@@ -1,4 +1,0 @@
-# Build output. Produced by tools/build-pikoxfer.sh; never committed.
-pikoxfer-server
-pikoxfer-client
-*.o

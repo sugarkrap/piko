@@ -1,12 +1,12 @@
 /*
  * manifest.h -- turns manifest.yaml + a DeployContext (flags, computed
- * paths) into an ordered list of Steps for pikodeploy to execute. Header-
+ * paths) into an ordered list of Steps for piko-sync-deploy to execute. Header-
  * only, same convention as protocol.h/transfer_state.h/transfer_queue.h:
  * no sockets, no FLTK, just libc/POSIX (stat/opendir, for reading the
  * local build tree) and standard containers, so it is exercised by
  * tests/manifest-test.cxx against a fixture directory standing in for the
- * repo -- the only part of pikodeploy provable before it reaches the one
- * spare Zaurus's pikoxfer-server.
+ * repo -- the only part of piko-sync-deploy provable before it reaches the one
+ * spare Zaurus's piko-sync-server.
  *
  * WHAT STAYS DYNAMIC, NOT DECLARED IN manifest.yaml (see that file's own
  * header too):
@@ -25,13 +25,13 @@
  *   - MPlayer's destination and the whole section's preflight free-space
  *     check are NOT in this header: they need a live connection to ask the
  *     device its free space (MSG_FREE_SPACE) and a verified SD-card-mount
- *     check (MSG_RUN/RUN_MOUNT_SD_CARD) -- pikodeploy.cxx computes those
+ *     check (MSG_RUN/RUN_MOUNT_SD_CARD) -- piko-sync-deploy.cxx computes those
  *     right before executing the userspace_media section and splices the
  *     resulting put_file steps in.
  */
 
-#ifndef PIKODEPLOY_MANIFEST_H
-#define PIKODEPLOY_MANIFEST_H
+#ifndef PIKO_SYNC_DEPLOY_MANIFEST_H
+#define PIKO_SYNC_DEPLOY_MANIFEST_H
 
 #include <dirent.h>
 #include <stdio.h>
@@ -44,9 +44,9 @@
 #include <vector>
 
 #include "yaml_lite.h"
-#include "../pikoxfer/protocol.h"
+#include "../piko-sync/protocol.h"
 
-namespace pikoxfer {
+namespace piko_sync {
 namespace deploy {
 
 struct DeployFlags {
@@ -91,7 +91,7 @@ enum StepType {
     STEP_MKDIR,
     STEP_SYMLINK,
     STEP_RUN,
-    /* Not executed directly -- pikodeploy.cxx sees this in the plan,
+    /* Not executed directly -- piko-sync-deploy.cxx sees this in the plan,
      * extracts local_tar_path with a live `tar` invocation to a temp
      * dir, then calls put_files_from_tree() to expand it into real
      * STEP_PUT_FILE steps spliced in at this point. Kept as an explicit
@@ -275,7 +275,7 @@ inline bool put_files_from_dir(const std::string &local_dir, const std::string &
 /* Recursively walks `local_dir`, emitting a put_file step for every
  * regular file found, with its remote path mirroring the local relative
  * path under `remote_base` and its own local permission bits preserved.
- * Used for the X11/Matchbox tree once extract_tar_tree (in pikodeploy.cxx,
+ * Used for the X11/Matchbox tree once extract_tar_tree (in piko-sync-deploy.cxx,
  * which actually shells out to `tar`) has unpacked it locally -- kept
  * separate from that extraction step specifically so this walk, the part
  * with real logic, is testable against a plain fixture directory with no
@@ -485,7 +485,7 @@ inline bool build_plan(const std::vector<yaml::Section> &sections,
                     return false;
 
             } else if (type == "put_tar_tree") {
-                /* Handled by pikodeploy.cxx (needs a live `tar` extraction
+                /* Handled by piko-sync-deploy.cxx (needs a live `tar` extraction
                  * to a temp dir) -- build_plan leaves a marker step so the
                  * caller knows exactly where in the ordered plan to splice
                  * the result of put_files_from_tree() in. */
@@ -506,6 +506,6 @@ inline bool build_plan(const std::vector<yaml::Section> &sections,
 }
 
 } /* namespace deploy */
-} /* namespace pikoxfer */
+} /* namespace piko_sync */
 
-#endif /* PIKODEPLOY_MANIFEST_H */
+#endif /* PIKO_SYNC_DEPLOY_MANIFEST_H */
