@@ -320,9 +320,15 @@ done
 # desktop at all -- matchbox-desktop only reads the /usr/share/applications
 # this payload deploys. That is independent of where the BINARY comes from:
 # pikalibrate's ships via tools/chunked-deploy.sh's SDL section (it links
-# libSDL, not this X11 stack), while st, xev, toasters, pikostore and
+# libSDL, not this X11 stack), while st, xev, pikostore and
 # mb-wallpaper-picker ship from this payload. Only the launcher and icon
 # belong here either way.
+#
+# toasters has no launcher here on purpose: it is brightd's idle
+# screensaver, not a user-facing app, and shipping a menu entry only
+# invited someone to launch it by hand (see toasters.desktop's own
+# now-removed Comment=). The TOASTERS_BIN above still ships -- brightd execs
+# it directly, with no .desktop involved.
 #
 # The Categories= line in each file picks which app-folder it lands in:
 # Development matches the vfolder displayed as "Programming", System
@@ -365,7 +371,7 @@ done
 # Those scripts ship via tools/chunked-deploy.sh, not from here; as with
 # pikalibrate, only the launcher and icon belong in this payload.
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="piko-settings pikalibrate pikostore found-file-browser mb-wallpaper-picker toasters suspend reboot gototty"
+LAUNCHERS="piko-settings pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else
