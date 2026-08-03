@@ -33,6 +33,8 @@
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Progress.H>
+#include <FL/Fl_Image.H>
+#include <FL/Fl_Pixmap.H>
 
 #include <dirent.h>
 #include <errno.h>
@@ -56,6 +58,7 @@
 #include "transfer_queue.h"
 #include "transfer_table.h"
 #include "net_io.h"
+#include "icon_xpm.h"
 
 using namespace piko_sync;
 
@@ -1325,6 +1328,15 @@ int main(int argc, char **argv)
     ServerApp app(0, 0, 640, 480);
     win.end();
     win.resizable(app.resizable_widget());
+
+    /* Static so both outlive this function -- Fl_Window::icon() keeps a
+     * pointer, not a copy, and the window stays alive for the rest of the
+     * program via Fl::run() below. See icon_xpm.h for why this is XPM,
+     * not a PNG loaded from a shipped file. */
+    static Fl_Pixmap icon_pixmap(piko_sync_icon_xpm);
+    static Fl_RGB_Image icon_img(&icon_pixmap);
+    win.icon(&icon_img);
+
     win.show(argc, argv);
 
     return Fl::run();
