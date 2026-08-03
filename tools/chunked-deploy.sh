@@ -553,6 +553,20 @@ else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
 
+# 6a1. Boot splash (stage-2 half): the blitter and the picture it draws.
+# Kept in sync with flash/build-update-package.sh's STANDALONE_TOOLS list --
+# same binary, same destination, so the live path and the package path put
+# it in the same place. The asset is a raw RGB565 dump of the whole screen;
+# see docs/HOWTO-BOOT-SPLASH.md for why it is raw and not a PPM.
+if [ -f "$REPO/userspace/src/piko-splash" ]; then
+    send_file "$REPO/userspace/src/piko-splash" "/usr/sbin/piko-splash"
+    ssh_do "chmod 0755 /usr/sbin/piko-splash"
+    ssh_do "mkdir -p /usr/share/piko"
+    send_file "$REPO/rootfs/usr/share/piko/splash.raw" "/usr/share/piko/splash.raw"
+else
+    echo "==> skipping piko-splash (not built -- run tools/build-userspace.sh)"
+fi
+
 # 6a2. CPU speed / overclocking: the "mhz" helper, single-word for the same
 # typing constraint as "bright" above. It reloads pxa2xx-cpufreq to change
 # the overclock ceiling, so it needs no daemon and nothing at boot -- the

@@ -1,12 +1,73 @@
 #!/bin/sh
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
+# devtmpfs first, and on its own: /dev/fb0 has to exist before anything can
+# be drawn, and the splash is meant to be the first thing on the panel.
+# /proc and /sys are not needed to draw, so they wait their turn below.
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
 
-# Rebind stdio to the real console now that /dev exists (PID 1 starts with
-# no controlling TTY -> stdio is fully-buffered and output stays invisible
-# until exec time otherwise).
-exec > /dev/tty0 2>&1
+# Light the panel before drawing on it.
+#
+# The bootstrap owns this now. It did not used to: the panel was stage 2's
+# problem, so stage 1 could blit all it liked into a framebuffer nobody was
+# lit to see -- fbsplash would map /dev/fb0, write 921600 bytes, exit 0, and
+# leave the screen dark. FB_W100 being built in is not the same thing as the
+# panel being on.
+#
+# What was actually missing was CONFIG_SPI_PXA2XX. corgi_lcd is an SPI
+# *device* (it drives the Sharp LCDTG and registers the "corgi_bl"
+# backlight, see drivers/video/backlight/corgi_lcd.c); with no PXA2xx SPI
+# master there is no bus for it to probe on, so the timing generator is
+# never programmed and the backlight never comes up. LCD_CORGI and
+# BACKLIGHT_CLASS_DEVICE were already enabled here -- the driver was
+# compiled in the whole time, just never probed.
+#
+# Brightness is set to the panel's own maximum rather than a fixed number:
+# max_brightness is 47 on this hardware, but reading it keeps this correct
+# if that ever changes. Stage 2 takes brightness policy over within
+# seconds (see docs/HOWTO-BRIGHTNESS.md), so this only governs the splash.
+for bl in /sys/class/backlight/*/; do
+	if test -f "$bl/max_brightness"; then
+		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
+		echo 0 > "$bl/bl_power" 2>/dev/null
+	fi
+done
+
+# The splash, before any output that could scroll across it.
+#
+# fbsplash blits a plain binary PPM at IMG_LEFT/IMG_TOP (0,0 here) with no
+# scaling and no clear-first, so modules/initramfs/splash.ppm is
+# pre-composited to the whole 640x480 panel -- white field, artwork centred.
+# One blit paints the entire screen; see tools/make-splash.py for how that
+# asset is built and why it is palettised.
+#
+# Deliberately non-fatal and deliberately quiet: a bootstrap that cannot
+# draw a picture must still boot. If /dev/fb0 is missing or the panel is not
+# up, we lose the splash, not the machine.
+/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
+SPLASH_RC=$?
+
+mount -t proc proc /proc
+
+# Keep the splash on screen for a boot that works.
+#
+# This used to be `exec > /dev/tty0 2>&1` -- PID 1 starts with no
+# controlling TTY, so stdio is fully buffered and output stays invisible
+# until exec time otherwise. That reasoning still holds; all that changes is
+# *where* stdio gets rebound. Normal-path chatter now goes to a buffer file
+# so it does not scroll over the picture we just drew, and console_fallback
+# puts it all back the instant anything goes wrong. A boot that fails is
+# exactly as debuggable at the console as it was before the splash existed,
+# which matters -- that console is the only diagnostic channel this board
+# has.
+BOOTLOG=/tmp/bootstrap.log
+exec > "$BOOTLOG" 2>&1
+
+# Give the console back and replay everything buffered so far. Called on
+# every path that is about to give up and hand over to a human.
+console_fallback() {
+	exec > /dev/tty0 2>&1
+	cat "$BOOTLOG" 2>/dev/null
+}
 
 export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
@@ -23,6 +84,18 @@ LOG=/mnt/home/debug.log
 
 if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 	echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG"
+
+	# First durable record of whether the splash actually drew. Everything
+	# stage 1 prints on the normal path goes to a tmpfs buffer that the
+	# kexec destroys, so without this there is no way to tell "fbsplash
+	# failed" from "fbsplash worked and you blinked" -- the two look
+	# identical from the far side of a reboot. This is the first line
+	# written once /mnt/home is actually writable.
+	echo "fbsplash rc=$SPLASH_RC" >> "$LOG"
+	if test -s /tmp/fbsplash.err; then
+		echo "fbsplash stderr:" >> "$LOG"
+		cat /tmp/fbsplash.err >> "$LOG"
+	fi
 
 	# JFFS2's background scan/GC keeps processing nodes after mount()
 	# returns, so a nested-path test -f can briefly fail. Poll (quietly)
@@ -42,7 +115,7 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 	echo "--- kexec -d -l output ---"
 	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
 		--atags \
-		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw" \
+		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw quiet" \
 		> /tmp/kexec-l.out 2>&1
 	KEXEC_LOAD_RC=$?
 	cat /tmp/kexec-l.out
@@ -55,9 +128,11 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 		sync
 		exec /mnt/home/sbin/kexec -e
 	fi
+	console_fallback
 	echo "kexec load failed -- dropping to bootstrap shell"
 	echo "kexec load failed" >> "$LOG"
 else
+	console_fallback
 	echo "home mount failed" >&2
 fi
 

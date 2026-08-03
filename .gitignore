@@ -104,7 +104,17 @@ rootfs/boot/
 rootfs/bin/
 rootfs/sbin/
 rootfs/usr/bin/
-rootfs/usr/share/
+# Contents rather than the directory itself: git never descends into an
+# excluded directory, so "rootfs/usr/share/" would make the negation below
+# impossible to express.
+rootfs/usr/share/*
+# ...the exception being the boot splash asset. It is not a copied-in
+# artifact rebuilt from something else on the machine -- it is generated art
+# (tools/make-splash.py, from modules/initramfs/splash-src.png) and this is
+# the only copy. flash/build-update-package.sh ships rootfs/ by walking the
+# disk, so leaving it untracked would work locally and silently produce a
+# splash-less package in CI or from a fresh clone.
+!rootfs/usr/share/piko/
 rootfs/home/
 # Not a bare "rootfs/root/" (trailing-slash directory excludes block git
 # from ever descending into the directory at all, so a child can never be
@@ -218,6 +228,11 @@ userspace/src/mhz
 # cardswap: same rule -- tracked source is cardswap.c, rebuilt by
 # tools/build-userspace.sh and shipped by tools/chunked-deploy.sh.
 userspace/src/cardswap
+# piko-splash: same rule -- tracked source is piko-splash.c, rebuilt by
+# tools/build-userspace.sh. NB the *asset* it draws
+# (rootfs/usr/share/piko/splash.raw) IS tracked: it is generated art, not a
+# build product, and the rootfs/ overlay ships verbatim.
+userspace/src/piko-splash
 # toasters is an ARM target binary too, same rule -- tracked source is
 # toasters.c, tools/build-toasters.sh (via tools/build-userspace.sh) rebuilds it.
 userspace/src/toasters

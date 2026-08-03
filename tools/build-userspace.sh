@@ -217,6 +217,26 @@ else
     echo "==> skipping brightd (no $BRIGHTD_SRC)"
 fi
 
+# --- 1b1. piko-splash (stage-2 half of the boot splash) ---------------------
+# Static, libc only. Exists because this rootfs cannot draw the splash any
+# other way: its busybox has no fbsplash applet and no gzip, and w100fb has
+# no usable write() path, so `cat splash.raw > /dev/fb0` fails with EINVAL.
+# mmap is the only route -- see the header in piko-splash.c.
+PIKO_SPLASH_SRC="$REPO/userspace/src/piko-splash.c"
+PIKO_SPLASH_BIN="$REPO/userspace/src/piko-splash"
+if [ -f "$PIKO_SPLASH_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$PIKO_SPLASH_BIN" ] || [ "$PIKO_SPLASH_SRC" -nt "$PIKO_SPLASH_BIN" ]; then
+        echo "==> building userspace/src/piko-splash"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$PIKO_SPLASH_BIN" "$PIKO_SPLASH_SRC"
+        "${CROSS_COMPILE}strip" "$PIKO_SPLASH_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/piko-splash already up to date"
+    fi
+else
+    echo "==> skipping piko-splash (no $PIKO_SPLASH_SRC)"
+fi
+
 # --- 1b2. flipd (screen rotation on the swivel hinge) -----------------------
 # Same shape as brightd: static, libc only, reads evdev and sysfs directly.
 # It turns the display 180 degrees via the w100 CRTC's scanout rotation
