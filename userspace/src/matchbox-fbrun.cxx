@@ -39,6 +39,16 @@
  *              the pixels, for the same physical screen size, without
  *              knowing anything about the panel underneath it.
  *
+ *              This is NOT a straight 4x speedup, though -- on this
+ *              board's w100, QVGA also switches the chip's own SCLK from
+ *              PLL (75-100 MHz) to XTAL (12.5 MHz, no PLL at all), which
+ *              also clocks the memory controller and 2D engine. Measured:
+ *              CPU->framebuffer throughput nets ~1.1x-1.7x faster in QVGA
+ *              (not 4x -- the per-byte rate itself drops 2.3-3.5x), and a
+ *              full-frame 2D-engine op nets ~1.6x SLOWER, not faster. See
+ *              docs/DEADLETTER-W100-QVGA-CLOCK.md before assuming this
+ *              flag helps a given app, especially one leaning on 2D accel.
+ *
  * EXIT STATUS
  *   the program's own exit status, or 0 if the user chose Abort, or
  *   126/127 in the manner of a shell if it could not be run at all.

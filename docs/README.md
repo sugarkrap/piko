@@ -71,6 +71,7 @@ Devices and drivers:
 |---|---|
 | [`DEADLETTER-AUDIO-I2S-SILENT.md`](DEADLETTER-AUDIO-I2S-SILENT.md) | Registered sound card ≠ working audio. Two mainline fixes plus a mandatory mixer setting. |
 | [`DEADLETTER-W100-VSYNC.md`](DEADLETTER-W100-VSYNC.md) | The w100 vsync timeout — worked around, root cause still open. |
+| [`DEADLETTER-W100-QVGA-CLOCK.md`](DEADLETTER-W100-QVGA-CLOCK.md) | QVGA mode drops the w100's SCLK 6× (PLL → XTAL) — measured throughput, and why the 2D engine can end up slower than the CPU there. |
 | [`DEADLETTER-DROPBEAR-PTY.md`](DEADLETTER-DROPBEAR-PTY.md) | Dropbear PTY allocation. |
 
 ## Open handoffs

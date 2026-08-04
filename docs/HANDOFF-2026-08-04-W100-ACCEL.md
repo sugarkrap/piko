@@ -32,6 +32,15 @@ spare board**, there is no replacement.*
 Neither has been compiled against a real kernel tree or run on hardware.
 That's this handoff's job.
 
+**Read `docs/DEADLETTER-W100-QVGA-CLOCK.md` before judging `spare` mode's
+results.** It was measured on hardware *after* this handoff was first
+written: QVGA also drops the w100's SCLK 6× (PLL → XTAL), which clocks
+the 2D engine too. A full-frame `W100FB_IOC_FILL`/`BLIT` op can be
+measurably *slower* than the equivalent CPU write in QVGA specifically —
+that is expected, not a sign `spare` mode's test tool or the ioctls are
+broken. `spare` mode still proves correctness (the right pixels land in
+the right place); it says nothing about speed, and was never meant to.
+
 ## How do I know the fixes are actually there?
 
 The PR is **open, not merged** — that was deliberate (see the PR

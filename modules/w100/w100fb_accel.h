@@ -10,6 +10,19 @@
  * off-chip memory (see the w100fb_mmap() comment in the driver for what
  * that costs).
  *
+ * CAVEAT, measured on hardware (docs/DEADLETTER-W100-QVGA-CLOCK.md): spare
+ * VRAM is only available once the visible mode is small enough to leave
+ * room for it -- on this board, that means QVGA. But QVGA ALSO drops the
+ * chip's SCLK from PLL (75-100 MHz) to XTAL (12.5 MHz), which clocks the
+ * 2D engine too -- measured 6.3x slower per byte there, enough that a
+ * full-frame engine op nets ~1.6x SLOWER than the equivalent CPU memcpy
+ * in that same mode (3 MB/s engine vs ~4 MB/s CPU, measured), not faster.
+ * "Use the engine instead of a CPU memcpy" is not a safe default in QVGA
+ * specifically -- it can hold for small ops (fixed per-op overhead favors
+ * the engine less as SCLK drops, but the crossover point hasn't been
+ * measured), but do not assume it for a full-frame composite without
+ * measuring the actual sizes involved.
+ *
  * This header is included by both the kernel driver
  * (modules/w100/w100fb_patched.c, copied to drivers/video/fbdev/w100fb.c
  * by tools/setup-kernel-src.sh, which also copies this file in as
