@@ -214,10 +214,17 @@ if command -v pacman >/dev/null 2>&1 && pacman -Qq xorgproto >/dev/null 2>&1; th
         cp -n "$f" "$STAGE/usr/include/$rel" 2>/dev/null || true
     done
     echo "    staged: $(pacman -Ql xorgproto | awk '{print $2}' | grep -c '^/usr/include/.*[^/]$') headers from the xorgproto package"
+elif command -v dpkg-query >/dev/null 2>&1 && dpkg-query -s x11proto-dev >/dev/null 2>&1; then
+    dpkg-query -L x11proto-dev | grep '^/usr/include/.*[^/]$' | while read -r f; do
+        rel="${f#/usr/include/}"
+        mkdir -p "$STAGE/usr/include/$(dirname "$rel")"
+        cp -n "$f" "$STAGE/usr/include/$rel" 2>/dev/null || true
+    done
+    echo "    staged: $(dpkg-query -L x11proto-dev | grep -c '^/usr/include/.*[^/]$') headers from the x11proto-dev package"
 elif [ -f "$STAGE/usr/include/X11/Xfuncproto.h" ]; then
     echo "    already staged"
 else
-    echo "FAILED: xorgproto headers not staged and pacman not available to find them." >&2
+    echo "FAILED: xorgproto headers not staged and neither pacman nor dpkg found it." >&2
     echo "Install xorgproto (Arch) / x11proto-dev (Debian/Ubuntu) or copy" >&2
     echo "its /usr/include/X11 files into $STAGE/usr/include/X11 by hand." >&2
     exit 1
