@@ -64,7 +64,21 @@ fi
 # Never fatal, and it must not hold up boot: if /dev/fb0 is missing or the
 # asset is gone, we lose a picture, not the system.
 if test -x /usr/sbin/piko-splash && test -f /usr/share/piko/splash.raw; then
-    /usr/sbin/piko-splash /usr/share/piko/splash.raw 2>/dev/null || true
+    if /usr/sbin/piko-splash /usr/share/piko/splash.raw 2>/dev/null; then
+        # The picture is up, so stop writing text on top of it.
+        #
+        # Making stage 2's *kernel* quiet (CONFIG_CMDLINE, see #110) only
+        # silences printk. Everything below is userspace writing to the
+        # console -- a dozen or so status echoes -- and it scribbles across
+        # the splash just as effectively. Rebind to a log instead.
+        #
+        # Deliberately inside the success branch: if the splash did NOT
+        # draw, the console is the only thing we have and it stays exactly
+        # as it was. We only go quiet when we have actually put something
+        # there worth keeping, so a boot with no picture is never also a
+        # boot with no output.
+        exec > /tmp/rcS.log 2>&1
+    fi
 fi
 
 mkdir -p /dev/pts
