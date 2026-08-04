@@ -254,13 +254,17 @@ jobs:
         run: |
           ./tools/setup-kernel-src.sh
 
-      - name: Build stage-2 kernel (full config, in-tree, zImage + modules)
-        run: |
-          make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
-              -j"$(nproc)" zImage modules
-          echo "### Stage-2 kernel (kernel.config-corgi-7.1.4)" >> "$GITHUB_STEP_SUMMARY"
-          echo "zImage: $(stat -c%s kernel-src/linux-7.1.4/arch/arm/boot/zImage) bytes" >> "$GITHUB_STEP_SUMMARY"
-
+      # Runs BEFORE the stage-2 kernel build below on purpose: this is an
+      # out-of-tree (O=) build, and kbuild refuses to do one against a
+      # source tree that already has in-tree build state ("the source tree
+      # is not clean, please run 'make ARCH=arm mrproper'") -- which is
+      # exactly what stage-2's own in-tree build below leaves behind. The
+      # two builds don't depend on each other (this one only needs the
+      # initramfs from the step above), so building the one that requires
+      # a pristine tree first, before anything else touches kernel-src/
+      # in-tree, sidesteps the conflict entirely -- no mrproper needed,
+      # and stage-2's in-tree zImage/modules (which later steps still read
+      # straight out of kernel-src/linux-7.1.4) are left untouched.
       - name: Build bootstrap kernel (minimal config, out-of-tree O=, embedded initramfs)
         run: |
           BOOT_O="$GITHUB_WORKSPACE/kernel-src/build-bootstrap"
@@ -297,6 +301,13 @@ jobs:
             exit 1
           fi
           echo "BOOT_ZIMAGE=$BOOT_ZIMAGE" >> "$GITHUB_ENV"
+
+      - name: Build stage-2 kernel (full config, in-tree, zImage + modules)
+        run: |
+          make -C kernel-src/linux-7.1.4 ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- \
+              -j"$(nproc)" zImage modules
+          echo "### Stage-2 kernel (kernel.config-corgi-7.1.4)" >> "$GITHUB_STEP_SUMMARY"
+          echo "zImage: $(stat -c%s kernel-src/linux-7.1.4/arch/arm/boot/zImage) bytes" >> "$GITHUB_STEP_SUMMARY"
 
       # Upstream release tarballs, sha256-verified by the script itself --
       # cached so a rerun doesn't re-fetch from matt.ucc.asn.au/openbsd.org.
