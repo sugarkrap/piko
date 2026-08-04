@@ -494,6 +494,13 @@ draw_battery(void)
  * the first toaster to sail in.
  *
  * Returns 0 without changing s if no (x+y) slot at least MIN_DIAG_GAP
+<<<<<<< HEAD
+ * from every other living sprite in roster[0..n) turned up in
+ * SPAWN_TRIES random attempts -- the caller is expected to leave s dead
+ * and call again next frame. See the NO-OVERLAP header comment for why
+ * that is a real possibility this has to handle, not just defensive
+ * code. */
+=======
  * from every other living sprite in roster[0..n), clear of the battery
  * dead zone, turned up in SPAWN_TRIES random attempts -- the caller is
  * expected to leave s dead and call again next frame. See the
@@ -515,6 +522,9 @@ try_spawn(Sprite *s, int initial, const Sprite *roster, int n, int self)
 			x = rand() % (width + SPRITE_SIZE);
 			y = -SPRITE_SIZE;
 		}
+<<<<<<< HEAD
+		if (diag_clear(x + y, roster, n, self)) {
+=======
 		if (diag_clear(x + y, roster, n, self) &&
 		    battery_zone_clear(x + y)) {
 			s->x = x;
@@ -573,6 +583,11 @@ main(int argc, char **argv)
 				(unsigned)DefaultDepth(dpy, screen));
 	gcv.graphics_exposures = False;
 	gc = XCreateGC(dpy, win, GCGraphicsExposures, &gcv);
+<<<<<<< HEAD
+	/* Foreground stays col_bg for the whole run -- draw_sprite() only
+	 * ever touches the clip mask/origin, never the foreground, so this
+	 * does not need resetting per frame or per sprite. */
+=======
 	/* Foreground is col_bg between sprite frames -- draw_sprite() only
 	 * ever touches the clip mask/origin, never the foreground, so the
 	 * per-sprite loop does not need to reset it. draw_battery() is the
