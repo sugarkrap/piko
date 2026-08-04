@@ -54,6 +54,9 @@
 #include <FL/Fl_Shared_Image.H>
 #include <FL/fl_draw.H>
 
+#include "panels/piko-panel.H"
+#include "panels/panel-wallpaper.H"
+
 #include <dirent.h>
 #include <signal.h>
 #include <stdio.h>
@@ -79,6 +82,11 @@
 #define ICON_PAD        12
 #define TEXT_X          (ICON_PAD + ICON_SIZE + ICON_PAD)
 #define SCROLLBAR_RESERVE 18
+
+/* "Back", shown in the header only while a panel is open. Sized as a touch
+ * target first -- it is the only way out of a panel. */
+#define BACK_W          76
+#define BACK_H          32
 
 /* Our own .desktop file, skipped when scanning so the settings window does
  * not list itself. Matched on Exec's basename rather than the filename:
@@ -106,9 +114,52 @@ struct Entry {
     std::string exec;         /* already field-code-stripped and, if the
                                * entry is X-Piko-Heavy, already wrapped */
     std::string group;
+    std::string panel;        /* X-Piko-Settings-Panel; empty => launch it */
 };
 
 static std::vector<Entry> g_entries;
+
+/*
+ * The panels this build can show inside its own window.
+ *
+ * An entry whose .desktop carries X-Piko-Settings-Panel=<name> matching one
+ * of these is opened here, XFCE-style, instead of being launched as a
+ * separate program. Everything else -- and anything naming a panel this
+ * build does not have, e.g. a .desktop from a newer package -- is launched.
+ * That fallback is deliberate: an unknown name must never produce a row
+ * that does nothing when tapped.
+ *
+ * Adding a panel is one line here plus the key in the .desktop file. See
+ * panels/piko-panel.H.
+ *
+ * Not everything can be a panel, and that is not a gap to be closed:
+ * pikalibrate is SDL rather than FLTK, needs the whole 640x480 to put its
+ * crosses in the physical corners, and SUSPENDS the X server while it runs
+ * (writes SUSPEND to /tmp/.pikalibrate-ctl; Xfbdev does KdSuspend()). A
+ * panel cannot be hosted inside a window drawn by the server it switches
+ * off. It stays a launch, and always will.
+ */
+struct PanelReg {
+    const char       *name;
+    PikoPanelFactory  make;
+};
+
+static const PanelReg PANELS[] = {
+    { "wallpaper", piko_panel_wallpaper_new },
+    { NULL,        NULL                     }
+};
+
+static PikoPanelFactory find_panel(const std::string &name)
+{
+    if (name.empty())
+        return NULL;
+
+    for (int i = 0; PANELS[i].name; i++)
+        if (name == PANELS[i].name)
+            return PANELS[i].make;
+
+    return NULL;
+}
 
 /* ── home directory, matching mb_util_get_homedir()'s exact fallback ───── */
 
@@ -308,6 +359,7 @@ static void scan_dir(const std::string &dir)
         e.comment = get(kv, "Comment");
         e.icon    = get(kv, "Icon");
         e.exec    = exec;
+        e.panel   = get(kv, "X-Piko-Settings-Panel");
         e.group   = get(kv, "X-Piko-Settings-Group");
         if (e.group.empty())
             e.group = GROUP_FALLBACK;
@@ -572,14 +624,37 @@ public:
     }
 };
 
+static void show_panel(size_t index);       /* defined below the window */
+
+/*
+ * Tapping a row either opens the panel here or launches the program.
+ *
+ * Which one is a property of the .desktop file (X-Piko-Settings-Panel),
+ * not of this code, so a settings app decides for itself whether it is
+ * embeddable -- and one that is not, or that names a panel this build has
+ * never heard of, is still perfectly reachable.
+ */
 static void row_cb(Fl_Widget *, void *data)
 {
-    exec_entry(g_entries[(size_t)(intptr_t)data]);
+    size_t index = (size_t)(intptr_t)data;
+
+    if (find_panel(g_entries[index].panel))
+        show_panel(index);
+    else
+        exec_entry(g_entries[index]);
 }
 
 /* ── the list ──────────────────────────────────────────────────────────── */
 
 static Fl_Scroll *g_scroll;
+
+/* Header widgets and the embedded panel. File-scope because showing a
+ * panel retitles the header and swaps what fills the window below it. */
+static Fl_Group  *g_panel;          /* NULL when the list is showing */
+static Fl_Button *g_back;
+static Fl_Box    *g_title;
+static Fl_Box    *g_subtitle;
+static Fl_Window *g_win;
 
 /*
  * Rebuilt rather than resized on a window size change. This device rotates
@@ -649,19 +724,122 @@ public:
 
         Fl_Double_Window::resize(X, Y, W, H);
 
-        if (W != old_w && g_scroll) {
+        if (W == old_w)
+            return;
+
+        /* The list is rebuilt even while a panel covers it: it is what
+         * comes back when Back is tapped, and rebuilding it now is
+         * cheaper than remembering that it is stale. */
+        if (g_scroll) {
             g_scroll->scroll_to(0, 0);
             build_list(W);
-            redraw();
+        }
+
+        /* The panel lays itself out from the geometry it is given, so it
+         * only needs telling. Fl_Group::resize would otherwise scale it
+         * proportionally along with everything else. */
+        if (g_panel)
+            g_panel->resize(0, HEADER_H, W, H - HEADER_H);
+
+        layout_header(W);
+        redraw();
+    }
+
+    /* Header geometry depends on whether Back is showing, and on the
+     * window width, so both the initial build and every rotation go
+     * through here. */
+    static void layout_header(int W)
+    {
+        int right_edge = W - ICON_PAD;
+
+        if (g_back) {
+            g_back->resize(W - ICON_PAD - BACK_W,
+                            (HEADER_H - BACK_H) / 2, BACK_W, BACK_H);
+            if (g_back->visible())
+                right_edge = g_back->x() - ICON_PAD;
+        }
+
+        /* The text starts wherever main() put it -- TEXT_X with the window
+         * icon present, ICON_PAD without it -- so read it back rather than
+         * assuming which. */
+        if (g_title) {
+            int text_w = right_edge - g_title->x();
+            if (text_w < 1)
+                text_w = 1;
+            g_title->resize(g_title->x(), g_title->y(), text_w, g_title->h());
+            if (g_subtitle)
+                g_subtitle->resize(g_subtitle->x(), g_subtitle->y(),
+                                    text_w, g_subtitle->h());
         }
     }
 };
+
+/* ── showing a panel, and coming back ──────────────────────────────────── */
+
+static void show_list(void)
+{
+    if (!g_panel)
+        return;
+
+    /* Fl::delete_widget rather than delete: this runs from the Back
+     * button's own callback, with the panel still on FLTK's push/focus
+     * bookkeeping. Deferring to the top of the next event loop is exactly
+     * what it is for. */
+    g_panel->hide();
+    Fl::delete_widget(g_panel);
+    g_panel = NULL;
+
+    g_back->hide();
+    g_title->copy_label("Settings");
+    g_subtitle->copy_label("Customize your device");
+    g_win->copy_label("Settings");
+
+    SettingsWindow::layout_header(g_win->w());
+
+    g_scroll->show();
+    g_win->redraw();
+}
+
+static void back_cb(Fl_Widget *, void *)
+{
+    show_list();
+}
+
+static void show_panel(size_t index)
+{
+    const Entry &e = g_entries[index];
+    PikoPanelFactory make = find_panel(e.panel);
+
+    if (!make || g_panel)
+        return;
+
+    /* The list is hidden, not destroyed -- coming back is a show(), and
+     * the scroll position is preserved for free. */
+    g_scroll->hide();
+
+    g_win->begin();
+    g_panel = make(0, HEADER_H, g_win->w(), g_win->h() - HEADER_H);
+    g_win->end();
+
+    /* The header becomes the panel's, the way XFCE's settings manager
+     * retitles itself around an embedded dialog. */
+    g_title->copy_label(e.name.c_str());
+    g_subtitle->copy_label(e.comment.empty() ? "" : e.comment.c_str());
+    g_win->copy_label(e.name.c_str());
+
+    g_back->show();
+    SettingsWindow::layout_header(g_win->w());
+
+    g_win->redraw();
+}
 
 /* ── main ──────────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv)
 {
-    fl_register_images();
+    /* Guarded, because an embedded panel needs the image handlers too and
+     * FLTK's own registration is not idempotent -- see panels/piko-panel.H. */
+    piko_register_images();
 
     /* See exec_entry(): nothing here ever wait()s for a launched app. */
     signal(SIGCHLD, SIG_IGN);
@@ -674,6 +852,7 @@ int main(int argc, char **argv)
 
     SettingsWindow win(win_w, win_h, "Settings");
     win.color(FL_BACKGROUND_COLOR);
+    g_win = &win;
     win.begin();
 
     /* Header: the window's own icon, title, and what this window is for --
@@ -691,17 +870,24 @@ int main(int argc, char **argv)
         text_x = TEXT_X;
     }
 
-    Fl_Box *title = new Fl_Box(text_x, 6, win_w - text_x - ICON_PAD, 22, "Settings");
-    title->labelfont(FL_HELVETICA_BOLD);
-    title->labelsize(16);
-    title->labelcolor(fl_rgb_color(0x20, 0x20, 0x20));
-    title->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    g_title = new Fl_Box(text_x, 6, win_w - text_x - ICON_PAD, 22, "Settings");
+    g_title->labelfont(FL_HELVETICA_BOLD);
+    g_title->labelsize(16);
+    g_title->labelcolor(fl_rgb_color(0x20, 0x20, 0x20));
+    g_title->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
-    Fl_Box *subtitle = new Fl_Box(text_x, 28, win_w - text_x - ICON_PAD, 16,
-                                   "Customize your device");
-    subtitle->labelsize(11);
-    subtitle->labelcolor(fl_rgb_color(0x60, 0x60, 0x60));
-    subtitle->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    g_subtitle = new Fl_Box(text_x, 28, win_w - text_x - ICON_PAD, 16,
+                             "Customize your device");
+    g_subtitle->labelsize(11);
+    g_subtitle->labelcolor(fl_rgb_color(0x60, 0x60, 0x60));
+    g_subtitle->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+
+    /* Created up front and hidden, rather than built and destroyed with
+     * each panel: it belongs to the header, which outlives them. */
+    g_back = new Fl_Button(win_w - ICON_PAD - BACK_W, (HEADER_H - BACK_H) / 2,
+                            BACK_W, BACK_H, "@<-  Back");
+    g_back->callback(back_cb);
+    g_back->hide();
 
     g_scroll = new Fl_Scroll(0, HEADER_H, win_w, win_h - HEADER_H);
     g_scroll->box(FL_FLAT_BOX);
@@ -715,3 +901,4 @@ int main(int argc, char **argv)
 
     return Fl::run();
 }
+

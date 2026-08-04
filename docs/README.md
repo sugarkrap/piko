@@ -28,12 +28,13 @@ the reasoning, not as instructions — do not follow it.
 | [`HOWTO-OFFLINE-UPDATE.md`](HOWTO-OFFLINE-UPDATE.md) | Building the self-contained update package, and how CI boot-tests it. |
 | [`HOWTO-MATCHBOX-DESKTOP.md`](HOWTO-MATCHBOX-DESKTOP.md) | Building the X11 + Matchbox stack. Contains the non-guessable version pins and configure lines. |
 | [`HOWTO-SETTINGS-APP.md`](HOWTO-SETTINGS-APP.md) | The Settings window: how `piko-settings` builds its list from `.desktop` files, and which of the three consumers of those files reads which key. Read before adding a settings app. |
+| [`HOWTO-PIKO-PLAYER.md`](HOWTO-PIKO-PLAYER.md) | The media player: an FLTK GUI (not gmplayer/GTK) that embeds MPlayer's `-vo x11` video via `-wid` and drives it in slave mode. Why the X11 MPlayer build, and why the engine stays on the SD card. |
 | [`HOWTO-X11-TOUCHSCREEN.md`](HOWTO-X11-TOUCHSCREEN.md) | Getting the touchscreen working as an absolute pointer under Xfbdev. |
 | [`HOWTO-SCREEN-ROTATION.md`](HOWTO-SCREEN-ROTATION.md) | Landscape ↔ portrait on the swivel hinge — a live screen resize, with the w100's CRTC doing the rotation for free. Why not `xrandr`. |
 | [`HOWTO-LCD-PHASE-CALIBRATION.md`](HOWTO-LCD-PHASE-CALIBRATION.md) | Fixing LCD smearing via the panel's sampling phase. |
 | [`HOWTO-OVERCLOCK.md`](HOWTO-OVERCLOCK.md) | CPU speed steps and the `mhz` tool — which frequencies the PXA255 can actually produce, and what the memory bus does when you raise them. |
 | [`HOWTO-RTC-TIME.md`](HOWTO-RTC-TIME.md) | The real-time clock: why the board used to boot at 1970, and the `settime` / `ntpsync` tools. |
-| [`HOWTO-SWAP.md`](HOWTO-SWAP.md) | The 64 MiB swapfile on the SD card: the `cardswap` tool, why swapping to VFAT works, and what pulling the card costs. |
+| [`HOWTO-SWAP.md`](HOWTO-SWAP.md) | Swap in two layers: `zramswap`'s 32 MiB compressed RAM device (always on, highest priority) in front of `cardswap`'s 256 MiB SD-card swapfile — why VFAT swap works, and what pulling the card costs. |
 | [`HOWTO-BRIGHTNESS.md`](HOWTO-BRIGHTNESS.md) | The backlight: the `bright` ladder, `brightd`'s idle/lid policy, the Fn+3/Fn+4 hotkey path, and the `mb-brightness` OSD. |
 | [`HOWTO-VOLUME.md`](HOWTO-VOLUME.md) | Volume: the `mb-volume` applet's OSD, the `vol` tool, the Fn+5/Fn+6 media keys, and why the FIFO between them cannot be an `echo`. |
 

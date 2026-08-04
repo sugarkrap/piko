@@ -2,19 +2,25 @@
 /*
  * cardswap -- put a swapfile on the SD card, and take it away again.
  *
- * This board has 64 MiB of RAM and no swap at all, which is what makes a
- * browser tab or a big image the difference between "slow" and "the OOM
- * killer took your session". The SD card is the only writable storage with
- * room to spare -- the root jffs2 is ~68 MiB total -- so the swap goes
- * there, at /mnt/card/.zaurus/swap, alongside the rest of the card-hosted
- * software (see /etc/zaurus-card.sh for that layout).
+ * This board has around 52 MiB of usable RAM and no swap at all built in,
+ * which is what makes a browser tab or a big image the difference between
+ * "slow" and "the OOM killer took your session". The SD card is the only
+ * writable storage with room to spare -- the root jffs2 is ~68 MiB total --
+ * so the swap goes there, at /mnt/card/.zaurus/swap, alongside the rest of
+ * the card-hosted software (see /etc/zaurus-card.sh for that layout).
+ *
+ * Sized for a ~512 MiB card (see DEFAULT_MIB below) -- a card that small
+ * would need its default overridden on the command line. zram (see
+ * zramswap.c) sits in front of this as a faster, RAM-resident swap layer;
+ * this one remains the backstop once zram's fixed capacity is full, and
+ * the only swap at all when no card is inserted.
  *
  * Usage:
  *   cardswap on  [path [MiB]]   create if needed, sign, and swapon(2)
  *   cardswap off [path]         swapoff(2); the file is left in place
  *   cardswap status [path]      exit 0 if that file is currently swapped on
  *
- * Defaults: /mnt/card/.zaurus/swap, 64 MiB.
+ * Defaults: /mnt/card/.zaurus/swap, 256 MiB.
  *
  * WHY THIS EXISTS AS A BINARY. There is no shell way to do this here: the
  * device's busybox is built without mkswap, swapon and swapoff (verified on
@@ -63,7 +69,7 @@
 #include <unistd.h>
 
 #define DEFAULT_PATH	"/mnt/card/.zaurus/swap"
-#define DEFAULT_MIB	64
+#define DEFAULT_MIB	256
 
 #define PROC_SWAPS	"/proc/swaps"
 
@@ -78,7 +84,7 @@
 #define LOCK_PATH	"/tmp/.cardswap.lock"
 
 /* Chunk used to write the file out. Small on purpose: this runs on a
- * 64 MiB machine, quite possibly while that memory is already the problem
+ * ~52 MiB machine, quite possibly while that memory is already the problem
  * we are trying to fix. */
 #define CHUNK		(64 * 1024)
 
@@ -89,8 +95,11 @@
 #define MAX_MIB		2048
 
 /* Leave this much of the card free after the swapfile, so enabling swap
- * can never be the thing that fills a user's card up. */
-#define SPARE_MIB	8
+ * can never be the thing that fills a user's card up. Scaled up along with
+ * DEFAULT_MIB for the bigger card: still a small fraction of a ~512 MiB
+ * card, but enough headroom for the rest of /mnt/card/.zaurus (MPlayer,
+ * opkg packages, user files) to grow into. */
+#define SPARE_MIB	32
 
 static const char *Prog = "cardswap";
 
@@ -181,9 +190,9 @@ make_parent_dirs (const char *path)
 /* Refuse to write the swapfile onto the root filesystem.
  *
  * This is the one mistake here with a genuinely bad outcome: the root
- * jffs2 is about 68 MiB in total, so a 64 MiB file on it fills the ROM and
- * leaves a device that cannot even write a log line. It happens by
- * accident rather than by typo -- if the card is not mounted,
+ * jffs2 is about 68 MiB in total, so a 256 MiB file on it fills the ROM
+ * many times over and leaves a device that cannot even write a log line.
+ * It happens by accident rather than by typo -- if the card is not mounted,
  * /mnt/card/.zaurus/swap is just a path on the root filesystem and every
  * open() along the way succeeds. Comparing the target's device against
  * "/"'s catches exactly that, without needing to know which mount point
@@ -398,7 +407,7 @@ do_on (const char *path, unsigned long mib)
 
   /* An existing file of exactly the right size is reused as-is. That is
    * what makes the second and every later insertion of the same card
-   * near-instant instead of a 64 MiB rewrite: only the signature page is
+   * near-instant instead of a 256 MiB rewrite: only the signature page is
    * touched, and only to be sure of it. */
   if (stat (path, &st) == 0 && S_ISREG (st.st_mode))
     {

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=piko-player
+Comment=Play video and audio
+Exec=/usr/local/bin/piko-player
+Icon=piko-player.png
+Terminal=false
+Categories=AudioVideo;Utility;

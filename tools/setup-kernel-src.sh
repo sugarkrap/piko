@@ -163,6 +163,11 @@ echo "==> applying the W100 (Imageon) display driver"
 copy_in "$REPO/modules/w100/w100fb_patched.c"  drivers/video/fbdev/w100fb.c
 copy_in "$REPO/modules/w100/w100fb_private.h" drivers/video/fbdev/w100fb.h
 copy_in "$REPO/modules/w100/w100fb.h"          include/video/w100fb.h
+# W100FB_IOC_FILL/BLIT/SYNC -- see the header's own comment. Included by
+# w100fb_patched.c as <video/w100fb_accel.h>, same convention as w100fb.h
+# above; also the one copy any userspace consumer of these ioctls should
+# pull the command numbers and struct layout from.
+copy_in "$REPO/modules/w100/w100fb_accel.h"    include/video/w100fb_accel.h
 
 # Sharp panel VCOM/phase: writable comadj + phadadj params, so the
 # per-unit calibration lost across our kexec can be swept live instead of

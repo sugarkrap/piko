@@ -699,7 +699,7 @@ ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
 # The card's swap area. /usr/sbin/sdcard is the mdev hook that mounts the
-# card; it now also asks cardswap to bring a 64 MiB swapfile up and down
+# card; it now also asks cardswap to bring a 256 MiB swapfile up and down
 # with the mount. Both ship here because neither is reachable any other
 # way -- the hook is normally baked into the ROM image, so without this a
 # deploy would leave a device whose /etc/mdev.conf still runs the old
@@ -719,6 +719,20 @@ if [ -x "$REPO/userspace/src/cardswap" ]; then
 else
     echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
     echo "    without it an inserted card mounts, but gets no swap area"
+fi
+
+# The RAM-resident swap area ahead of it. zramswap is called from rcS at
+# every boot -- unlike cardswap it needs no card and no hook, so it just
+# ships here and takes effect on the next reboot along with rcS itself
+# (see the rcS send_file below). Guarded the same way as cardswap: a
+# clean checkout without it built still boots and still has the card as
+# swap, just without the faster RAM-backed layer in front of it.
+if [ -x "$REPO/userspace/src/zramswap" ]; then
+    send_file "$REPO/userspace/src/zramswap" "/usr/sbin/zramswap"
+    ssh_do "chmod 0755 /usr/sbin/zramswap"
+else
+    echo "==> no built zramswap -- skipping (run tools/build-userspace.sh)"
+    echo "    without it the machine falls back to card-only swap"
 fi
 
 # /etc/mdev.conf is what actually invokes that hook, and until now nothing
@@ -1127,7 +1141,10 @@ if [ -x "$REPO/userspace/src/vol" ]; then
     echo "  /usr/sbin/vol            (volume: vol up / vol down / vol mute)"
 fi
 if [ -x "$REPO/userspace/src/cardswap" ]; then
-    echo "  /usr/sbin/cardswap       (64 MiB swap at /mnt/card/.zaurus/swap)"
+    echo "  /usr/sbin/cardswap       (256 MiB swap at /mnt/card/.zaurus/swap)"
+fi
+if [ -x "$REPO/userspace/src/zramswap" ]; then
+    echo "  /usr/sbin/zramswap       (32 MiB compressed RAM swap; zramswap starts from rcS)"
 fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
