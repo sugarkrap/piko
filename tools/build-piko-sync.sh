@@ -67,13 +67,16 @@ fi
 
 # --- host-side tests -----------------------------------------------------
 if [ "${PIKO_SYNC_SKIP_TESTS:-0}" = "0" ]; then
-    echo "==> running host tests (protocol, resume/collision, transfer queue)"
+    echo "==> running host tests (protocol, resume/collision, transfer queue, settings)"
     HOSTCXX="${HOSTCXX:-g++}"
     if command -v "$HOSTCXX" >/dev/null 2>&1; then
-        testbin="$(mktemp -d)/piko-sync-protocol-test"
-        "$HOSTCXX" -O2 -Wall -Wextra -o "$testbin" "$SRC/tests/protocol-test.cxx"
-        "$testbin"
-        rm -rf "$(dirname "$testbin")"
+        testdir="$(mktemp -d)"
+        for t in protocol settings; do
+            "$HOSTCXX" -O2 -Wall -Wextra -o "$testdir/piko-sync-$t-test" \
+                "$SRC/tests/$t-test.cxx"
+            "$testdir/piko-sync-$t-test"
+        done
+        rm -rf "$testdir"
     else
         echo "    no host $HOSTCXX -- skipping (build continues)"
     fi
