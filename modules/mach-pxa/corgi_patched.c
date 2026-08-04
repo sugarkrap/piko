@@ -256,9 +256,36 @@ static struct w100_mode corgi_fb_modes[] = {
 	.crtc_gclk       = 0x8015010F,
 	.crtc_goe        = 0x80100110,
 	.crtc_ps1_active = 0x41060010,
-	.pll_freq        = 0,
+	/*
+	 * SCLK on the PLL, pixel clock still on the crystal.
+	 *
+	 * Upstream had BOTH on CLK_SRC_XTAL here, which clocks the whole
+	 * graphics subsystem at xtal_freq (12.5MHz on this board, see
+	 * corgi_fb_mach_info below) instead of the 75MHz the 480x640 entry
+	 * above uses. SCLK is not just an "engine clock": the fields
+	 * w100_init_clocks() programs include sclk_force_mc/sclk_force_extmc
+	 * -- the internal and external memory controllers -- so at 240x320
+	 * every access to video memory ran 6x slower, CPU stores through the
+	 * mmap'd framebuffer included, not only 2D-engine work.
+	 *
+	 * Measured on the board with tools/src/w100blit-bench.c before this
+	 * change: 2D-engine blits 19MB/s at 640x480 vs 3MB/s at 320x240
+	 * (6.3x, against the 6x clock ratio), and plain CPU memcpy into the
+	 * framebuffer 9-14MB/s vs ~4MB/s. That is the mode PocketSNES and
+	 * every other QVGA fullscreen app runs in.
+	 *
+	 * The pixel clock genuinely has to match panel timing and stays on
+	 * the crystal at divider 1; only the system clock moves. The two are
+	 * independent fields and w100_init_clocks() sources them separately
+	 * (it programs the PLL if EITHER asks for it), which the 480x640
+	 * entry already relies on by running pixclk at PLL/2 and PLL/6.
+	 *
+	 * fast_pll_freq deliberately left 0: the fastpllclk sysfs knob then
+	 * cannot push this mode to 100MHz, which nothing has tested.
+	 */
+	.pll_freq        = 75,
 	.fast_pll_freq   = 0,
-	.sysclk_src      = CLK_SRC_XTAL,
+	.sysclk_src      = CLK_SRC_PLL,
 	.sysclk_divider  = 0,
 	.pixclk_src      = CLK_SRC_XTAL,
 	.pixclk_divider  = 1,
