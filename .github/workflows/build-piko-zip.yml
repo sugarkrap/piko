@@ -254,19 +254,33 @@ jobs:
         run: |
           ./tools/setup-kernel-src.sh
 
-      # Runs BEFORE the stage-2 kernel build below on purpose: this is an
+      # Runs BEFORE the stage-2 kernel build below (reordering alone turned
+      # out not to be enough -- see the mrproper below for why). This is an
       # out-of-tree (O=) build, and kbuild refuses to do one against a
       # source tree that already has in-tree build state ("the source tree
-      # is not clean, please run 'make ARCH=arm mrproper'") -- which is
-      # exactly what stage-2's own in-tree build below leaves behind. The
-      # two builds don't depend on each other (this one only needs the
-      # initramfs from the step above), so building the one that requires
-      # a pristine tree first, before anything else touches kernel-src/
-      # in-tree, sidesteps the conflict entirely -- no mrproper needed,
-      # and stage-2's in-tree zImage/modules (which later steps still read
-      # straight out of kernel-src/linux-7.1.4) are left untouched.
+      # is not clean, please run 'make ARCH=arm mrproper'"). The culprit
+      # isn't stage-2's build -- it's tools/setup-kernel-src.sh itself:
+      # "Reconstruct kernel-src" above copies kernel.config-corgi-7.1.4 in
+      # as .config and runs oldconfig IN-TREE (see its own step name), so
+      # the tree already has include/config/auto.conf etc. by the time this
+      # step runs, regardless of build order relative to stage-2 -- CI
+      # proved this directly (bootstrap failed the same way running first).
+      #
+      # tools/setup-kernel-src.sh is shared with build-update-package.yml,
+      # which only ever does an in-tree build and has no reason to care
+      # about this, so the fix stays local to this workflow instead of
+      # touching that script: mrproper the tree immediately before this
+      # out-of-tree build (wiping the in-tree config the Reconstruct step
+      # just set up), then re-apply that same stage-2 config + oldconfig
+      # in-tree again right after, before "Build stage-2 kernel" needs it.
+      # Redoing oldconfig is cheap (Kconfig processing, not a compile) --
+      # nothing here is lost, just regenerated in a different order.
       - name: Build bootstrap kernel (minimal config, out-of-tree O=, embedded initramfs)
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
         run: |
+          make -C kernel-src/linux-7.1.4 ARCH=arm mrproper
+
           BOOT_O="$GITHUB_WORKSPACE/kernel-src/build-bootstrap"
           mkdir -p "$BOOT_O"
           cp kernel.config-corgi-7.1.4-minimal "$BOOT_O/.config"
@@ -301,6 +315,20 @@ jobs:
             exit 1
           fi
           echo "BOOT_ZIMAGE=$BOOT_ZIMAGE" >> "$GITHUB_ENV"
+
+      # Re-applies exactly what tools/setup-kernel-src.sh's own tail end
+      # does (copy kernel.config-corgi-7.1.4 in as .config, oldconfig
+      # in-tree) -- the mrproper above wiped that to give the bootstrap
+      # build its required pristine tree, and stage-2's in-tree build
+      # right after this has no config-generation step of its own; it just
+      # expects .config to already be there, exactly as it would if
+      # Reconstruct's work had never been touched.
+      - name: Reconfigure kernel-src in-tree for the stage-2 build (mrproper above wiped it)
+        env:
+          CROSS_COMPILE: arm-linux-gnueabi-
+        run: |
+          cp kernel.config-corgi-7.1.4 kernel-src/linux-7.1.4/.config
+          ( cd kernel-src/linux-7.1.4 && yes "" | make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" oldconfig )
 
       - name: Build stage-2 kernel (full config, in-tree, zImage + modules)
         run: |
