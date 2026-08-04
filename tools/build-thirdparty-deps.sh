@@ -110,7 +110,13 @@ e804e465d4b109b5ad285a8fb71f0dd3f74f0068f91ce3cdfde618180c174925 \
 usr/lib/pkgconfig/libpng.pc"
         ;;
     freetype)
-        echo "2.13.2 https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.gz \
+        # download.savannah.gnu.org (the other official mirror) returned a
+        # persistent 502 in CI (2026-08-04, confirmed across two separate
+        # runs over an hour apart, plus unreachable entirely from this
+        # sandbox's own network) -- not a one-off blip. SourceForge mirrors
+        # the identical release tarball (same sha256 below), and is already
+        # proven reachable in this same script for libpng above.
+        echo "2.13.2 https://download.sourceforge.net/freetype/freetype-2.13.2.tar.gz \
 1ac27e16c134a7f2ccea177faba19801131116fd682efc1f5737037c5db224b5 \
 usr/lib/pkgconfig/freetype2.pc"
         ;;
