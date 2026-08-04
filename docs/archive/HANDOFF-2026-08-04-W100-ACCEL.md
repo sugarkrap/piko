@@ -1,9 +1,70 @@
 # Handoff — verify the w100fb video-mem fix and 2D accel ioctls
 
-*Written 2026-08-04, for an agent with real build/deploy/hardware access
-(this session had none of the three: no kernel build tree, no toolchain,
-no board). Read `AGENTS.md` first if you haven't — **this is the LAST
-spare board**, there is no replacement.*
+> **RESOLVED 2026-08-04 — done on the real board, archived.** Everything
+> below is the original handoff, kept for its reasoning; the outcome is at
+> the top. PR #118 was merged; one defect the review had not caught was
+> found and fixed before this ran (see "The bug found on the way").
+
+## Outcome
+
+Run against the board over WiFi (`root@10.208.47.1`), on `Linux zaurus
+7.1.4 #54 PREEMPT Tue Aug 4 20:43:39 CEST 2026`:
+
+| Mode | Result |
+|---|---|
+| `probe` | **PASS** — `W100FB_IOC_SYNC` answered; the deployed kernel has the ioctls |
+| `accel` | **PASS** — FILL and BLIT readback, all 16×16 pixels `0x07e0` |
+| `spare` | **PASS** — off-screen sprite composited on-screen, all 16×16 pixels `0x001f` |
+| `smem` | **SKIP** — see below; not a driver problem |
+
+`spare` is the one that matters: an off-screen sprite living in spare VRAM,
+blitted onto the visible framebuffer by the 2D engine. That is the feature
+PR #118 exists for, and it works on real hardware.
+
+### The bug found on the way
+
+`w100_accel_fillrect()`/`w100_accel_copyarea()` wrote their pitch argument
+straight into `mmDST_PITCH`/`mmSRC_PITCH`, which are **pixel**-granularity
+registers (`w100_init_graphic_engine()` programs them with a bare
+`par->xres`; `mmGRAPHIC_PITCH`, a few functions away, is the byte-
+granularity one). Every caller was passing bytes — the fbcon hooks passed
+`par->xres*BITS_PER_PIXEL/8`, and `w100fb_accel.h` documents its ioctl
+fields as bytes per row. At 16bpp that is exactly 2× the pitch the engine
+wants, which does not fault or clip: it strides twice as far per row and
+shears the output diagonally. It also regressed fbcon's own fills and
+scrolls, which had inherited the correct pitch from mode-set time before
+PR #118 generalized these primitives.
+
+Fixed in `w100fb: hand the 2D engine a pixel pitch, not a byte pitch` —
+the primitives take `*_pitch_px` and the four callers convert, with
+`w100fb_rect_fits()` rejecting a byte pitch that is not a whole number of
+pixels. `accel` passing above is the hardware confirmation: with the
+doubled pitch, only row 0 of a 16×16 fill would have landed where the
+readback looks.
+
+### Why `smem` reports SKIP
+
+The check was "did `smem_len` grow after claiming a bigger
+`yres_virtual`". On this device it can't: `smem_len` is already 2097152
+(the full external SDRAM window, well past the 393216 internal-SRAM
+bucket) *before* the test claims anything, so there is no room to grow —
+and the old failure text then asserted `set_par()` had left external SDRAM
+unmapped, which 2 MiB flatly contradicts. It was a false negative, and it
+cost a real detour.
+
+The precondition is not reachable from a live session: the desktop runs
+double-buffered VGA (640×960 virtual = 1,228,800 bytes, already past the
+threshold), and `matchbox-fbrun --qvga` dropping to a small mode does not
+power external memory back off. Verified separately that the mode switch
+itself works — `virtual_size` 640,960 → 320,240 and stride 1280 → 640
+inside the wrapper.
+
+`tools/src/w100accel-test.c` now tests the property that was actually
+meant — does `smem_len` cover the virtual size `set_par()` accepted — and
+reports SKIP, not FAIL, when external memory was already on. Isolating the
+video-mem fix needs the board to reach a small mode without a large
+virtual buffer having been claimed first (booting straight into QVGA);
+`spare` exercises the same memory for real and has no such limitation.
 
 ## What this is
 

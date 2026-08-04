@@ -78,9 +78,8 @@ Devices and drivers:
 Live, actionable work-in-progress — not a HOWTO, not resolved yet. Move to
 `archive/` once done, per the pattern in `archive/HANDOFF-2026-07-28-X11-XFBDEV.md`.
 
-| Doc | What it covers |
-|---|---|
-| [`HANDOFF-2026-08-04-W100-ACCEL.md`](HANDOFF-2026-08-04-W100-ACCEL.md) | Build, deploy, and verify PR #118 (w100fb `smem_len` fix + `W100FB_IOC_FILL`/`BLIT`/`SYNC`) on real hardware — this session had no kernel build tree or board to do it itself. |
+None open right now. (The most recent one, the PR #118 hardware
+verification, was completed on 2026-08-04 and is in `archive/`.)
 
 ## Archive
 
@@ -91,6 +90,7 @@ Superseded or resolved. Kept for the reasoning.
 | [`archive/PORTING-NOTES-2026-07.md`](archive/PORTING-NOTES-2026-07.md) | The original README: which mainline APIs broke and why when the removed board files were pulled forward. Still the best explanation of what `modules/` actually changes. |
 | [`archive/HANDOFF.md`](archive/HANDOFF.md) | The original manual kernel-reconstruction procedure, now automated by `tools/setup-kernel-src.sh`. |
 | [`archive/HANDOFF-2026-07-28-X11-XFBDEV.md`](archive/HANDOFF-2026-07-28-X11-XFBDEV.md) | X11/Xfbdev bring-up snapshot. |
+| [`archive/HANDOFF-2026-08-04-W100-ACCEL.md`](archive/HANDOFF-2026-08-04-W100-ACCEL.md) | PR #118 verified on the board: FILL/BLIT and off-screen-sprite compositing pass. Records the byte-vs-pixel pitch bug found on the way, and why the `smem` check reports SKIP rather than PASS on a live desktop. |
 | [`archive/DEADLETTER.md`](archive/DEADLETTER.md) | The original combined post-mortem log, since split into the files above. |
 | [`archive/DEADLETTER-HOSTAP-SKB-CB.md`](archive/DEADLETTER-HOSTAP-SKB-CB.md) | The hostap `skb->cb` fix that made WiFi work. |
 | [`archive/DEADLETTER-WIFI-SSH.md`](archive/DEADLETTER-WIFI-SSH.md) | The kernel/module ABI mismatch that broke the device once. |

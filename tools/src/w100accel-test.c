@@ -15,7 +15,10 @@
  *                          ioctls at all -- run this first
  *   w100accel-test smem    the video-mem fix: claim a virtual buffer
  *                          bigger than internal SRAM and confirm
- *                          fix.smem_len actually grows to match
+ *                          fix.smem_len actually covers what was claimed.
+ *                          Reports SKIP, not PASS, if external SDRAM was
+ *                          already mapped in before the claim -- see
+ *                          mode_smem() for why that cannot isolate the fix
  *   w100accel-test accel   the 2D blit engine, on-screen only: FILL a
  *                          rect, SYNC, read back and verify; BLIT it
  *                          elsewhere, SYNC, read back and verify
@@ -84,6 +87,24 @@ static void pass(const char *fmt, ...)
 	va_list ap;
 	va_start(ap, fmt);
 	printf("PASS: ");
+	vprintf(fmt, ap);
+	printf("\n");
+	va_end(ap);
+}
+
+/*
+ * Neither PASS nor FAIL: the check could not be made meaningful in the
+ * state the device happened to be in. Deliberately does NOT set g_fail --
+ * a precondition this tool cannot establish for itself is not a defect in
+ * the kernel, and reporting it as one sends the next reader hunting a bug
+ * that isn't there (which is exactly what happened on 2026-08-04, see
+ * mode_smem()).
+ */
+static void skip(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	printf("SKIP: ");
 	vprintf(fmt, ap);
 	printf("\n");
 	va_end(ap);
@@ -195,11 +216,35 @@ static void restore_var(const struct fb_var_screeninfo *original)
 			strerror(errno));
 }
 
-/* mode: smem -- the video-mem fix on its own. */
+/*
+ * mode: smem -- the video-mem fix on its own.
+ *
+ * What is actually under test is "does smem_len cover the virtual size
+ * set_par() just accepted", NOT "did smem_len get bigger". Those are not
+ * the same question, and an earlier version of this asked the second one:
+ * it compared smem_len before and after the claim and called any lack of
+ * growth the PR #118 bug. On a device where external SDRAM is ALREADY
+ * mapped in when the test starts, smem_len is already at its maximum and
+ * cannot grow, so that check failed while the driver was behaving
+ * perfectly -- and printed a diagnosis ("set_par() left external SDRAM
+ * unmapped") that the numbers it had just printed flatly contradicted.
+ *
+ * That state is easy to be in and hard to see: the desktop runs
+ * double-buffered VGA (640x960 virtual = 1228800 bytes), which is already
+ * past the internal-SRAM threshold, and dropping to QVGA with
+ * matchbox-fbrun does not power external memory back off. So the "before"
+ * this test wants -- external off -- is not something running the test
+ * inside a live session can produce.
+ *
+ * Hence: fail only on the real defect (smem_len not covering the claim),
+ * and SKIP when external memory was already on beforehand, since that run
+ * genuinely cannot isolate the fix either way.
+ */
 static int mode_smem(void)
 {
 	struct fb_var_screeninfo original, claimed;
 	struct fb_fix_screeninfo fix_before, fix_after;
+	unsigned long long claimed_bytes;
 
 	if (get_var(&original) < 0)
 		return -1;
@@ -215,20 +260,41 @@ static int mode_smem(void)
 	if (get_fix(&fix_after) < 0)
 		return -1;
 
-	printf("after:  smem_len = %u bytes (yres_virtual now %u)\n",
-	       fix_after.smem_len, claimed.yres_virtual);
+	claimed_bytes = (unsigned long long)fix_after.line_length *
+			claimed.yres_virtual;
 
-	if (fix_after.smem_len > MEM_INT_SIZE_PLUS_1 &&
-	    fix_after.smem_len > fix_before.smem_len) {
-		pass("smem_len grew past the internal-SRAM bucket once a "
-		     "bigger virtual buffer was claimed -- the fix is present");
+	printf("after:  smem_len = %u bytes (yres_virtual now %u, which needs "
+	       "%llu)\n", fix_after.smem_len, claimed.yres_virtual,
+	       claimed_bytes);
+
+	if (fix_after.smem_len < claimed_bytes) {
+		fail("smem_len (%u) does not cover the virtual size set_par() "
+		     "just accepted (%llu bytes) -- this is exactly the bug "
+		     "PR #118 fixes: check_var() approved this virtual size, "
+		     "but set_par() left external SDRAM unmapped/suspended, so "
+		     "anything past %lu bytes would land on memory that "
+		     "genuinely isn't there.",
+		     fix_after.smem_len, claimed_bytes, MEM_INT_SIZE_PLUS_1);
+	} else if (fix_before.smem_len > MEM_INT_SIZE_PLUS_1) {
+		skip("external SDRAM was already mapped in before this test "
+		     "claimed anything (smem_len was %u, past the %lu "
+		     "internal-SRAM bucket), so smem_len had no room left to "
+		     "grow and this run cannot isolate the video-mem fix. It "
+		     "does still show smem_len (%u) covering the accepted "
+		     "virtual size (%llu). For a run that isolates the fix, "
+		     "the device has to reach a small mode without a large "
+		     "virtual buffer having been claimed first -- e.g. boot "
+		     "straight into QVGA rather than dropping into it from "
+		     "the double-buffered VGA desktop. `spare` mode does not "
+		     "have this limitation and tests the same memory for "
+		     "real.",
+		     fix_before.smem_len, MEM_INT_SIZE_PLUS_1,
+		     fix_after.smem_len, claimed_bytes);
 	} else {
-		fail("smem_len did NOT grow (%u -> %u) -- this is exactly "
-		     "the bug PR #118 fixes: check_var() would have approved "
-		     "this virtual size, but set_par() left external SDRAM "
-		     "unmapped/suspended, so anything past %lu bytes would "
-		     "have landed on memory that genuinely wasn't there.",
-		     fix_before.smem_len, fix_after.smem_len, MEM_INT_SIZE_PLUS_1);
+		pass("smem_len grew past the internal-SRAM bucket (%u -> %u) "
+		     "once a bigger virtual buffer was claimed, and covers it "
+		     "(%llu needed) -- the fix is present",
+		     fix_before.smem_len, fix_after.smem_len, claimed_bytes);
 	}
 
 	restore_var(&original);
