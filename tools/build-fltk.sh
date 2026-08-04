@@ -333,15 +333,24 @@ fi
 # Unlike fltktest/matchbox-fbrun this one decodes PNG/JPEG/BMP thumbnails,
 # so it needs libfltk_images and its own dependencies (-lpng -lz) ahead of
 # -lfltk -- see docs/HOWTO-FLTK.md, "Add image loading".
+#
+# It is now a thin main() over panels/panel-wallpaper.cxx, which is the
+# SAME source piko-settings compiles in to show the picker inside its own
+# window (docs/HOWTO-SETTINGS-APP.md, "One panel, two ways in"). Both
+# binaries therefore carry a copy of the panel's object code, which is the
+# deliberate trade: one copy of the SOURCE, and no dlopen, no plugin ABI
+# and no second process at runtime. -I"$SRC" is what makes the
+# "panels/..." includes resolve.
 WALLPAPER_PICKER_SRC="$SRC/mb-wallpaper-picker.cxx"
+PANEL_SRCS="$SRC/panels/panel-wallpaper.cxx"
 if [ -f "$WALLPAPER_PICKER_SRC" ]; then
     echo "==> building mb-wallpaper-picker"
     fbrun_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
     mkdir -p "$STAGE/usr/bin"
     "$CXX" -O2 -Wall -Wextra \
-        -isystem "$STAGE/usr/include" \
+        -isystem "$STAGE/usr/include" -I"$SRC" \
         -o "$STAGE/usr/bin/mb-wallpaper-picker" \
-        "$WALLPAPER_PICKER_SRC" \
+        "$WALLPAPER_PICKER_SRC" $PANEL_SRCS \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
         -lfltk_images -lpng -lz -lfltk $fbrun_ldlibs
 
@@ -376,15 +385,22 @@ fi
 # Needs libfltk_images for the same reason mb-wallpaper-picker does -- it
 # draws each entry's Icon=, which is a PNG -- so -lfltk_images -lpng -lz go
 # ahead of -lfltk. See docs/HOWTO-FLTK.md, "Add image loading".
+#
+# $PANEL_SRCS is every embeddable settings panel, the same list the
+# standalone binaries above compile in. This is what lets tapping "Set
+# Wallpaper" open the picker INSIDE this window rather than launching a
+# second program -- one copy of the source, two ways in. A new panel is
+# added to PANEL_SRCS, to PANELS[] in piko-settings.cxx, and to its own
+# .desktop file as X-Piko-Settings-Panel=<name>; nothing else changes.
 PIKO_SETTINGS_SRC="$SRC/piko-settings.cxx"
 if [ -f "$PIKO_SETTINGS_SRC" ]; then
     echo "==> building piko-settings"
     settings_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
     mkdir -p "$STAGE/usr/bin"
     "$CXX" -O2 -Wall -Wextra \
-        -isystem "$STAGE/usr/include" \
+        -isystem "$STAGE/usr/include" -I"$SRC" \
         -o "$STAGE/usr/bin/piko-settings" \
-        "$PIKO_SETTINGS_SRC" \
+        "$PIKO_SETTINGS_SRC" $PANEL_SRCS \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
         -lfltk_images -lpng -lz -lfltk $settings_ldlibs
 
