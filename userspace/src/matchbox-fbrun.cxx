@@ -25,12 +25,19 @@
  * replaces it rather than sitting beside it.
  *
  * USAGE
- *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--] program [args...]
+ *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] program [args...]
  *
  *   -n NAME    application name for the dialog (default: the binary's name)
  *   -r REASON  extra line of explanation in the dialog
  *   -y         skip the dialog and proceed (for scripts and for the
  *              console case, where there is nothing to ask about)
+ *   --qvga     switch /dev/fb0 to half its native resolution before running
+ *              the program, and back afterwards. Several of this ROM's
+ *              devices pixel-double a QVGA framebuffer back up to their
+ *              native VGA glass in the LCD controller itself, so a program
+ *              that struggles at native resolution can ask for a quarter of
+ *              the pixels, for the same physical screen size, without
+ *              knowing anything about the panel underneath it.
  *
  * EXIT STATUS
  *   the program's own exit status, or 0 if the user chose Abort, or
@@ -49,6 +56,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fb.h>
 #include <linux/kd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -154,6 +162,9 @@ static pid_t child_pid;
 static int   session_was_stopped;
 static int   lock_held;
 static int   cleaned_up;
+static int   qvga_requested;
+static int   qvga_applied;
+static struct fb_var_screeninfo saved_var;
 
 /* ── /proc scanning ─────────────────────────────────────────────────────── */
 
@@ -311,6 +322,81 @@ static void show_splash(const char *name)
     close(fd);
 }
 
+/* ── video mode ─────────────────────────────────────────────────────────── */
+
+#define FB_DEV "/dev/fb0"
+
+/*
+ * Halves xres/yres from whatever mode the console is currently in, rather
+ * than hard-coding 240x320: that tracks the device's native orientation
+ * (portrait vs. landscape framebuffer) without this file needing to know
+ * it, and matches how these panels actually double QVGA pixels back up to
+ * their native glass -- see corgi_lcd_set_mode() in the LCD driver. Saves
+ * the pre-switch mode unconditionally so restore_video_mode() can put it
+ * back exactly, the same "step 5 is unconditional" guarantee the rest of
+ * this file gives the console and the session.
+ */
+static int set_qvga_mode(void)
+{
+    struct fb_var_screeninfo var;
+    int fd;
+
+    fd = open(FB_DEV, O_RDWR);
+    if (fd < 0) {
+        trace("set_qvga_mode: open %s failed: %s", FB_DEV, strerror(errno));
+        return 0;
+    }
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &saved_var) < 0) {
+        trace("set_qvga_mode: FBIOGET_VSCREENINFO failed: %s", strerror(errno));
+        close(fd);
+        return 0;
+    }
+
+    var = saved_var;
+    var.xres         = saved_var.xres / 2;
+    var.yres         = saved_var.yres / 2;
+    var.xres_virtual = var.xres;
+    var.yres_virtual = var.yres;
+    var.xoffset      = 0;
+    var.yoffset      = 0;
+    var.activate     = FB_ACTIVATE_NOW;
+
+    if (ioctl(fd, FBIOPUT_VSCREENINFO, &var) < 0) {
+        trace("set_qvga_mode: FBIOPUT_VSCREENINFO %ux%u failed: %s",
+              var.xres, var.yres, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    trace("set_qvga_mode: %ux%u -> %ux%u", saved_var.xres, saved_var.yres,
+          var.xres, var.yres);
+    return 1;
+}
+
+/* No-op unless set_qvga_mode() actually switched something -- called
+ * unconditionally from cleanup(), same as console_text_mode(). */
+static void restore_video_mode(void)
+{
+    int fd;
+
+    if (!qvga_applied)
+        return;
+    qvga_applied = 0;
+
+    fd = open(FB_DEV, O_RDWR);
+    if (fd < 0) {
+        trace("restore_video_mode: open %s failed: %s", FB_DEV, strerror(errno));
+        return;
+    }
+    saved_var.activate = FB_ACTIVATE_NOW;
+    if (ioctl(fd, FBIOPUT_VSCREENINFO, &saved_var) < 0)
+        trace("restore_video_mode: FBIOPUT_VSCREENINFO %ux%u failed: %s",
+              saved_var.xres, saved_var.yres, strerror(errno));
+    else
+        trace("restore_video_mode: restored %ux%u", saved_var.xres, saved_var.yres);
+    close(fd);
+}
+
 /* ── the graphical session ──────────────────────────────────────────────── */
 
 static int x_is_running(void)
@@ -444,6 +530,7 @@ static void cleanup(void)
 
     trace("cleanup: entered (session_was_stopped=%d)", session_was_stopped);
 
+    restore_video_mode();
     console_text_mode();
 
     if (session_was_stopped)
@@ -653,7 +740,7 @@ static int confirm(const char *name, const char *reason)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--] "
+            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] "
             "program [args...]\n");
 }
 
@@ -668,6 +755,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "-n") && i + 1 < argc)      name   = argv[++i];
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) reason = argv[++i];
         else if (!strcmp(argv[i], "-y"))                 assume_yes = 1;
+        else if (!strcmp(argv[i], "--qvga"))             qvga_requested = 1;
         else if (!strcmp(argv[i], "--"))                 { i++; break; }
         else if (argv[i][0] == '-')                      { usage(); return 2; }
         else                                             break;
@@ -770,6 +858,9 @@ int main(int argc, char **argv)
 
     session_was_stopped = session_stop();
     trace("main: session_was_stopped=%d, forking", session_was_stopped);
+
+    if (qvga_requested)
+        qvga_applied = set_qvga_mode();
 
     show_splash(name);
 
