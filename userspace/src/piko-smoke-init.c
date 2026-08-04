@@ -15,15 +15,26 @@
  *
  * What it does, in order:
  *   1. mount proc/sysfs.
- *   2. insmod (init_module(2)) every *.ko under /lib/modules, in a
+ *   2. indexes every *.ko entry under lib/modules/ directly out of the
+ *      actual shipped /update.tar (name + byte offset + size -- no
+ *      extraction to disk), then insmod's (init_module(2)) each one in a
  *      fixpoint retry loop -- this package's modules aren't shipped with
  *      full depmod metadata (build-update-package.sh copies specific
  *      .ko files by hand, see its own comment on this), so plain
  *      dependency-order-agnostic retries stand in for modprobe's
- *      dependency resolution.
- *   3. execs the actual shipped /usr/sbin/piko-update against the actual
- *      shipped /update.tar with --dry-run -- the same package this test
- *      run is itself validating.
+ *      dependency resolution. Reading straight out of /update.tar (rather
+ *      than a separately loose-extracted copy under /lib/modules, which
+ *      is how this used to work) means module data exists on this
+ *      initramfs's tmpfs exactly once, not twice -- see
+ *      flash/qemu-smoke-test.sh's own comment on why that doubling kept
+ *      tipping this test over the guest's fixed 64M as the package grew.
+ *   3. execs the actual shipped /usr/sbin/piko-update against that same
+ *      /update.tar with --dry-run -- the same package this test run is
+ *      itself validating. (piko-update's own --dry-run stages a verify
+ *      copy of every file under /tmp as part of its normal safety design
+ *      -- see piko-update.c's header -- so a THIRD copy of the package's
+ *      content transiently exists at that point regardless; avoiding the
+ *      loose-module copy here is what keeps that within budget.)
  *   4. Prints a single, greppable PASS/FAIL line to the console, then
  *      sleeps forever -- flash/qemu-smoke-test.sh's own host-side timeout
  *      is what ends the QEMU process; this never tries to power off the
@@ -35,7 +46,6 @@
  *   arm-linux-gnueabi-gcc -march=armv5te -O2 -static -o piko-smoke-init piko-smoke-init.c
  */
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -50,95 +60,176 @@
 
 #define MAX_MODULES 256
 #define MAX_PATH_LEN 300
+#define TAR_BLOCK_SIZE 512
 
-static char module_paths[MAX_MODULES][MAX_PATH_LEN];
+/* Plain POSIX ustar header -- same layout as piko-update.c's own reader
+ * (userspace/src/piko-update.c), just the subset this needs (no MANIFEST/
+ * checksum handling: this only ever indexes the shipped /update.tar this
+ * same smoke test just built, never an untrusted one). */
+struct tar_header {
+    char name[100];
+    char mode[8];
+    char uid[8];
+    char gid[8];
+    char size[12];
+    char mtime[12];
+    char chksum[8];
+    char typeflag;
+    char linkname[100];
+    char magic[6];
+    char version[2];
+    char uname[32];
+    char gname[32];
+    char devmajor[8];
+    char devminor[8];
+    char prefix[155];
+    char pad[12];
+};
+
+struct module_entry {
+    char path[MAX_PATH_LEN];
+    off_t offset;
+    long size;
+};
+
+static struct module_entry modules[MAX_MODULES];
 static int module_count = 0;
 
-static void find_modules(const char *dir)
+static long parse_octal(const char *field, size_t len)
 {
-    DIR *d = opendir(dir);
-    struct dirent *de;
-    char child[MAX_PATH_LEN];
-    struct stat st;
+    long val = 0;
+    size_t i = 0;
 
-    if (!d)
-        return;
-    while ((de = readdir(d)) != NULL) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
-            continue;
-        snprintf(child, sizeof(child), "%s/%s", dir, de->d_name);
-        if (stat(child, &st) < 0)
-            continue;
-        if (S_ISDIR(st.st_mode)) {
-            find_modules(child);
-        } else if (module_count < MAX_MODULES) {
-            size_t len = strlen(child);
-            if (len > 3 && strcmp(child + len - 3, ".ko") == 0)
-                snprintf(module_paths[module_count++], MAX_PATH_LEN, "%s", child);
-        }
+    while (i < len && field[i] == ' ')
+        i++;
+    for (; i < len && field[i]; i++) {
+        if (field[i] < '0' || field[i] > '7')
+            break;
+        val = val * 8 + (field[i] - '0');
     }
-    closedir(d);
+    return val;
 }
 
-/* verbose=1 prints exactly why this specific attempt failed (open/fstat/
- * malloc/read vs. the actual init_module() syscall) -- used only for the
- * final, still-unloaded modules after the retry loop converges, so a
- * genuine failure (missing file, bad ELF, real symbol/version mismatch)
- * is distinguishable from "just hadn't loaded its dependency yet". Without
- * this, every failure mode collapses into the same silent -1, and a file
- * that's simply missing from the initramfs looks identical in the log to
- * one that loaded fine on a later pass. */
-static int init_module_file(const char *path, int verbose)
+static int is_zero_block(const unsigned char *b, size_t n)
 {
-    int fd = open(path, O_RDONLY);
-    struct stat st;
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (b[i])
+            return 0;
+    return 1;
+}
+
+static void header_full_name(const struct tar_header *h, char *out, size_t outsz)
+{
+    char name[101];
+    char prefix[156];
+
+    memcpy(name, h->name, 100);
+    name[100] = '\0';
+    memcpy(prefix, h->prefix, 155);
+    prefix[155] = '\0';
+
+    if (prefix[0])
+        snprintf(out, outsz, "%s/%s", prefix, name);
+    else
+        snprintf(out, outsz, "%s", name);
+}
+
+/* Walks the ustar archive at tar_path purely by header arithmetic (no
+ * extraction) and records the name/offset/size of every lib/modules/...
+ * entry ending in .ko. Tolerant of a missing/truncated archive -- this
+ * runs before anything has confirmed the package is well-formed at all,
+ * and a missing/empty module list is a legitimate, reportable outcome
+ * (main() below already handles module_count == 0), not a crash. */
+static void index_modules(const char *tar_path)
+{
+    int fd = open(tar_path, O_RDONLY);
+    struct tar_header hdr;
+    off_t pos = 0;
+
+    if (fd < 0) {
+        printf("index_modules: open(%s) failed: %s\n", tar_path, strerror(errno));
+        return;
+    }
+
+    for (;;) {
+        ssize_t n = pread(fd, &hdr, sizeof(hdr), pos);
+        long size, nblocks;
+        char full_name[MAX_PATH_LEN];
+        size_t len;
+
+        if (n != (ssize_t)sizeof(hdr) || is_zero_block((unsigned char *)&hdr, sizeof(hdr)))
+            break;
+        pos += TAR_BLOCK_SIZE;
+
+        size = parse_octal(hdr.size, sizeof(hdr.size));
+        nblocks = (size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
+        header_full_name(&hdr, full_name, sizeof(full_name));
+
+        if (hdr.typeflag == '0' || hdr.typeflag == '\0') {
+            len = strlen(full_name);
+            if (len > 3 && strcmp(full_name + len - 3, ".ko") == 0 &&
+                module_count < MAX_MODULES) {
+                snprintf(modules[module_count].path, MAX_PATH_LEN, "%s", full_name);
+                modules[module_count].offset = pos;
+                modules[module_count].size = size;
+                module_count++;
+            }
+        }
+        pos += (off_t)nblocks * TAR_BLOCK_SIZE;
+    }
+
+    close(fd);
+}
+
+/* verbose=1 prints exactly why this specific attempt failed (read/malloc
+ * vs. the actual init_module() syscall) -- used only for the final,
+ * still-unloaded modules after the retry loop converges, so a genuine
+ * failure (real symbol/version mismatch, bad ELF) is distinguishable from
+ * "just hadn't loaded its dependency yet". */
+static int init_module_entry(int fd, const struct module_entry *m, int verbose)
+{
     void *buf;
     ssize_t n;
     long rc;
 
-    if (fd < 0) {
-        if (verbose)
-            printf("  %s: open failed: %s\n", path, strerror(errno));
-        return -1;
-    }
-    if (fstat(fd, &st) < 0) {
-        if (verbose)
-            printf("  %s: fstat failed: %s\n", path, strerror(errno));
-        close(fd);
-        return -1;
-    }
-    buf = malloc((size_t)st.st_size);
+    buf = malloc((size_t)m->size);
     if (!buf) {
         if (verbose)
-            printf("  %s: malloc(%lld) failed\n", path, (long long)st.st_size);
-        close(fd);
+            printf("  %s: malloc(%ld) failed\n", m->path, m->size);
         return -1;
     }
-    n = read(fd, buf, (size_t)st.st_size);
-    close(fd);
-    if (n != st.st_size) {
+    n = pread(fd, buf, (size_t)m->size, m->offset);
+    if (n != (ssize_t)m->size) {
         if (verbose)
-            printf("  %s: read %zd of %lld bytes: %s\n", path, n,
-                   (long long)st.st_size, strerror(errno));
+            printf("  %s: read %zd of %ld bytes: %s\n", m->path, n, m->size,
+                   strerror(errno));
         free(buf);
         return -1;
     }
-    rc = syscall(SYS_init_module, buf, (unsigned long)st.st_size, "");
+    rc = syscall(SYS_init_module, buf, (unsigned long)m->size, "");
     if (verbose && rc != 0)
-        printf("  %s: init_module failed: %s\n", path, strerror(errno));
+        printf("  %s: init_module failed: %s\n", m->path, strerror(errno));
     free(buf);
     return rc == 0 ? 0 : -1;
 }
 
-/* Loads every discovered module, retrying whatever hasn't loaded yet
- * until a full pass makes no further progress -- resolves load-order
- * dependencies without needing to know them upfront. Returns the number
- * still unloaded (0 == everything loaded). */
-static int load_all_modules(void)
+/* Loads every indexed module, retrying whatever hasn't loaded yet until a
+ * full pass makes no further progress -- resolves load-order dependencies
+ * without needing to know them upfront. Returns the number still unloaded
+ * (0 == everything loaded). */
+static int load_all_modules(const char *tar_path)
 {
+    int fd = open(tar_path, O_RDONLY);
     int loaded[MAX_MODULES] = {0};
     int remaining = module_count;
     int progress = 1;
+
+    if (fd < 0) {
+        printf("load_all_modules: open(%s) failed: %s\n", tar_path, strerror(errno));
+        return module_count;
+    }
 
     while (remaining > 0 && progress) {
         int i;
@@ -146,8 +237,8 @@ static int load_all_modules(void)
         for (i = 0; i < module_count; i++) {
             if (loaded[i])
                 continue;
-            if (init_module_file(module_paths[i], 0) == 0) {
-                printf("insmod OK   %s\n", module_paths[i]);
+            if (init_module_entry(fd, &modules[i], 0) == 0) {
+                printf("insmod OK   %s\n", modules[i].path);
                 loaded[i] = 1;
                 remaining--;
                 progress = 1;
@@ -159,14 +250,15 @@ static int load_all_modules(void)
         printf("insmod FAILED for:");
         for (i = 0; i < module_count; i++)
             if (!loaded[i])
-                printf(" %s", module_paths[i]);
+                printf(" %s", modules[i].path);
         printf("\n");
         /* One verbose re-attempt per still-failed module so the log shows
          * *why*, not just *that*. */
         for (i = 0; i < module_count; i++)
             if (!loaded[i])
-                init_module_file(module_paths[i], 1);
+                init_module_entry(fd, &modules[i], 1);
     }
+    close(fd);
     return remaining;
 }
 
@@ -263,10 +355,10 @@ int main(void)
 
     printf("\n=== piko-update QEMU smoke test ===\n\n");
 
-    find_modules("/lib/modules");
+    index_modules("/update.tar");
     if (module_count > 0) {
         printf("-- loading %d kernel module(s) --\n", module_count);
-        modules_failed = load_all_modules();
+        modules_failed = load_all_modules("/update.tar");
     } else {
         printf("-- no kernel modules in this package, skipping --\n");
         modules_failed = 0;

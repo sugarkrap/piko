@@ -13,21 +13,36 @@ name: Build piko.zip (SD-card recovery-flash package)
 #   - the bootstrap/stage-2 kernels themselves build with a normal EABI
 #     cross-gcc (gcc-arm-linux-gnueabi via apt, same as
 #     build-update-package.yml already uses).
-#   - piko-install/piko-backup (freestanding ARM OABI, no libc) and the
-#     bootstrap initramfs's static busybox both need a cross-gcc that can
-#     still emit genuine pre-EABI OABI code via -mabi=apcs-gnu, and (for
-#     the initramfs specifically) a small libc so the resulting busybox
-#     doesn't blow the bootstrap zImage's 1,294,336-byte NAND-slot budget.
-#     tools/build-oabi-toolchain.sh provisions this: it first checks
-#     whether any already-available compiler (e.g. the apt-installed
-#     gcc-arm-linux-gnueabi above) happens to produce genuine OABI code
-#     with that flag -- if not, it builds this project's own dev
-#     toolchain from source via crosstool-NG, from the tracked config at
-#     tools/oabi-toolchain.config. That from-source build is slow but
-#     cacheable, and every acceptance check in this pipeline is a real
-#     `readelf -h` flags check, never just "the compiler exited 0" (see
-#     tools/build-piko-install.sh's header comment for exactly why that
-#     distinction matters here).
+#   - piko-install/piko-backup specifically (freestanding, no libc at all)
+#     need a cross-gcc that can still emit genuine pre-EABI OABI code via
+#     -mabi=apcs-gnu -- forced explicitly in tools/build-piko-install.sh's
+#     own CFLAGS, since they run under Cacko's original stock environment
+#     before this project's own kernel is ever flashed.
+#     tools/build-oabi-toolchain.sh provisions a compiler for this: it
+#     first checks whether any already-available compiler (e.g. the
+#     apt-installed gcc-arm-linux-gnueabi above) happens to produce
+#     genuine OABI code with that flag -- if not, it builds this
+#     project's own dev toolchain from source via crosstool-NG, from the
+#     tracked config at tools/oabi-toolchain.config. That from-source
+#     build is slow but cacheable, and every acceptance check in this
+#     pipeline is a real `readelf -h` flags check, never just "the
+#     compiler exited 0" (see tools/build-piko-install.sh's header
+#     comment for exactly why that distinction matters here). Since these
+#     two are genuinely freestanding, glibc vs uclibc is irrelevant to
+#     them -- the apt glibc cross-gcc passing this check is a perfectly
+#     valid, fast outcome, not a shortcut that skips something they need.
+#   - the bootstrap initramfs's static busybox is a completely different
+#     requirement: it is NOT freestanding (it links a real libc) and does
+#     NOT need OABI codegen (tools/build-initramfs.sh never passes
+#     -mabi=apcs-gnu -- the bootstrap kernel it boots under is plain EABI,
+#     see above; CONFIG_OABI_COMPAT in kernel.config-corgi-7.1.4-minimal
+#     exists for OABI *userspace* binaries like piko-install to still run
+#     under it, not because the busybox itself needs to be OABI). All it
+#     needs is a small uClibc so it doesn't blow the bootstrap zImage's
+#     1,294,336-byte NAND-slot budget the way a glibc-static build would --
+#     exactly the same requirement scp/sftp-server below has, so it uses
+#     that same X11/Matchbox + SSH toolchain rather than oabi_toolchain's
+#     output (which, per the paragraph above, may legitimately BE glibc).
 #   - scp/sftp-server/dropbear (tools/build-ssh.sh) need a uClibc
 #     toolchain specifically -- not the apt glibc cross-gcc, because
 #     glibc's getpwnam/getpwuid go through NSS and dlopen() modules this
@@ -185,9 +200,43 @@ jobs:
         run: |
           ./tools/build-piko-install.sh --force
 
-      - name: Build bootstrap initramfs (static busybox, embedded in mtd1 zImage)
+      # Moved ahead of "Build bootstrap initramfs" (was originally right
+      # after it, alongside the SSH/X11 steps much further down) because
+      # that step's static busybox needs this exact uClibc toolchain, not
+      # whatever oabi_toolchain above resolved to. tools/build-oabi-
+      # toolchain.sh's own find_working_cc() accepts ANY compiler that
+      # merely passes its `-mabi=apcs-gnu` -> readelf 0x600 probe -- which
+      # apt's gcc-arm-linux-gnueabi (glibc) does -- so oabi_toolchain's
+      # output is correct for piko-install/piko-backup above (genuinely
+      # freestanding, -nostdlib, no libc at all, so glibc vs uclibc is
+      # irrelevant) but NOT for a real libc-linked busybox, where the size
+      # difference is the entire reason this needs uclibc specifically
+      # (see this workflow's header, and tools/build-initramfs.sh's own
+      # CROSS_COMPILE default: arm-unknown-linux-uclibcgnueabi-, the exact
+      # triplet this step produces). A long-lived warm cache on
+      # oabi-toolchain-v1-... previously masked this: cached hits kept
+      # reusing a REAL from-source uclibc build that had happened to be
+      # built here before EXTRA_CC_CANDIDATES-style shortcuts ever got
+      # taken, so the mismatch went unnoticed until that cache entry
+      # finally missed and find_working_cc() took the glibc shortcut,
+      # reporting a bin dir with no arm-unknown-linux-uclibcgnueabi-gcc in
+      # it at all.
+      - name: Cache X11/Matchbox + SSH toolchain (crosstool-NG build, shared arm-unknown-linux-uclibcgnueabi)
+        id: x11-toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain-x11
+          key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          save-always: true
+
+      - name: Provision X11/Matchbox + SSH toolchain
         env:
-          TOOLCHAIN_BIN_DIR: ${{ steps.oabi_toolchain.outputs.toolchain_bin_dir }}
+          PIKO_TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain-x11
+        run: |
+          ./tools/build-uclibc-toolchain.sh
+          echo "TOOLCHAIN_BIN_DIR=${PIKO_TOOLCHAIN_DIR}/x-tools/arm-unknown-linux-uclibcgnueabi/bin" >> "$GITHUB_ENV"
+
+      - name: Build bootstrap initramfs (static busybox, embedded in mtd1 zImage)
         run: |
           ./tools/build-initramfs.sh --force
 
@@ -248,37 +297,6 @@ jobs:
             exit 1
           fi
           echo "BOOT_ZIMAGE=$BOOT_ZIMAGE" >> "$GITHUB_ENV"
-
-      # Slow-but-cacheable, and entirely separate from the OABI toolchain
-      # cached above -- see the workflow header comment for why the two
-      # cannot share a directory. This is the SAME script and tracked
-      # config (tools/uclibc-toolchain.config) a fresh dev machine runs;
-      # nothing CI-specific about it. Shared by two independent downstream
-      # needs -- the X11/Matchbox desktop payload and the scp/sftp-server
-      # payload both dynamically link against this same uClibc-ng
-      # toolchain and cannot use either the apt EABI glibc-gcc (wrong libc:
-      # glibc's getpwnam/getpwuid go through NSS/dlopen(), which this
-      # rootfs has no modules for) or the OABI toolchain above (freestanding,
-      # not known to produce working shared libraries at all).
-      #
-      # Cache path AND key deliberately match build-update-package.yml's
-      # "X11/Matchbox toolchain" steps: it is the same toolchain from the
-      # same tracked config, so sharing one cache entry means only one of
-      # the two workflows ever pays the crosstool-NG build.
-      - name: Cache X11/Matchbox + SSH toolchain (crosstool-NG build, shared arm-unknown-linux-uclibcgnueabi)
-        id: x11-toolchain-cache
-        uses: actions/cache@v4
-        with:
-          path: toolchain-x11
-          key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
-          save-always: true
-
-      - name: Provision X11/Matchbox + SSH toolchain
-        env:
-          PIKO_TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain-x11
-        run: |
-          ./tools/build-uclibc-toolchain.sh
-          echo "TOOLCHAIN_BIN_DIR=${PIKO_TOOLCHAIN_DIR}/x-tools/arm-unknown-linux-uclibcgnueabi/bin" >> "$GITHUB_ENV"
 
       # Upstream release tarballs, sha256-verified by the script itself --
       # cached so a rerun doesn't re-fetch from matt.ucc.asn.au/openbsd.org.

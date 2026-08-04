@@ -14,13 +14,17 @@ set -eu
 # The initramfs PID 1 is userspace/src/piko-smoke-init.c, a small
 # dependency-free static binary (same reasoning as md5sum.c's own "no
 # busybox applet for this" rationale) -- it mounts proc/sysfs, insmod's
-# every *.ko under /lib/modules, execs piko-update --dry-run against the
-# actual /update.tar, and prints one greppable PASS/FAIL line. It never
-# touches the rest of the shipped rootfs overlay (etc/*, the other
+# every *.ko it finds by reading the shipped /update.tar directly (no
+# separate loose-extracted copy under /lib/modules -- see its own header
+# comment on why that duplication used to tip this test over the guest's
+# fixed 64M as the package grew), execs piko-update --dry-run against
+# that same /update.tar, and prints one greppable PASS/FAIL line. It
+# never touches the rest of the shipped rootfs overlay (etc/*, the other
 # usr/sbin/* scripts, or the package's own top-level "init" -- note that
 # path collides with this script's own /init if the whole tar were
 # extracted naively, which is why only usr/sbin/piko-update and
-# lib/modules are pulled out of it, not the full archive).
+# usr/sbin/piko-smf-write are pulled out of it loose, not the full
+# archive).
 #
 # Usage:
 #   flash/qemu-smoke-test.sh <kernel_dir> <update_tar>
@@ -83,35 +87,34 @@ cp "$KERNEL_DIR/arch/arm/boot/zImage" "$STAGE/zImage-qemu-variant"
 cp "$STAGE/config.real-device" "$CONFIG"
 
 echo "==> assembling smoke-test initramfs (piko-smoke-init + the actual update.tar payload)"
-mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/lib/modules" "$STAGE/root/tmp"
+mkdir -p "$STAGE/root/proc" "$STAGE/root/sys" "$STAGE/root/usr/sbin" "$STAGE/root/tmp"
 cp "$STAGE/piko-smoke-init" "$STAGE/root/init"
 chmod 755 "$STAGE/root/init"
 
 # Pull only what's actually exercised out of the tar -- NOT the whole
 # archive: the package's own top-level "init" (rootfs/init, meant for the
 # real device) would otherwise land at this initramfs's /init too and
-# silently clobber piko-smoke-init.
+# silently clobber piko-smoke-init. Modules are NOT extracted here --
+# piko-smoke-init reads them straight out of update.tar itself (see its
+# own header comment), so only the two binaries that actually need to be
+# executable files (piko-update, piko-smf-write) get pulled loose.
 tar xf "$UPDATE_TAR" -C "$STAGE/root" usr/sbin/piko-update
 chmod 755 "$STAGE/root/usr/sbin/piko-update"
 # piko-update execs this for smf/NAND work; the smoke test checks it ships
 # and that the paths using it stay inert with no NAND present.
 tar xf "$UPDATE_TAR" -C "$STAGE/root" usr/sbin/piko-smf-write
 chmod 755 "$STAGE/root/usr/sbin/piko-smf-write"
-if tar tf "$UPDATE_TAR" | grep -q '^lib/modules/'; then
-    tar xf "$UPDATE_TAR" -C "$STAGE/root" --wildcards 'lib/modules/*'
-fi
 cp "$UPDATE_TAR" "$STAGE/root/update.tar"
 
 echo "==> staged initramfs tree (host side, before cpio archival):"
-ls -la "$STAGE/root/usr/sbin/piko-update" 2>&1
-find "$STAGE/root/lib/modules" -name '*.ko' -exec ls -la {} + 2>&1
+ls -la "$STAGE/root/usr/sbin/piko-update" "$STAGE/root/usr/sbin/piko-smf-write" "$STAGE/root/update.tar" 2>&1
 echo "==> total staged size (this is what has to fit in the guest's fixed 64M):"
 du -sb "$STAGE/root" 2>&1
 
 ( cd "$STAGE/root" && find . -mindepth 1 | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$STAGE/initramfs.cpio.gz"
 
 echo "==> initramfs contents after cpio archival (re-read back, host side):"
-zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|\.ko$'
+zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|piko-smf-write|update\.tar'
 
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"
@@ -122,11 +125,14 @@ LOG="$STAGE/boot.log"
 # installing anything, see piko-update.c's own safety-model comment) lives
 # on the flash-backed "home" partition, not RAM -- but this test's
 # initramfs puts everything, including where /tmp ends up, into that same
-# fixed 64M. So the actual fix is keeping what has to fit there small, not
-# fighting the RAM ceiling: build-update-package.sh now strips debug info
-# from shipped .ko files (CONFIG_DEBUG_INFO=y bloats them well past what a
-# loadable module needs), which was the real excess, not tar/cpio
-# packaging corruption -- host-side sizes always matched at every stage.
+# fixed 64M. Two things keep this within budget as the package keeps
+# growing: build-update-package.sh strips debug info from shipped .ko
+# files (CONFIG_DEBUG_INFO=y bloats them well past what a loadable module
+# needs), and piko-smoke-init reads modules straight out of update.tar
+# instead of needing a second, loose-extracted copy of them (see its own
+# header comment) -- the one duplication that's left, piko-update's own
+# /tmp staging copy during --dry-run, is intrinsic to its safety design
+# and not something this test should try to avoid.
 timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
