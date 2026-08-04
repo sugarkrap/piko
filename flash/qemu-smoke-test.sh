@@ -13,18 +13,36 @@ set -eu
 #
 # The initramfs PID 1 is userspace/src/piko-smoke-init.c, a small
 # dependency-free static binary (same reasoning as md5sum.c's own "no
-# busybox applet for this" rationale) -- it mounts proc/sysfs, insmod's
-# every *.ko it finds by reading the shipped /update.tar directly (no
-# separate loose-extracted copy under /lib/modules -- see its own header
-# comment on why that duplication used to tip this test over the guest's
-# fixed 64M as the package grew), execs piko-update --dry-run against
-# that same /update.tar, and prints one greppable PASS/FAIL line. It
-# never touches the rest of the shipped rootfs overlay (etc/*, the other
-# usr/sbin/* scripts, or the package's own top-level "init" -- note that
-# path collides with this script's own /init if the whole tar were
-# extracted naively, which is why only usr/sbin/piko-update and
-# usr/sbin/piko-smf-write are pulled out of it loose, not the full
-# archive).
+# busybox applet for this" rationale) -- it mounts proc/sysfs/devtmpfs,
+# mounts a real SD card at /tmp (see below), insmod's every *.ko it finds
+# by reading the shipped /update.tar directly (no separate loose-extracted
+# copy under /lib/modules -- see its own header comment on why that
+# duplication used to tip this test over the guest's fixed 64M as the
+# package grew), execs piko-update --dry-run against that same
+# /update.tar, and prints one greppable PASS/FAIL line. It never touches
+# the rest of the shipped rootfs overlay (etc/*, the other usr/sbin/*
+# scripts, or the package's own top-level "init" -- note that path
+# collides with this script's own /init if the whole tar were extracted
+# naively, which is why only usr/sbin/piko-update and usr/sbin/piko-smf-write
+# are pulled out of it loose, not the full archive).
+#
+# Why a real SD card: piko-update's own --dry-run stages a full verify
+# copy of every shipped file under /tmp before touching anything live (see
+# piko-update.c's safety-model comment) -- intrinsic to how it actually
+# works, not something to design around. On real hardware /tmp lives on
+# the flash-backed "home" partition, with far more room than this guest's
+# fixed 64M of RAM (see the qemu-system-arm invocation below for why that
+# ceiling can't be raised). Piling the whole package into a RAM-backed
+# initramfs and hoping /tmp's transient copy also fits kept tipping over
+# as the package grew (hit this twice already, even after real fixes each
+# time), so instead of shrinking the package further, this gives /tmp
+# actual room: a small SD card image, formatted vfat (CONFIG_MMC/
+# CONFIG_MMC_BLOCK/CONFIG_MMC_PXA/CONFIG_VFAT_FS are all built into the
+# kernel, confirmed via kernel.config-corgi-7.1.4, so there's no module to
+# insmod for this -- it's live from boot) -- exactly how piko-update is
+# actually used on real hardware (this script's own header, and
+# build-update-package.sh's: "copy the resulting update.tar to an SD card
+# and run piko-update /mnt/card/update.tar").
 #
 # Usage:
 #   flash/qemu-smoke-test.sh <kernel_dir> <update_tar>
@@ -116,26 +134,30 @@ du -sb "$STAGE/root" 2>&1
 echo "==> initramfs contents after cpio archival (re-read back, host side):"
 zcat "$STAGE/initramfs.cpio.gz" | cpio -tv 2>&1 | grep -E 'piko-update|piko-smf-write|update\.tar'
 
+echo "==> creating the SD card image piko-smoke-init mounts at /tmp"
+# 64M is comfortably more than the package (a few MB) needs for a full
+# second staged copy plus filesystem overhead, and small enough to format
+# in well under a second.
+SD_IMG="$STAGE/sdcard.img"
+dd if=/dev/zero of="$SD_IMG" bs=1M count=64 status=none
+mkfs.vfat "$SD_IMG" >/dev/null
+
 echo "==> booting under qemu-system-arm -M spitz (timeout ${QEMU_TIMEOUT}s)"
 LOG="$STAGE/boot.log"
 # -M spitz hard-codes 64M of guest RAM (matching real Corgi/Husky hardware)
 # and ignores -m entirely -- confirmed in CI: "Memory: 21160K/65536K
-# available" was identical whether or not -m was passed. Real hardware's
-# /tmp (where piko-update stages a verify copy of every file before
-# installing anything, see piko-update.c's own safety-model comment) lives
-# on the flash-backed "home" partition, not RAM -- but this test's
-# initramfs puts everything, including where /tmp ends up, into that same
-# fixed 64M. Two things keep this within budget as the package keeps
-# growing: build-update-package.sh strips debug info from shipped .ko
-# files (CONFIG_DEBUG_INFO=y bloats them well past what a loadable module
-# needs), and piko-smoke-init reads modules straight out of update.tar
-# instead of needing a second, loose-extracted copy of them (see its own
-# header comment) -- the one duplication that's left, piko-update's own
-# /tmp staging copy during --dry-run, is intrinsic to its safety design
-# and not something this test should try to avoid.
+# available" was identical whether or not -m was passed. That ceiling is
+# real and not worth fighting (build-update-package.sh already strips
+# module debug info, and piko-smoke-init reads modules straight out of
+# update.tar rather than needing a second loose-extracted copy -- see its
+# own header comment); what changed here is giving /tmp its own storage
+# (the -drive/-device pair below) instead of asking everything, including
+# piko-update's own --dry-run staging copy, to fit in that same 64M.
 timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
+    -drive id=sd0,if=none,file="$SD_IMG",format=raw \
+    -device sd-card,drive=sd0 \
     -append "console=ttyS0 earlyprintk panic=1" \
     -serial stdio -nographic -monitor none -no-reboot \
     > "$LOG" 2>&1 || true

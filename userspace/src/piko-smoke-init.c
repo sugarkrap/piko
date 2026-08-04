@@ -344,6 +344,57 @@ static int run_smf_checks(void)
     return failed ? -1 : 0;
 }
 
+/* Waits up to timeout_ms for path to appear (access() succeeding), polling
+ * every 100ms. Used only for the SD card's device node below -- MMC card
+ * detection runs its own enumeration after the bus comes up, so the node
+ * isn't guaranteed to exist the instant devtmpfs is mounted. */
+static int wait_for_path(const char *path, int timeout_ms)
+{
+    int waited = 0;
+
+    while (access(path, F_OK) != 0) {
+        if (waited >= timeout_ms)
+            return -1;
+        usleep(100000);
+        waited += 100;
+    }
+    return 0;
+}
+
+/* Mounts the SD card flash/qemu-smoke-test.sh attaches at /tmp, so
+ * piko-update's --dry-run (which stages a full verify copy of every
+ * shipped file under /tmp before touching anything live -- see
+ * piko-update.c's own safety-model comment) has real storage instead of
+ * competing with the rest of this initramfs for the guest's fixed 64M of
+ * RAM. CONFIG_MMC/CONFIG_MMC_BLOCK/CONFIG_MMC_PXA/CONFIG_VFAT_FS are all
+ * built into the kernel (not modules), so the device node just needs
+ * devtmpfs mounted and a short wait for card detection to finish -- no
+ * insmod dependency here at all.
+ *
+ * Not fatal if this fails: piko-update's own staging attempt is what
+ * actually surfaces the problem (ENOSPC if /tmp is still tmpfs-backed and
+ * the package doesn't fit), so this only prints a clear diagnostic rather
+ * than aborting -- a silent fallback here would turn a real regression
+ * back into the same confusing "No space left on device" this whole setup
+ * exists to avoid. */
+static void mount_sdcard_at_tmp(void)
+{
+    mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
+
+    if (wait_for_path("/dev/mmcblk0", 15000) != 0) {
+        printf("sdcard: /dev/mmcblk0 never appeared -- /tmp stays tmpfs-backed "
+               "(piko-update's --dry-run staging may hit ENOSPC on a large package)\n");
+        return;
+    }
+    if (mount("/dev/mmcblk0", "/tmp", "vfat", 0, NULL) != 0) {
+        printf("sdcard: mount /dev/mmcblk0 at /tmp failed: %s -- /tmp stays "
+               "tmpfs-backed (piko-update's --dry-run staging may hit ENOSPC "
+               "on a large package)\n", strerror(errno));
+        return;
+    }
+    printf("sdcard: /dev/mmcblk0 mounted at /tmp\n");
+}
+
 int main(void)
 {
     int modules_failed;
@@ -352,6 +403,7 @@ int main(void)
 
     mount("proc", "/proc", "proc", 0, NULL);
     mount("sysfs", "/sys", "sysfs", 0, NULL);
+    mount_sdcard_at_tmp();
 
     printf("\n=== piko-update QEMU smoke test ===\n\n");
 

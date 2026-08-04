@@ -114,7 +114,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-arm-linux-gnueabi \
               bison flex bc libssl-dev libelf-dev \
-              qemu-system-arm cpio \
+              qemu-system-arm cpio dosfstools \
               build-essential git autoconf automake bison flex texinfo \
               gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
               patch gawk python3-dev rsync \
@@ -125,7 +125,9 @@ jobs:
           # /usr/share/pkgconfig (see tools/build-x11-stack.sh's
           # PKG_CONFIG_LIBDIR). autoconf/automake/... etc. are
           # crosstool-NG's own build dependencies, needed to provision the
-          # X11 toolchain below.
+          # X11 toolchain below. dosfstools is mkfs.vfat, for the SD card
+          # image flash/qemu-smoke-test.sh formats for piko-update's
+          # --dry-run staging area (see that script's own comment).
 
       # Slow-but-cacheable, entirely separate from gcc-arm-linux-gnueabi
       # above -- see this workflow's header for why the X11 stack needs
