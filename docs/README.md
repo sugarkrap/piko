@@ -73,6 +73,15 @@ Devices and drivers:
 | [`DEADLETTER-W100-VSYNC.md`](DEADLETTER-W100-VSYNC.md) | The w100 vsync timeout — worked around, root cause still open. |
 | [`DEADLETTER-DROPBEAR-PTY.md`](DEADLETTER-DROPBEAR-PTY.md) | Dropbear PTY allocation. |
 
+## Open handoffs
+
+Live, actionable work-in-progress — not a HOWTO, not resolved yet. Move to
+`archive/` once done, per the pattern in `archive/HANDOFF-2026-07-28-X11-XFBDEV.md`.
+
+| Doc | What it covers |
+|---|---|
+| [`HANDOFF-2026-08-04-W100-ACCEL.md`](HANDOFF-2026-08-04-W100-ACCEL.md) | Build, deploy, and verify PR #118 (w100fb `smem_len` fix + `W100FB_IOC_FILL`/`BLIT`/`SYNC`) on real hardware — this session had no kernel build tree or board to do it itself. |
+
 ## Archive
 
 Superseded or resolved. Kept for the reasoning.
