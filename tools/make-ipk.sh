@@ -13,6 +13,10 @@ set -eu
 #   --arch ARCH        piko (default) or all
 #   --desc TEXT        one-line description
 #   --depends LIST     comma-separated package names
+#   --postinst FILE    script to run after opkg unpacks the package (opkg
+#                       0.6.3 runs control/postinst itself, see
+#                       libopkg/opkg_configure.c) -- copied in and marked
+#                       executable regardless of FILE's own permissions
 #   --out DIR          where to write the .ipk (default: current directory)
 #
 # Example -- package a binary plus its desktop entry:
@@ -56,6 +60,7 @@ ROOT=""
 ARCH="piko"
 DESC=""
 DEPENDS=""
+POSTINST=""
 OUTDIR="."
 MAINTAINER="${IPK_MAINTAINER:-piko <root@zaurus>}"
 
@@ -67,6 +72,7 @@ while [ $# -gt 0 ]; do
         --arch)     ARCH="${2:?--arch needs a value}"; shift 2 ;;
         --desc)     DESC="${2:?--desc needs a value}"; shift 2 ;;
         --depends)  DEPENDS="${2:?--depends needs a value}"; shift 2 ;;
+        --postinst) POSTINST="${2:?--postinst needs a value}"; shift 2 ;;
         --out)      OUTDIR="${2:?--out needs a value}"; shift 2 ;;
         -h|--help)  sed -n '3,30p' "$0"; exit 0 ;;
         *) echo "FAILED: unknown option: $1" >&2; exit 1 ;;
@@ -77,6 +83,7 @@ done
 [ -n "$VERSION" ] || { echo "FAILED: --version is required" >&2; exit 1; }
 [ -n "$ROOT" ]    || { echo "FAILED: --root is required" >&2; exit 1; }
 [ -d "$ROOT" ]    || { echo "FAILED: --root $ROOT is not a directory" >&2; exit 1; }
+[ -z "$POSTINST" ] || [ -f "$POSTINST" ] || { echo "FAILED: --postinst $POSTINST is not a file" >&2; exit 1; }
 
 case "$ARCH" in
     piko|all) ;;
@@ -135,12 +142,19 @@ mkdir -p "$WORK/control"
     echo "Description: ${DESC:-$NAME}"
 } > "$WORK/control/control"
 
+if [ -n "$POSTINST" ]; then
+    cp "$POSTINST" "$WORK/control/postinst"
+    chmod 755 "$WORK/control/postinst"
+fi
+
 # --- assemble ---------------------------------------------------------
 # --owner/--group 0 (rather than whatever the build user happens to be):
 # the device installs as root and has a deliberately minimal /etc/group,
 # so a package carrying an unknown numeric owner is asking for trouble.
 # --format=gnu keeps the members readable by the old tar layout too.
-( cd "$WORK/control" && tar --owner=0 --group=0 --format=gnu -czf "$WORK/control.tar.gz" ./control )
+# Tar the whole control/ dir, not just ./control by name, so postinst (and
+# any future preinst/postrm) rides along automatically when present.
+( cd "$WORK/control" && tar --owner=0 --group=0 --format=gnu -czf "$WORK/control.tar.gz" . )
 ( cd "$ROOT"         && tar --owner=0 --group=0 --format=gnu -czf "$WORK/data.tar.gz" . )
 
 echo "2.0" > "$WORK/debian-binary"

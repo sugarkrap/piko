@@ -559,8 +559,20 @@ static void w100_init_graphic_engine(struct w100fb_par *par)
  * mode's own width/height, not the target surface's -- w100fb_ioctl()
  * enforces that as an explicit -EINVAL rather than relying on silent
  * hardware clipping to make an oversized request merely ineffective.
+ *
+ * PITCH IS IN PIXELS HERE, NOT BYTES. mmDST_PITCH/mmSRC_PITCH are
+ * pixel-granularity registers -- w100_init_graphic_engine() programs them
+ * with a bare par->xres -- while mmGRAPHIC_PITCH, the scanout pitch a few
+ * functions down in this same file, is byte-granularity
+ * (par->xres*BITS_PER_PIXEL/8). Feeding a byte pitch to the 2D engine does
+ * not fault or clip: the engine simply strides twice as far per row at
+ * 16bpp and shears the output diagonally, which is why the unit is in these
+ * parameters' names. Everything OUTSIDE these two functions -- fbdev's
+ * fix.line_length, w100fb_accel.h's ioctl structs, w100fb_rect_fits()'s
+ * bounds arithmetic -- is in bytes; the callers convert, at the one place
+ * the unit changes.
  */
-static void w100_accel_fillrect(unsigned long dst_offset, u32 dst_pitch,
+static void w100_accel_fillrect(unsigned long dst_offset, u32 dst_pitch_px,
 				 u32 dx, u32 dy, u32 width, u32 height,
 				 u32 color)
 {
@@ -568,7 +580,7 @@ static void w100_accel_fillrect(unsigned long dst_offset, u32 dst_pitch,
 
 	w100_fifo_wait(2);
 	writel(dst_offset, remapped_regs + mmDST_OFFSET);
-	writel(dst_pitch, remapped_regs + mmDST_PITCH);
+	writel(dst_pitch_px, remapped_regs + mmDST_PITCH);
 
 	gmc.val = readl(remapped_regs + mmDP_GUI_MASTER_CNTL);
 	gmc.f.gmc_rop3 = ROP3_PATCOPY;
@@ -582,8 +594,8 @@ static void w100_accel_fillrect(unsigned long dst_offset, u32 dst_pitch,
 	writel((width << 16) | (height & 0xffff), remapped_regs + mmDST_WIDTH_HEIGHT);
 }
 
-static void w100_accel_copyarea(unsigned long src_offset, u32 src_pitch,
-				 unsigned long dst_offset, u32 dst_pitch,
+static void w100_accel_copyarea(unsigned long src_offset, u32 src_pitch_px,
+				 unsigned long dst_offset, u32 dst_pitch_px,
 				 u32 sx, u32 sy, u32 dx, u32 dy,
 				 u32 width, u32 height)
 {
@@ -591,9 +603,9 @@ static void w100_accel_copyarea(unsigned long src_offset, u32 src_pitch,
 
 	w100_fifo_wait(4);
 	writel(src_offset, remapped_regs + mmSRC_OFFSET);
-	writel(src_pitch, remapped_regs + mmSRC_PITCH);
+	writel(src_pitch_px, remapped_regs + mmSRC_PITCH);
 	writel(dst_offset, remapped_regs + mmDST_OFFSET);
-	writel(dst_pitch, remapped_regs + mmDST_PITCH);
+	writel(dst_pitch_px, remapped_regs + mmDST_PITCH);
 
 	gmc.val = readl(remapped_regs + mmDP_GUI_MASTER_CNTL);
 	gmc.f.gmc_rop3 = ROP3_SRCCOPY;
@@ -619,7 +631,11 @@ static void w100fb_fillrect(struct fb_info *info,
 		return;
 	}
 
-	w100_accel_fillrect(W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
+	/* Pixel pitch, per w100_accel_fillrect()'s contract: the visible
+	 * surface's fix.line_length is par->xres*BITS_PER_PIXEL/8 (set in
+	 * w100fb_set_par()), so in pixels it is par->xres -- exactly what
+	 * w100_init_graphic_engine() puts in mmDST_PITCH at mode-set time. */
+	w100_accel_fillrect(W100_FB_BASE, par->xres,
 			     rect->dx, rect->dy, rect->width, rect->height,
 			     rect->color);
 }
@@ -637,8 +653,9 @@ static void w100fb_copyarea(struct fb_info *info,
 		return;
 	}
 
-	w100_accel_copyarea(W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
-			     W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
+	/* Pixel pitch on both surfaces -- see w100fb_fillrect() above. */
+	w100_accel_copyarea(W100_FB_BASE, par->xres,
+			     W100_FB_BASE, par->xres,
 			     area->sx, area->sy, area->dx, area->dy,
 			     area->width, area->height);
 }
@@ -1020,6 +1037,16 @@ static bool w100fb_rect_fits(struct w100fb_par *par, struct fb_info *info,
 		return false;
 	if (x + width > par->xres || y + height > par->yres)
 		return false;
+	/* `pitch` is in bytes here (it is a w100fb_accel.h field, and the
+	 * address arithmetic below is byte-wise), but mmDST_PITCH/mmSRC_PITCH
+	 * want pixels, so the caller divides by BITS_PER_PIXEL/8 before handing
+	 * it to the engine -- see w100_accel_fillrect(). A byte pitch that is
+	 * not a whole number of pixels cannot survive that conversion: it would
+	 * truncate, and the engine would stride SHORT by up to one pixel on
+	 * every row while these bounds still said the rect fit. Reject it
+	 * instead of silently rounding to something the caller did not ask for. */
+	if (pitch % (BITS_PER_PIXEL / 8))
+		return false;
 
 	last_byte = (u64)offset + (u64)(y + height - 1) * pitch +
 		    (u64)(x + width) * (BITS_PER_PIXEL / 8);
@@ -1061,7 +1088,11 @@ static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
 				      a.x, a.y, a.width, a.height))
 			return -EINVAL;
 
-		w100_accel_fillrect(W100_FB_BASE + a.dst_offset, a.dst_pitch,
+		/* bytes (the ioctl ABI) -> pixels (what the engine wants);
+		 * w100fb_rect_fits() has already rejected a pitch that is not
+		 * a whole number of pixels, so this division is exact. */
+		w100_accel_fillrect(W100_FB_BASE + a.dst_offset,
+				     a.dst_pitch / (BITS_PER_PIXEL / 8),
 				     a.x, a.y, a.width, a.height, a.color);
 		return 0;
 	}
@@ -1084,8 +1115,11 @@ static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
 				      a.dx, a.dy, a.width, a.height))
 			return -EINVAL;
 
-		w100_accel_copyarea(W100_FB_BASE + a.src_offset, a.src_pitch,
-				     W100_FB_BASE + a.dst_offset, a.dst_pitch,
+		/* bytes -> pixels on both surfaces; see W100FB_IOC_FILL above. */
+		w100_accel_copyarea(W100_FB_BASE + a.src_offset,
+				     a.src_pitch / (BITS_PER_PIXEL / 8),
+				     W100_FB_BASE + a.dst_offset,
+				     a.dst_pitch / (BITS_PER_PIXEL / 8),
 				     a.sx, a.sy, a.dx, a.dy, a.width, a.height);
 		return 0;
 	}

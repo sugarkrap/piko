@@ -16,6 +16,10 @@ qemu-spitz/
 # regenerable; the *sources* that matter live in tools/qemu-corgi/.
 *-emulator-sd.img
 .emulator-sd.img
+# The staging tree itself, which --keep-tree leaves behind: ~100 MB of
+# assembled rootfs. Neither pattern above matches it (it is a directory, not
+# an .img), so it surfaced as untracked after every --keep-tree run.
+.emulator-sd-root/
 zImage-qemu-testing
 
 # =====================================================================

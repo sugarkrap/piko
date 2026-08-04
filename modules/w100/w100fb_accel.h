@@ -24,6 +24,13 @@
  * the only format this driver's GUI programming (DstType_16Bpp_444)
  * supports -- there is no format field.
  *
+ * PITCH: pitches are BYTES per row, matching fb_fix_screeninfo.line_length,
+ * and must be a whole number of pixels (a multiple of 2 at RGB565) or the
+ * call is rejected with -EINVAL. The chip's own pitch registers are
+ * pixel-granularity and the driver converts on the way in; a byte pitch that
+ * is not a whole number of pixels could not survive that conversion, and
+ * rounding it would stride short on every row rather than fail visibly.
+ *
  * SCISSOR: the engine's clip rectangle is fixed to the CURRENT display
  * mode's own [0,0]-[xres,yres] for every op, on-screen or off -- see the
  * comment above w100_accel_fillrect() in the driver. A rect that does not
