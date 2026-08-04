@@ -226,7 +226,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: toolchain-x11
-          key: x11-toolchain-v1-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
+          # v2 (2026-08-04): v1's cache had a corrupted ncurses-6.5.tar.gz
+          # baked in from some earlier interrupted run -- save-always: true
+          # persisted it, and actions/cache can never overwrite an existing
+          # key, so every restore kept re-verifying the same bad SHA512
+          # forever. Bumping the key discards it for a clean rebuild.
+          key: x11-toolchain-v2-${{ hashFiles('tools/uclibc-toolchain.config', 'tools/build-uclibc-toolchain.sh') }}
           save-always: true
 
       - name: Provision X11/Matchbox + SSH toolchain
