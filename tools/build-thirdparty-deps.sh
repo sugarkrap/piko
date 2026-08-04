@@ -110,7 +110,13 @@ e804e465d4b109b5ad285a8fb71f0dd3f74f0068f91ce3cdfde618180c174925 \
 usr/lib/pkgconfig/libpng.pc"
         ;;
     freetype)
-        echo "2.13.2 https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.gz \
+        # download.savannah.gnu.org (the other official mirror) returned a
+        # persistent 502 in CI (2026-08-04, confirmed across two separate
+        # runs over an hour apart, plus unreachable entirely from this
+        # sandbox's own network) -- not a one-off blip. SourceForge mirrors
+        # the identical release tarball (same sha256 below), and is already
+        # proven reachable in this same script for libpng above.
+        echo "2.13.2 https://download.sourceforge.net/freetype/freetype-2.13.2.tar.gz \
 1ac27e16c134a7f2ccea177faba19801131116fd682efc1f5737037c5db224b5 \
 usr/lib/pkgconfig/freetype2.pc"
         ;;
@@ -167,6 +173,17 @@ usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 configure_args() {
     case "$1" in
     libpng)     echo "--disable-static" ;;
+    xkeyboard-config)
+        # This package compiles nothing (protocol/keymap data only), but
+        # its configure still runs a pkg-config runtime-deps check for
+        # x11/xkbcomp -- tools this cross build hasn't produced yet at
+        # this point in the pipeline (libX11 comes later, in
+        # build-x11-stack.sh) and that the host may not have installed
+        # either. The check is for optional post-install cache
+        # generation, not for building, and configure's own error
+        # message names the flag that skips it.
+        echo "--disable-runtime-deps"
+        ;;
     freetype)
         # No harfbuzz (would be circular via pango), no brotli/bz2 (only
         # needed for compressed/WOFF2 fonts), no png (that's for colour

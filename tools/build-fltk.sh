@@ -124,11 +124,6 @@ if [ ! -f "$STAGE/usr/include/X11/Xlib.h" ] || [ ! -f "$STAGE/usr/lib/pkgconfig/
     exit 1
 fi
 
-if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
-    echo "==> FLTK already staged, skipping ($MARKER)"
-    exit 0
-fi
-
 PATH="$TOOLCHAIN_BIN_DIR:$PATH"
 export PATH
 export CC="$HOST-gcc"
@@ -146,97 +141,113 @@ export CPPFLAGS="-I$STAGE/usr/include"
 # /lib at runtime. Same note as tools/build-thirdparty-deps.sh.
 export LDFLAGS="-L$STAGE/usr/lib -Wl,-rpath-link=$STAGE/usr/lib"
 
-echo "==> FLTK $(git -C "$FLTK_SRC_DIR" describe --tags 2>/dev/null || echo '(unknown revision)')"
+# Only the LIBRARY build is skipped when already staged -- fltktest,
+# matchbox-fbrun and mb-wallpaper-picker below each have their own
+# independent up-to-date check against their own binary, same as every
+# other per-component check in tools/build-x11-stack.sh (mb-volume,
+# mb-brightness, ...). This used to be a hard `exit 0` right here, which
+# meant a worktree that already had libfltk.so.1.3 staged from an earlier
+# build silently never got a NEWLY ADDED downstream binary at all -- found
+# 2026-08-03 when mb-wallpaper-picker was added to this script: every
+# worktree with FLTK already staged from before that change kept skipping
+# straight past its build, failing later at payload-assembly time with a
+# confusing "missing .../usr/bin/mb-wallpaper-picker" instead of building
+# it here where the fix actually belongs.
+if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
+    echo "==> FLTK library already staged, skipping build ($MARKER)"
+else
+    echo "==> FLTK $(git -C "$FLTK_SRC_DIR" describe --tags 2>/dev/null || echo '(unknown revision)')"
 
-(
-    cd "$FLTK_SRC_DIR"
+    (
+        cd "$FLTK_SRC_DIR"
 
-    if [ "$FORCE" -eq 1 ] && [ -f makeinclude ]; then
-        echo "    --force: make distclean"
-        make distclean >/dev/null 2>&1 || true
-    fi
-
-    # The submodule is a git checkout, so there is no generated configure --
-    # only configure.ac. autogen.sh runs autoconf/automake and then runs
-    # configure itself unless NOCONFIGURE is set; keep the two steps apart so
-    # the configure line below is the one that matters and is visible.
-    if [ ! -f configure ]; then
-        echo "    generating configure (autogen.sh)"
-        if ! command -v autoconf >/dev/null 2>&1; then
-            echo "tools/build-fltk.sh: autoconf not installed on this host" >&2
-            echo "FLTK ships no pre-generated configure in git." >&2
-            exit 1
+        if [ "$FORCE" -eq 1 ] && [ -f makeinclude ]; then
+            echo "    --force: make distclean"
+            make distclean >/dev/null 2>&1 || true
         fi
-        NOCONFIGURE=1 ./autogen.sh
+
+        # The submodule is a git checkout, so there is no generated configure --
+        # only configure.ac. autogen.sh runs autoconf/automake and then runs
+        # configure itself unless NOCONFIGURE is set; keep the two steps apart so
+        # the configure line below is the one that matters and is visible.
+        if [ ! -f configure ]; then
+            echo "    generating configure (autogen.sh)"
+            if ! command -v autoconf >/dev/null 2>&1; then
+                echo "tools/build-fltk.sh: autoconf not installed on this host" >&2
+                echo "FLTK ships no pre-generated configure in git." >&2
+                exit 1
+            fi
+            NOCONFIGURE=1 ./autogen.sh
+        fi
+
+        echo "    configuring"
+        ./configure \
+            --host="$HOST" \
+            --build="$BUILD_ARCH" \
+            --prefix=/usr \
+            --x-includes="$STAGE/usr/include" \
+            --x-libraries="$STAGE/usr/lib" \
+            --enable-shared \
+            --enable-threads \
+            --enable-xft \
+            --enable-xdbe \
+            --enable-xrender \
+            --enable-localjpeg \
+            --disable-localzlib \
+            --disable-localpng \
+            --disable-gl \
+            --disable-xinerama \
+            --disable-xfixes \
+            --disable-xcursor \
+            --disable-cairo
+
+        # IMAGEDIRS is whichever bundled image libraries configure decided to
+        # build (just jpeg/, given the --disable-local{zlib,png} above). Read it
+        # back rather than hardcoding, so flipping one of those flags later
+        # cannot silently leave a bundled lib unbuilt.
+        imagedirs="$(sed -n 's/^IMAGEDIRS[[:space:]]*=[[:space:]]*//p' makeinclude)"
+        echo "    building:$(printf ' %s' $imagedirs) src"
+        for d in $imagedirs src; do
+            make -C "$d" -j"$JOBS"
+        done
+
+        # DIRS override: upstream's install walks FL + IMAGEDIRS + src + fluid +
+        # test + documentation. Only the first three exist for us (see header).
+        echo "    installing into $STAGE"
+        make install DESTDIR="$STAGE" DIRS="$imagedirs src"
+    )
+
+    if [ ! -f "$MARKER" ]; then
+        echo "tools/build-fltk.sh: build finished but $MARKER is missing" >&2
+        exit 1
     fi
 
-    echo "    configuring"
-    ./configure \
-        --host="$HOST" \
-        --build="$BUILD_ARCH" \
-        --prefix=/usr \
-        --x-includes="$STAGE/usr/include" \
-        --x-libraries="$STAGE/usr/lib" \
-        --enable-shared \
-        --enable-threads \
-        --enable-xft \
-        --enable-xdbe \
-        --enable-xrender \
-        --enable-localjpeg \
-        --disable-localzlib \
-        --disable-localpng \
-        --disable-gl \
-        --disable-xinerama \
-        --disable-xfixes \
-        --disable-xcursor \
-        --disable-cairo
+    # Match the rest of the staging tree: .la files record an absolute
+    # libdir=/usr/lib and make the cross-linker prefer the HOST copy of a
+    # library over ours. FLTK does not generate any today; delete defensively so
+    # a future libtool-ised release cannot reintroduce the trap silently.
+    rm -f "$STAGE"/usr/lib/libfltk*.la 2>/dev/null || true
 
-    # IMAGEDIRS is whichever bundled image libraries configure decided to
-    # build (just jpeg/, given the --disable-local{zlib,png} above). Read it
-    # back rather than hardcoding, so flipping one of those flags later
-    # cannot silently leave a bundled lib unbuilt.
-    imagedirs="$(sed -n 's/^IMAGEDIRS[[:space:]]*=[[:space:]]*//p' makeinclude)"
-    echo "    building:$(printf ' %s' $imagedirs) src"
-    for d in $imagedirs src; do
-        make -C "$d" -j"$JOBS"
-    done
-
-    # DIRS override: upstream's install walks FL + IMAGEDIRS + src + fluid +
-    # test + documentation. Only the first three exist for us (see header).
-    echo "    installing into $STAGE"
-    make install DESTDIR="$STAGE" DIRS="$imagedirs src"
-)
-
-if [ ! -f "$MARKER" ]; then
-    echo "tools/build-fltk.sh: build finished but $MARKER is missing" >&2
-    exit 1
-fi
-
-# Match the rest of the staging tree: .la files record an absolute
-# libdir=/usr/lib and make the cross-linker prefer the HOST copy of a
-# library over ours. FLTK does not generate any today; delete defensively so
-# a future libtool-ised release cannot reintroduce the trap silently.
-rm -f "$STAGE"/usr/lib/libfltk*.la 2>/dev/null || true
-
-echo "==> verifying the staged library is ARM, soft-float, and shared"
-elf_flags="$("$HOST-readelf" -h "$MARKER" | sed -n 's/^ *Flags: *//p')"
-case "$elf_flags" in
-    0x5000200*) : ;;
-    *)
-        echo "tools/build-fltk.sh: unexpected ELF Flags: $elf_flags" >&2
-        echo "(want 0x5000200 -- Version5 EABI, soft-float, matching Xfbdev/libX11)" >&2
+    echo "==> verifying the staged library is ARM, soft-float, and shared"
+    elf_flags="$("$HOST-readelf" -h "$MARKER" | sed -n 's/^ *Flags: *//p')"
+    case "$elf_flags" in
+        0x5000200*) : ;;
+        *)
+            echo "tools/build-fltk.sh: unexpected ELF Flags: $elf_flags" >&2
+            echo "(want 0x5000200 -- Version5 EABI, soft-float, matching Xfbdev/libX11)" >&2
+            exit 1
+            ;;
+    esac
+    soname="$("$HOST-readelf" -d "$MARKER" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')"
+    if [ "$soname" != "libfltk.so.$FL_DSO_VERSION" ]; then
+        echo "tools/build-fltk.sh: SONAME is '$soname', expected libfltk.so.$FL_DSO_VERSION" >&2
+        echo "tools/build-matchbox-payload.sh ships the file under its own name and" >&2
+        echo "relies on that being the SONAME; a mismatch would deploy a library the" >&2
+        echo "dynamic linker can never find." >&2
         exit 1
-        ;;
-esac
-soname="$("$HOST-readelf" -d "$MARKER" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')"
-if [ "$soname" != "libfltk.so.$FL_DSO_VERSION" ]; then
-    echo "tools/build-fltk.sh: SONAME is '$soname', expected libfltk.so.$FL_DSO_VERSION" >&2
-    echo "tools/build-matchbox-payload.sh ships the file under its own name and" >&2
-    echo "relies on that being the SONAME; a mismatch would deploy a library the" >&2
-    echo "dynamic linker can never find." >&2
-    exit 1
+    fi
+    echo "    Flags: $elf_flags  SONAME: $soname"
 fi
-echo "    Flags: $elf_flags  SONAME: $soname"
 
 # --- the smoke-test app -------------------------------------------------
 # Same idea as tools/build-sdl.sh's sdltest: the smallest program that
@@ -322,15 +333,24 @@ fi
 # Unlike fltktest/matchbox-fbrun this one decodes PNG/JPEG/BMP thumbnails,
 # so it needs libfltk_images and its own dependencies (-lpng -lz) ahead of
 # -lfltk -- see docs/HOWTO-FLTK.md, "Add image loading".
+#
+# It is now a thin main() over panels/panel-wallpaper.cxx, which is the
+# SAME source piko-settings compiles in to show the picker inside its own
+# window (docs/HOWTO-SETTINGS-APP.md, "One panel, two ways in"). Both
+# binaries therefore carry a copy of the panel's object code, which is the
+# deliberate trade: one copy of the SOURCE, and no dlopen, no plugin ABI
+# and no second process at runtime. -I"$SRC" is what makes the
+# "panels/..." includes resolve.
 WALLPAPER_PICKER_SRC="$SRC/mb-wallpaper-picker.cxx"
+PANEL_SRCS="$SRC/panels/panel-wallpaper.cxx"
 if [ -f "$WALLPAPER_PICKER_SRC" ]; then
     echo "==> building mb-wallpaper-picker"
     fbrun_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
     mkdir -p "$STAGE/usr/bin"
     "$CXX" -O2 -Wall -Wextra \
-        -isystem "$STAGE/usr/include" \
+        -isystem "$STAGE/usr/include" -I"$SRC" \
         -o "$STAGE/usr/bin/mb-wallpaper-picker" \
-        "$WALLPAPER_PICKER_SRC" \
+        "$WALLPAPER_PICKER_SRC" $PANEL_SRCS \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
         -lfltk_images -lpng -lz -lfltk $fbrun_ldlibs
 
@@ -354,6 +374,90 @@ if [ -f "$WALLPAPER_PICKER_SRC" ]; then
     esac
 else
     echo "==> skipping mb-wallpaper-picker (no $WALLPAPER_PICKER_SRC)"
+fi
+
+# --- piko-settings -------------------------------------------------------
+# The ROM's settings window (see userspace/src/piko-settings.cxx): every
+# .desktop file with Categories=Settings, grouped under its
+# X-Piko-Settings-Group heading. Ships to /usr/local/bin, same as pikostore
+# and mb-wallpaper-picker.
+#
+# Needs libfltk_images for the same reason mb-wallpaper-picker does -- it
+# draws each entry's Icon=, which is a PNG -- so -lfltk_images -lpng -lz go
+# ahead of -lfltk. See docs/HOWTO-FLTK.md, "Add image loading".
+#
+# $PANEL_SRCS is every embeddable settings panel, the same list the
+# standalone binaries above compile in. This is what lets tapping "Set
+# Wallpaper" open the picker INSIDE this window rather than launching a
+# second program -- one copy of the source, two ways in. A new panel is
+# added to PANEL_SRCS, to PANELS[] in piko-settings.cxx, and to its own
+# .desktop file as X-Piko-Settings-Panel=<name>; nothing else changes.
+PIKO_SETTINGS_SRC="$SRC/piko-settings.cxx"
+if [ -f "$PIKO_SETTINGS_SRC" ]; then
+    echo "==> building piko-settings"
+    settings_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" -I"$SRC" \
+        -o "$STAGE/usr/bin/piko-settings" \
+        "$PIKO_SETTINGS_SRC" $PANEL_SRCS \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk_images -lpng -lz -lfltk $settings_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-settings" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-settings does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+    case " $needed " in
+        *" libfltk_images.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-settings does not NEED libfltk_images.so.$FL_DSO_VERSION" >&2
+            echo "-- every entry's icon would fail to decode on the device." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-settings (no $PIKO_SETTINGS_SRC)"
+fi
+
+# piko-player (see userspace/src/piko-player.cxx): the FLTK front-end for
+# MPlayer. It embeds MPlayer's -vo x11 video in a child window via -wid and
+# drives it in slave mode -- so unlike piko-settings/mb-wallpaper-picker it
+# decodes no images of its own and needs no libfltk_images: plain -lfltk,
+# the same link as fltktest and matchbox-fbrun. The X11 it uses (fl_xid) is
+# reached through libfltk's own DT_NEEDED, not linked here directly. Ships to
+# /usr/local/bin like the other FLTK apps; the MPlayer binary it drives is a
+# separate build (tools/build-mplayer.sh, X11 variant).
+PIKO_PLAYER_SRC="$SRC/piko-player.cxx"
+if [ -f "$PIKO_PLAYER_SRC" ]; then
+    echo "==> building piko-player"
+    player_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -o "$STAGE/usr/bin/piko-player" \
+        "$PIKO_PLAYER_SRC" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk $player_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-player" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/build-fltk.sh: piko-player does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-player (no $PIKO_PLAYER_SRC)"
 fi
 
 echo ""

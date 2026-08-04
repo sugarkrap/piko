@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Configure the device
+Exec=piko-settings
+Icon=piko-settings
+Terminal=false
+Categories=Settings;
+X-Piko-Heading=true
+# This one is the door, so it is the one entry in the Settings category
+# that deliberately does NOT carry X-Piko-NoDesktop -- it belongs on the
+# desktop, and the apps it lists no longer do.
+#
+# Categories=Settings also puts it in the panel menu's "Desktop
+# Preferences" folder, next to the individual settings apps rather than
+# instead of them. It does not list itself: piko-settings skips the entry
+# whose Exec basename is its own (SELF_BINARY in piko-settings.cxx).
+#
+# X-Piko-Heading pins it above a separator at the top of that folder --
+# mb-applet-menu-launcher reads it, matchbox-panel's fork -- instead of
+# alphabetically after "Set Wallpaper" (space sorts before 't').

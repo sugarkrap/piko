@@ -142,6 +142,13 @@ TCROOT="${TCROOT:-$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot}"
 # against the root filesystem budget.
 CARD_ROOT="${CARD_ROOT:-/mnt/card/.zaurus}"
 MPLAYER_DEST="${MPLAYER_DEST:-$CARD_ROOT/usr/bin/mplayer}"
+# Scratch space for chunk staging/reassembly (REMOTE_STAGE below) and the
+# X11 payload tar, when the SD card is mounted -- same "heavy/transient
+# stuff belongs on the card, not the ~68 MiB root jffs2" call as
+# MPLAYER_DEST, just applied to every send_file, not only MPlayer. See the
+# REMOTE_STAGE selection further down for why this has to be a runtime
+# check (verified mount), not just "assume the card is there".
+CARD_TMP="${CARD_TMP:-$CARD_ROOT/tmp}"
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
 
 if [ ! -d "$REPO" ]; then
@@ -183,8 +190,48 @@ cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
 ssh_do() {
-    # shellcheck disable=SC2029
-    ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1"
+    # Retries internally so every caller gets link resilience for free,
+    # not just the ones that happen to wrap their call in `if`. Found
+    # 2026-08-02: send_file()'s per-chunk loop calls
+    # `existing=$(remote_size "$remote_part")` as a bare assignment at
+    # the TOP of every iteration, including the retry after a failed
+    # attempt -- under `set -eu`, remote_size's own ssh_do timing out
+    # (OpenSSH's "Timeout, server ... not responding", from
+    # ServerAliveCountMax) killed the ENTIRE deploy right there, with no
+    # message from this script and no further retry, on a link this
+    # script's whole premise is "known-flaky". A handful of other
+    # call sites (KVER_REMOTE, the md5sum/untar presence checks, the
+    # free-space check, ...) have the identical unguarded shape. Fixing
+    # every call site individually would be fixing the symptom in N
+    # places; this fixes the one function they all go through.
+    #
+    # Safe to retry blindly: every ssh_do command here is a fast,
+    # idempotent status check or `mkdir -p` -- never the bulk chunk
+    # transfer itself, which has its own retry loop around a raw `ssh`
+    # invocation for exactly this reason (see send_file). A failed
+    # attempt's timeout is reported on stderr, not stdout, so retrying
+    # cannot turn into printing a partial/garbled result to the caller.
+    # ssh_do_attempt, not `attempt`: this script has no `local` anywhere
+    # (not just here -- nowhere in the file), and send_file()'s own
+    # per-chunk retry loop already owns a global variable named
+    # `attempt`. ssh_do() is called FROM INSIDE that loop (via
+    # remote_size()) -- reusing the same name would have this retry
+    # counter silently clobber that outer one on every status check,
+    # corrupting its attempt count.
+    ssh_do_attempt=1
+    while :; do
+        # shellcheck disable=SC2029
+        if ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1"; then
+            return 0
+        fi
+        if [ "$ssh_do_attempt" -ge "$MAX_ATTEMPTS" ]; then
+            echo "FAILED: ssh command did not succeed after $MAX_ATTEMPTS attempts: $1" >&2
+            return 1
+        fi
+        echo "  (ssh_do: connection problem, retrying in ${RETRY_DELAY}s: $1)" >&2
+        ssh_do_attempt=$((ssh_do_attempt + 1))
+        sleep "$RETRY_DELAY"
+    done
 }
 
 remote_size() {
@@ -334,6 +381,33 @@ send_file() {
 }
 
 echo "Target: $TARGET"
+
+# Prefer staging on the SD card over the root jffs2: REMOTE_STAGE holds a
+# full copy of whatever file is currently being sent (as CHUNK_SIZE
+# pieces) for the duration of that transfer, on top of the reassembled
+# ".new" file send_file() writes next to the real destination -- so a
+# multi-MB payload's OWN staging is often what tips an already-tight root
+# over into ENOSPC (found 2026-08-02: the X11/Matchbox payload died mid
+# `cat`-reassembly with ~20 MiB of chunks + a partial .new stranded in
+# /tmp, on a partition that starts most sessions already >90% full).
+#
+# Verified mount, not assumed: pxamci's card-detect does not reliably
+# signal insertion (same note as the MPLAYER_DEST card branch below), so
+# `mount /mnt/card` can silently no-op and leave it unmounted even with a
+# card physically present -- writing to CARD_TMP while unmounted would
+# land right back on jffs2, the exact thing this is trying to avoid.
+ssh_do "mount /mnt/card 2>/dev/null || true"
+if ssh_do "grep -q ' /mnt/card ' /proc/mounts && echo yes || echo no" | grep -q yes; then
+    REMOTE_STAGE="$CARD_TMP"
+    X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-$CARD_TMP/x11-payload.tar}"
+    echo "==> staging transfers on the SD card ($REMOTE_STAGE)"
+else
+    X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-/tmp/x11-payload.tar}"
+    echo "==> no SD card mounted -- staging transfers on the root jffs2 ($REMOTE_STAGE)" >&2
+    echo "    (this is the ~68 MiB partition every file above is being written to --" >&2
+    echo "    insert a card if a transfer fails with ENOSPC)" >&2
+fi
+
 ssh_do "mkdir -p '$REMOTE_STAGE'"
 
 # 0. Bootstrap: deploy our own md5sum tool (device busybox has none built
@@ -479,6 +553,20 @@ else
     echo "==> skipping brightd (not built -- run tools/build-userspace.sh)"
 fi
 
+# 6a1. Boot splash (stage-2 half): the blitter and the picture it draws.
+# Kept in sync with flash/build-update-package.sh's STANDALONE_TOOLS list --
+# same binary, same destination, so the live path and the package path put
+# it in the same place. The asset is a raw RGB565 dump of the whole screen;
+# see docs/HOWTO-BOOT-SPLASH.md for why it is raw and not a PPM.
+if [ -f "$REPO/userspace/src/piko-splash" ]; then
+    send_file "$REPO/userspace/src/piko-splash" "/usr/sbin/piko-splash"
+    ssh_do "chmod 0755 /usr/sbin/piko-splash"
+    ssh_do "mkdir -p /usr/share/piko"
+    send_file "$REPO/rootfs/usr/share/piko/splash.raw" "/usr/share/piko/splash.raw"
+else
+    echo "==> skipping piko-splash (not built -- run tools/build-userspace.sh)"
+fi
+
 # 6a2. CPU speed / overclocking: the "mhz" helper, single-word for the same
 # typing constraint as "bright" above. It reloads pxa2xx-cpufreq to change
 # the overclock ceiling, so it needs no daemon and nothing at boot -- the
@@ -611,7 +699,7 @@ ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
 ssh_do "chmod 0755 /usr/sbin/sdapps"
 
 # The card's swap area. /usr/sbin/sdcard is the mdev hook that mounts the
-# card; it now also asks cardswap to bring a 64 MiB swapfile up and down
+# card; it now also asks cardswap to bring a 256 MiB swapfile up and down
 # with the mount. Both ship here because neither is reachable any other
 # way -- the hook is normally baked into the ROM image, so without this a
 # deploy would leave a device whose /etc/mdev.conf still runs the old
@@ -631,6 +719,20 @@ if [ -x "$REPO/userspace/src/cardswap" ]; then
 else
     echo "==> no built cardswap -- skipping (run tools/build-userspace.sh)"
     echo "    without it an inserted card mounts, but gets no swap area"
+fi
+
+# The RAM-resident swap area ahead of it. zramswap is called from rcS at
+# every boot -- unlike cardswap it needs no card and no hook, so it just
+# ships here and takes effect on the next reboot along with rcS itself
+# (see the rcS send_file below). Guarded the same way as cardswap: a
+# clean checkout without it built still boots and still has the card as
+# swap, just without the faster RAM-backed layer in front of it.
+if [ -x "$REPO/userspace/src/zramswap" ]; then
+    send_file "$REPO/userspace/src/zramswap" "/usr/sbin/zramswap"
+    ssh_do "chmod 0755 /usr/sbin/zramswap"
+else
+    echo "==> no built zramswap -- skipping (run tools/build-userspace.sh)"
+    echo "    without it the machine falls back to card-only swap"
 fi
 
 # /etc/mdev.conf is what actually invokes that hook, and until now nothing
@@ -998,7 +1100,7 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
         echo "  \$GCC -march=armv5te -O2 -static -o untar userspace/src/untar.c" >&2
         exit 1
     fi
-    send_file "$X11_PAYLOAD" "/tmp/x11-payload.tar"
+    send_file "$X11_PAYLOAD" "$X11_PAYLOAD_REMOTE"
     # A running X server holds its own binary open, so unpacking over it
     # fails with "Text file busy" and the payload only half-lands. Stop
     # the session first -- we are replacing exactly those binaries.
@@ -1009,7 +1111,7 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
     echo "==> stopping any running graphical session"
     ssh_do "for p in \$(ps | grep -E 'matchbox|xev|toasters' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "for p in \$(ps | grep Xfbdev | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
-    ssh_do "/usr/local/bin/untar /tmp/x11-payload.tar / && rm -f /tmp/x11-payload.tar"
+    ssh_do "/usr/local/bin/untar '$X11_PAYLOAD_REMOTE' / && rm -f '$X11_PAYLOAD_REMOTE'"
     echo "==> X11/Matchbox stack unpacked"
     echo "    (session stopped for the update; it restarts on reboot,"
     echo "     or run: DISPLAY=:0 matchbox-session &)"
@@ -1039,7 +1141,10 @@ if [ -x "$REPO/userspace/src/vol" ]; then
     echo "  /usr/sbin/vol            (volume: vol up / vol down / vol mute)"
 fi
 if [ -x "$REPO/userspace/src/cardswap" ]; then
-    echo "  /usr/sbin/cardswap       (64 MiB swap at /mnt/card/.zaurus/swap)"
+    echo "  /usr/sbin/cardswap       (256 MiB swap at /mnt/card/.zaurus/swap)"
+fi
+if [ -x "$REPO/userspace/src/zramswap" ]; then
+    echo "  /usr/sbin/zramswap       (32 MiB compressed RAM swap; zramswap starts from rcS)"
 fi
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"

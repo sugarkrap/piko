@@ -156,30 +156,24 @@ static unsigned long corgipm_read_devdata(int type)
 {
 	switch(type) {
 	case SHARPSL_STATUS_ACIN: {
-		int raw = gpio_get_value(CORGI_GPIO_AC_IN);
-		int acin;
 		/*
-		 * FIXED (2026-07-27): the previous unconditional `!raw` here
-		 * assumed AC_IN is active-low, matching mainline's Corgi/Shepherd
-		 * wiring (see spitz_pm.c's equivalent, also `!raw` -- same
-		 * convention). Live testing on this actual Husky board (charger
-		 * plugged in AND actively charging) showed raw=1 the whole time,
-		 * which `!raw` turned into acin=0 (offline) -- sharpsl_ac_isr()
-		 * then believed the charger had been removed and called
-		 * sharpsl_charge_off(), which explicitly forces the orange LED's
-		 * sharpsl-charge trigger to LED_OFF every time, even though real
-		 * charging kept happening (CORGI_GPIO_CHRG_ON is permanently held
-		 * open in corgi_charger_init(), so hardware charging wasn't
-		 * actually gated by this software mistake) -- this is what made
-		 * the LED appear to not light up all the time. Same class of
-		 * bug as the Husky SD write-protect polarity quirk in corgi.c's
-		 * husky_mci_gpio_table (GPIO_ACTIVE_HIGH override) -- Husky wiring
-		 * for this GPIO simply differs from stock Corgi/Shepherd. Only
-		 * flip polarity for Husky so real Corgi/Shepherd boards (if ever
-		 * used with this kernel) keep the mainline-correct behavior.
+		 * REVERTED (2026-08-03): the 2026-07-27 change below special-cased
+		 * Husky to `raw` (active-high) based on one observation of the
+		 * orange LED not lighting during charging. That diagnosis doesn't
+		 * hold up: since 2026-07-31 (commit 9571005) the LED is driven
+		 * directly by hardware -- GPIO13 is an enable, not something
+		 * software touches -- so a lit LED is ground truth for real
+		 * charger presence, independent of this GPIO entirely. Live
+		 * testing now (charger connected, orange LED lit, confirmed by
+		 * reseating the cable) shows `raw` reads 0 the whole time, which
+		 * under the Husky special case produced acin=0 (offline) while
+		 * actually charging -- the exact inverted reading that made
+		 * mb-applet-battery show the wrong icon. Plain `!raw`, matching
+		 * mainline's Corgi/Shepherd/Spitz convention (see spitz_pm.c's
+		 * equivalent), reports this correctly. Whatever caused the
+		 * original LED symptom, it wasn't AC_IN polarity.
 		 */
-		acin = machine_is_husky() ? raw : !raw;
-		return acin;
+		return !gpio_get_value(CORGI_GPIO_AC_IN);
 	}
 	case SHARPSL_STATUS_LOCK:
 		return gpio_get_value(sharpsl_pm.machinfo->gpio_batlock);
@@ -224,20 +218,29 @@ static struct sharpsl_charger_machinfo corgi_pm_machinfo = {
 	.bat_levels_noac  = sharpsl_battery_levels_noac,
 	.bat_levels_acin  = sharpsl_battery_levels_acin,
 	/*
-	 * Recalibrated 2026-07-26 for this specific (heavily aged) battery pack:
-	 * mainline's stock thresholds (188/178/185/175) assume a fresh battery
-	 * that peaks around raw ADC 213. This unit's real-world MAX1111 readings
-	 * top out around 140-145 even at/near full charge (confirmed against the
-	 * stock charger + Cacko, which does not treat this as low/critical) --
-	 * offset every threshold down by 40 to match. See drivers/sharpsl_pm.c's
-	 * battery_levels tables (offset by the same -40) and the disabled
-	 * critical-suspend trigger in sharpsl_battery_thread() for the rest of
-	 * this recalibration.
+	 * Reverted 2026-08-03: the 2026-07-26 recalibration (148/138/145/135)
+	 * assumed this pack peaks around raw ADC 140-145, but live readings on
+	 * this board (raw ADC ~198 on the BATT_VOLT channel while unplugged)
+	 * contradict that -- back to mainline's stock thresholds, which match
+	 * what this board actually reports. See sharpsl_pm.c's battery_levels
+	 * tables for the matching revert; the disabled critical-suspend
+	 * trigger in sharpsl_battery_thread() is unrelated and stays as-is.
+	 *
+	 * status_low_acin/status_low_noac corrected 2026-08-03 to 181/178
+	 * (from mainline's 178/175) after cross-checking against the actual
+	 * Sharp-built kernels: SL-C760 and SL-C860 Cacko 1.23 zImage.bin
+	 * (kernel 2.4.18-rmk7-pxa3-embedix, both boards being the same
+	 * PXA255 hardware under different model-string ROMs) contain the
+	 * identical compiled comparison `voltage > 181` and `voltage > 178`
+	 * against the retry-averaged MAX1111 battery-voltage read, at the
+	 * byte-identical code address in both kernels. No equivalent
+	 * evidence was found for the two status_high_* thresholds, which
+	 * remain mainline's values.
 	 */
-	.status_high_acin = 148,
-	.status_low_acin  = 138,
-	.status_high_noac = 145,
-	.status_low_noac  = 135,
+	.status_high_acin = 188,
+	.status_low_acin  = 181,
+	.status_high_noac = 185,
+	.status_low_noac  = 178,
 };
 
 static struct platform_device *corgipm_device;

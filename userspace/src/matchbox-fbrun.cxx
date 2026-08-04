@@ -25,12 +25,19 @@
  * replaces it rather than sitting beside it.
  *
  * USAGE
- *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--] program [args...]
+ *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] program [args...]
  *
  *   -n NAME    application name for the dialog (default: the binary's name)
  *   -r REASON  extra line of explanation in the dialog
  *   -y         skip the dialog and proceed (for scripts and for the
  *              console case, where there is nothing to ask about)
+ *   --qvga     switch /dev/fb0 to half its native resolution before running
+ *              the program, and back afterwards. Several of this ROM's
+ *              devices pixel-double a QVGA framebuffer back up to their
+ *              native VGA glass in the LCD controller itself, so a program
+ *              that struggles at native resolution can ask for a quarter of
+ *              the pixels, for the same physical screen size, without
+ *              knowing anything about the panel underneath it.
  *
  * EXIT STATUS
  *   the program's own exit status, or 0 if the user chose Abort, or
@@ -38,7 +45,10 @@
  */
 
 #include <FL/Fl.H>
-#include <FL/fl_ask.H>
+#include <FL/Fl_Window.H>
+#include <FL/Fl_Box.H>
+#include <FL/Fl_Return_Button.H>
+#include <FL/x.H>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
@@ -46,8 +56,10 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fb.h>
 #include <linux/kd.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,12 +102,69 @@
  */
 #define REENTRY_ENV "MATCHBOX_FBRUN_ACTIVE"
 
+/*
+ * Persistent phase trace, independent of every fd this process might have
+ * inherited. Found necessary live: the obvious place to look,
+ * matchbox-session's own stderr, runs through /etc/init.d/xsession's
+ * `> $SLOG 2>&1` -- which TRUNCATES on every session restart, so a crash
+ * during the very session-restart this program triggers can erase the
+ * output that would explain it. And an OOM kill (SIGKILL, which nothing
+ * -- not atexit(), not a handler -- can intercept) can take this process
+ * out mid-handover with no chance to report anything through a normal
+ * exit path at all.
+ *
+ * The fix for both is the same: log to a fixed file on the card, opened
+ * fresh and fsync()'d after every line, so whatever was written before
+ * the kill is what's on disk after it -- the trace ends exactly where
+ * execution did, which is the diagnostic value of the whole thing. Card
+ * rather than NAND on purpose: NAND is the ~68 MiB root this device is
+ * chronically near-full on, and a jffs2 GC stall is a real way for a
+ * write here to itself become the failure being diagnosed.
+ *
+ * Best-effort throughout: tracing must never be why the actual handover
+ * fails, so every error here is silently swallowed.
+ */
+#define TRACE_LOG "/mnt/card/.zaurus/var/log/fbrun-trace.log"
+
+static void trace(const char *fmt, ...)
+{
+    char msg[256];
+    va_list ap;
+    int fd, len;
+
+    va_start(ap, fmt);
+    len = vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    if (len < 0)
+        return;
+    if ((size_t)len >= sizeof(msg) - 1)
+        len = (int)sizeof(msg) - 2;   /* leave room for the newline below */
+    msg[len++] = '\n';
+
+    /* Cheap and idempotent (EEXIST on every call after the first) rather
+     * than tracked with a static flag: a stat() to check first would cost
+     * the same syscall this saves, and the target directory not existing
+     * yet (no card, or nothing has made it before) must not be fatal. */
+    mkdir("/mnt/card/.zaurus/var", 0755);
+    mkdir("/mnt/card/.zaurus/var/log", 0755);
+
+    fd = open(TRACE_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0)
+        return;
+    if (write(fd, msg, (size_t)len) > 0)
+        fsync(fd);
+    close(fd);
+}
+
 /* ── state the cleanup path needs ───────────────────────────────────────── */
 
 static pid_t child_pid;
 static int   session_was_stopped;
 static int   lock_held;
 static int   cleaned_up;
+static int   qvga_requested;
+static int   qvga_applied;
+static struct fb_var_screeninfo saved_var;
 
 /* ── /proc scanning ─────────────────────────────────────────────────────── */
 
@@ -178,6 +247,13 @@ static int process_alive(pid_t pid)
  * SIGKILL, a crash or an OOM kill cannot be caught by anything, and leave the
  * console stuck with no visible shell. Doing it here unconditionally is the
  * safety net the standalone fbtext used to provide.
+ *
+ * Also restores the text cursor (DECTCEM show, \033[?25h) hidden by
+ * show_splash() below. KD_GRAPHICS on this fbcon does not reliably blank
+ * the cursor by itself -- found live as a cursor-shaped artifact bleeding
+ * into the framebuffer during the splash text phase, while still in
+ * KD_TEXT -- so it is hidden and shown explicitly rather than assumed to
+ * follow the text/graphics mode switch.
  */
 static void console_text_mode(void)
 {
@@ -188,6 +264,136 @@ static void console_text_mode(void)
     if (fd < 0)
         return;
     ioctl(fd, KDSETMODE, KD_TEXT);
+    if (write(fd, "\033[?25h", 6) < 0)
+        { /* best-effort: a shell prompt with no cursor is a cosmetic issue, not this function's to fail over */ }
+    close(fd);
+}
+
+/*
+ * The console is still in KD_TEXT mode at this point -- whatever the
+ * launched program sets KD_GRAPHICS itself, later, is what stops fbcon
+ * drawing over it, and that switch (found live, in vid_fbdev.c for one
+ * fbdev-native engine) can be many seconds into the program's own init.
+ * Until then the screen is just whatever fbcon last had on it: usually
+ * stale boot dmesg, since nothing else writes to the console in normal
+ * operation. That reads as "hung" from the chair, not "starting" --
+ * there is no other signal a slow-starting program has that this device
+ * can show. Fixing that does not need a font renderer or pixel access:
+ * fbcon already renders text, so writing to it plainly (the ANSI clear
+ * first, so this replaces the stale text rather than sitting after it)
+ * is the whole fix.
+ */
+static void show_splash(const char *name)
+{
+    /* O_RDWR, not O_WRONLY -- matching console_text_mode() above, the
+     * proven-working open on this same device, rather than assuming a
+     * write-only open behaves identically. */
+    int fd = open("/dev/tty0", O_RDWR);
+    const char *dev = "/dev/tty0";
+    char msg[256];
+    int len;
+    ssize_t written;
+
+    if (fd < 0) {
+        dev = "/dev/console";
+        fd = open("/dev/console", O_RDWR);
+    }
+    if (fd < 0) {
+        trace("show_splash: could not open /dev/tty0 or /dev/console: %s", strerror(errno));
+        return;
+    }
+
+    /* \033[?25l (DECTCEM hide) first: KD_GRAPHICS later does not reliably
+     * blank this fbcon's cursor by itself -- see console_text_mode()'s
+     * comment, which shows it again on the way back. */
+    len = snprintf(msg, sizeof(msg),
+                    "\033[?25l\033[2J\033[H\n\n\n\n  Starting %s...\n\n"
+                    "  This can take a while depending on what it has to load.\n",
+                    name);
+    if (len <= 0) {
+        trace("show_splash: snprintf failed, len=%d", len);
+        close(fd);
+        return;
+    }
+
+    written = write(fd, msg, (size_t)len);
+    trace("show_splash: opened %s, wrote %d of %d bytes (errno if short/negative: %s)",
+          dev, (int)written, len, written < 0 ? strerror(errno) : "n/a");
+    close(fd);
+}
+
+/* ── video mode ─────────────────────────────────────────────────────────── */
+
+#define FB_DEV "/dev/fb0"
+
+/*
+ * Halves xres/yres from whatever mode the console is currently in, rather
+ * than hard-coding 240x320: that tracks the device's native orientation
+ * (portrait vs. landscape framebuffer) without this file needing to know
+ * it, and matches how these panels actually double QVGA pixels back up to
+ * their native glass -- see corgi_lcd_set_mode() in the LCD driver. Saves
+ * the pre-switch mode unconditionally so restore_video_mode() can put it
+ * back exactly, the same "step 5 is unconditional" guarantee the rest of
+ * this file gives the console and the session.
+ */
+static int set_qvga_mode(void)
+{
+    struct fb_var_screeninfo var;
+    int fd;
+
+    fd = open(FB_DEV, O_RDWR);
+    if (fd < 0) {
+        trace("set_qvga_mode: open %s failed: %s", FB_DEV, strerror(errno));
+        return 0;
+    }
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &saved_var) < 0) {
+        trace("set_qvga_mode: FBIOGET_VSCREENINFO failed: %s", strerror(errno));
+        close(fd);
+        return 0;
+    }
+
+    var = saved_var;
+    var.xres         = saved_var.xres / 2;
+    var.yres         = saved_var.yres / 2;
+    var.xres_virtual = var.xres;
+    var.yres_virtual = var.yres;
+    var.xoffset      = 0;
+    var.yoffset      = 0;
+    var.activate     = FB_ACTIVATE_NOW;
+
+    if (ioctl(fd, FBIOPUT_VSCREENINFO, &var) < 0) {
+        trace("set_qvga_mode: FBIOPUT_VSCREENINFO %ux%u failed: %s",
+              var.xres, var.yres, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    trace("set_qvga_mode: %ux%u -> %ux%u", saved_var.xres, saved_var.yres,
+          var.xres, var.yres);
+    return 1;
+}
+
+/* No-op unless set_qvga_mode() actually switched something -- called
+ * unconditionally from cleanup(), same as console_text_mode(). */
+static void restore_video_mode(void)
+{
+    int fd;
+
+    if (!qvga_applied)
+        return;
+    qvga_applied = 0;
+
+    fd = open(FB_DEV, O_RDWR);
+    if (fd < 0) {
+        trace("restore_video_mode: open %s failed: %s", FB_DEV, strerror(errno));
+        return;
+    }
+    saved_var.activate = FB_ACTIVATE_NOW;
+    if (ioctl(fd, FBIOPUT_VSCREENINFO, &saved_var) < 0)
+        trace("restore_video_mode: FBIOPUT_VSCREENINFO %ux%u failed: %s",
+              saved_var.xres, saved_var.yres, strerror(errno));
+    else
+        trace("restore_video_mode: restored %ux%u", saved_var.xres, saved_var.yres);
     close(fd);
 }
 
@@ -208,6 +414,7 @@ static int x_is_running(void)
  */
 static void close_other_clients(Display *dpy)
 {
+    trace("close_other_clients: start");
     Atom wm_delete   = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
     Atom wm_protos   = XInternAtom(dpy, "WM_PROTOCOLS", False);
     Atom client_list = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
@@ -246,6 +453,7 @@ static void close_other_clients(Display *dpy)
     }
 
     XFree(data);
+    trace("close_other_clients: done, notified %lu window(s)", nitems);
 }
 
 static int session_stop(void)
@@ -254,9 +462,12 @@ static int session_stop(void)
     int n, i, waited;
 
     n = find_pids(XSERVER_NAME, NULL, pids, 8);
-    if (n == 0)
+    if (n == 0) {
+        trace("session_stop: %s not running, nothing to do (console-only case)", XSERVER_NAME);
         return 0;                 /* nothing to stop; console-only case */
+    }
 
+    trace("session_stop: SIGTERM to %d %s pid(s)", n, XSERVER_NAME);
     for (i = 0; i < n; i++)
         kill(pids[i], SIGTERM);
 
@@ -265,13 +476,16 @@ static int session_stop(void)
             break;
         sleep(1);
     }
+    trace("session_stop: waited %ds for SIGTERM", waited);
 
     /* Refuses to go quietly; it is holding the framebuffer we need. */
     n = find_pids(XSERVER_NAME, NULL, pids, 8);
-    for (i = 0; i < n; i++)
-        kill(pids[i], SIGKILL);
-    if (n)
+    if (n) {
+        trace("session_stop: %d still alive after %ds, SIGKILL", n, waited);
+        for (i = 0; i < n; i++)
+            kill(pids[i], SIGKILL);
         sleep(1);
+    }
 
     /*
      * Wait for xsession's fallback getty to appear before handing the
@@ -283,6 +497,8 @@ static int session_stop(void)
             break;
         sleep(1);
     }
+    trace("session_stop: fallback getty %s after %ds -- returning",
+          waited < FALLBACK_TIMEOUT_S ? "appeared" : "NEVER APPEARED", waited);
 
     return 1;
 }
@@ -299,6 +515,7 @@ static void session_restore(void)
     int n, i;
 
     n = find_pids(NULL, SESSION_TTY, pids, 8);
+    trace("session_restore: SIGTERM to %d getty pid(s) on %s", n, SESSION_TTY);
     for (i = 0; i < n; i++)
         kill(pids[i], SIGTERM);
 }
@@ -311,6 +528,9 @@ static void cleanup(void)
         return;
     cleaned_up = 1;
 
+    trace("cleanup: entered (session_was_stopped=%d)", session_was_stopped);
+
+    restore_video_mode();
     console_text_mode();
 
     if (session_was_stopped)
@@ -318,6 +538,8 @@ static void cleanup(void)
 
     if (lock_held)
         unlink(LOCK_PATH);
+
+    trace("cleanup: done");
 }
 
 /*
@@ -327,6 +549,7 @@ static void cleanup(void)
  */
 static void sig_handler(int sig)
 {
+    trace("sig_handler: caught signal %d, child_pid=%d", sig, (int)child_pid);
     if (child_pid > 0)
         kill(child_pid, SIGTERM);
     cleanup();
@@ -361,6 +584,7 @@ static int take_lock(void)
         (void)written;   /* the pid is advisory; the file's existence is the lock */
         close(fd);
         lock_held = 1;
+        trace("take_lock: acquired");
         return 1;
     }
 
@@ -372,21 +596,51 @@ static int take_lock(void)
         if (len > 0) {
             buf[len] = '\0';
             pid_t owner = (pid_t)atoi(buf);
-            if (owner > 0 && process_alive(owner))
+            if (owner > 0 && process_alive(owner)) {
+                trace("take_lock: held by live pid=%d -- refusing (this is likely why nothing appeared to happen)", (int)owner);
                 return 0;
+            }
         }
     }
 
+    trace("take_lock: stale lock, taking it over");
     unlink(LOCK_PATH);
     fd = open(LOCK_PATH, O_CREAT | O_EXCL | O_WRONLY, 0644);
-    if (fd < 0)
+    if (fd < 0) {
+        trace("take_lock: could not recreate lock: %s", strerror(errno));
         return 0;
+    }
     close(fd);
     lock_held = 1;
+    trace("take_lock: acquired (after clearing stale lock)");
     return 1;
 }
 
 /* ── the dialog ─────────────────────────────────────────────────────────── */
+
+/*
+ * A hand-rolled dialog instead of fl_choice(): fl_choice()'s window carries
+ * no _NET_WM_WINDOW_TYPE and no WM_TRANSIENT_FOR (FLTK only sets the latter
+ * when this process already has another Fl_Window open, which it never
+ * does -- this dialog is the only GUI object matchbox-fbrun ever creates).
+ * With neither hint, matchbox-window-manager's classifier
+ * (wm_make_new_client() in wm.c) falls through to treating it as a plain
+ * MBCLIENT_TYPE_APP window -- the same category as the application it is
+ * about to launch -- instead of MBCLIENT_TYPE_DIALOG. An app window mapped
+ * while the desktop is showing can end up stacked *below* the desktop's
+ * full-screen window; a dialog never can (dialog_client_show() force-raises
+ * unconditionally). Result: the confirmation is live and pumping X events
+ * (a "hung" matchbox-fbrun is really just this, waiting forever) but never
+ * visible, so it can never be answered.
+ *
+ * Tagging the window _NET_WM_WINDOW_TYPE_DIALOG ourselves (wm.c:2039) is
+ * what routes it into that always-visible path. Must happen before show()
+ * maps the window -- see the comment at the XChangeProperty call below.
+ */
+static int dialog_result = 0;
+
+static void abort_cb(Fl_Widget *, void *w)     { dialog_result = 0; ((Fl_Window *)w)->hide(); }
+static void continue_cb(Fl_Widget *, void *w)  { dialog_result = 1; ((Fl_Window *)w)->hide(); }
 
 /*
  * Asked while X is still up, because afterwards there is nothing left to ask
@@ -404,10 +658,81 @@ static int confirm(const char *name, const char *reason)
              reason ? "\n" : "",
              reason ? reason : "");
 
-    fl_message_title("Start application");
+    Fl_Window win(420, 200, "Start application");
+    Fl_Box text(10, 10, 400, 130, msg);
+    text.align(FL_ALIGN_WRAP | FL_ALIGN_LEFT | FL_ALIGN_TOP | FL_ALIGN_INSIDE);
+    /* Buttons render right to left, matching fl_choice()'s old layout, so
+     * the safe default (Abort) is where a thumb already resting at the
+     * bottom-right of the screen would land on an accidental tap. */
+    Fl_Button abort_btn(210, 150, 100, 30, "Abort");
+    Fl_Return_Button continue_btn(310, 150, 100, 30, "Continue");
+    win.end();
 
-    /* Buttons render right to left, so index 0 is the safe default. */
-    return fl_choice("%s", "Abort", "Continue", (const char *)0, msg) == 1;
+    dialog_result = 0;
+    abort_btn.callback(abort_cb, &win);
+    continue_btn.callback(continue_cb, &win);
+    win.set_modal();
+    win.show();
+
+    fprintf(stderr, "confirm: win.show() done, fl_xid=0x%lx, shown()=%d\n",
+            (unsigned long)fl_xid(&win), win.shown());
+    fflush(stderr);
+
+    /*
+     * Must land before the window manager processes the MapRequest that
+     * win.show() just triggered, not after: with SubstructureRedirect set
+     * on the root window (which every window manager sets), a client's own
+     * XMapWindow doesn't map anything by itself, it only asks the X
+     * server to notify the window manager -- so the actual property value
+     * the window manager reads back on its own subsequent
+     * XGetWindowProperty call is whatever was last written by the time it
+     * gets around to asking, regardless of ordering against our show()
+     * call. X serialises requests from a single connection, so this
+     * XChangeProperty is guaranteed visible to any later query from any
+     * client, including the window manager, once this call returns.
+     */
+    Atom window_type = XInternAtom(fl_display, "_NET_WM_WINDOW_TYPE", False);
+    Atom dialog_type = XInternAtom(fl_display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+    XChangeProperty(fl_display, fl_xid(&win), window_type, XA_ATOM, 32,
+                     PropModeReplace, (unsigned char *)&dialog_type, 1);
+    XSync(fl_display, False);
+
+    /* Read back what the server actually stored, not what we think we
+     * sent -- confirms the property really landed on this window rather
+     * than silently failing (e.g. BadWindow from an xid that wasn't
+     * really ready yet). */
+    {
+        Atom actual_type = None;
+        int actual_format = 0;
+        unsigned long nitems = 0, bytes_after = 0;
+        unsigned char *prop = NULL;
+
+        XGetWindowProperty(fl_display, fl_xid(&win), window_type, 0, 1,
+                            False, XA_ATOM, &actual_type, &actual_format,
+                            &nitems, &bytes_after, &prop);
+        fprintf(stderr,
+                "confirm: readback type=%lu (want %lu) format=%d nitems=%lu"
+                " value=%lu (want %lu)\n",
+                (unsigned long)actual_type, (unsigned long)window_type,
+                actual_format, nitems,
+                prop ? *(Atom *)prop : 0, (unsigned long)dialog_type);
+        fflush(stderr);
+        if (prop) XFree(prop);
+    }
+
+    fprintf(stderr, "confirm: entering wait loop\n");
+    fflush(stderr);
+    trace("confirm: dialog shown, waiting for the user");
+
+    while (win.shown())
+        Fl::wait();
+
+    fprintf(stderr, "confirm: wait loop exited, result=%d\n", dialog_result);
+    fflush(stderr);
+    trace("confirm: answered, result=%d (%s)", dialog_result,
+          dialog_result ? "Continue" : "Abort");
+
+    return dialog_result;
 }
 
 /* ── main ───────────────────────────────────────────────────────────────── */
@@ -415,7 +740,7 @@ static int confirm(const char *name, const char *reason)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--] "
+            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] "
             "program [args...]\n");
 }
 
@@ -430,6 +755,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "-n") && i + 1 < argc)      name   = argv[++i];
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) reason = argv[++i];
         else if (!strcmp(argv[i], "-y"))                 assume_yes = 1;
+        else if (!strcmp(argv[i], "--qvga"))             qvga_requested = 1;
         else if (!strcmp(argv[i], "--"))                 { i++; break; }
         else if (argv[i][0] == '-')                      { usage(); return 2; }
         else                                             break;
@@ -446,6 +772,18 @@ int main(int argc, char **argv)
         name = slash ? slash + 1 : prog_argv[0];
     }
 
+    {
+        char argbuf[160] = "";
+        int j;
+        for (j = 0; prog_argv[j] && strlen(argbuf) < sizeof(argbuf) - 32; j++) {
+            strncat(argbuf, prog_argv[j], sizeof(argbuf) - strlen(argbuf) - 2);
+            strcat(argbuf, " ");
+        }
+        trace("main: invoked pid=%d ppid=%d name=%s reenter=%s target: %s",
+              (int)getpid(), (int)getppid(), name,
+              getenv(REENTRY_ENV) ? "yes" : "no", argbuf);
+    }
+
     /*
      * Already inside one of these: the session is stopped and the console is
      * ours, so there is nothing to ask, close, or restore. Just become the
@@ -453,6 +791,7 @@ int main(int argc, char **argv)
      */
     if (getenv(REENTRY_ENV)) {
         execvp(prog_argv[0], prog_argv);
+        trace("main: re-entrant execvp failed: %s", strerror(errno));
         fprintf(stderr, "matchbox-fbrun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         return 127;
@@ -462,6 +801,29 @@ int main(int argc, char **argv)
         fprintf(stderr, "matchbox-fbrun: another one is already running\n");
         return 0;
     }
+
+    /*
+     * Detach from whatever session forked us -- found necessary live, via
+     * the trace log above: matchbox-desktop is one of the toplevels
+     * close_other_clients() below asks to close (it owns a window, same as
+     * any other client), and if it treats its own WM_DELETE_WINDOW as "quit"
+     * and exits, it was this process's session leader -- so the kernel
+     * SIGHUPs the whole foreground process group, us included, BEFORE
+     * fork() ever happens. session_stop() was still mid-wait when that hit,
+     * so session_was_stopped (assigned only when it returns) was still 0,
+     * and cleanup() -- seeing that -- skipped session_restore(): the
+     * fallback getty that had already appeared was never told to get out of
+     * the way, leaving the device stuck at a console with nothing left
+     * running to fix it. setsid() makes this process (and, by inheritance,
+     * the child it forks below) its own session leader, immune to
+     * whatever happens to the one that launched it. Failure is not fatal --
+     * traced and otherwise ignored, since the alternative is not running at
+     * all over something that, at worst, restores the older racy behaviour.
+     */
+    if (setsid() < 0)
+        trace("main: setsid failed: %s (staying in the parent's session)", strerror(errno));
+    else
+        trace("main: setsid ok, new session id=%d", (int)getpid());
 
     install_handlers();
     atexit(cleanup);
@@ -474,22 +836,37 @@ int main(int argc, char **argv)
     if (!assume_yes && getenv("DISPLAY") && x_is_running()) {
         Display *dpy = XOpenDisplay(NULL);
 
+        trace("main: DISPLAY set and %s running -- %s", XSERVER_NAME,
+              dpy ? "opened, showing confirm dialog" : "XOpenDisplay FAILED, skipping dialog");
+
         if (dpy) {
             int proceed = confirm(name, reason);
 
             if (!proceed) {
+                trace("main: user chose Abort");
                 XCloseDisplay(dpy);
                 return 0;         /* atexit puts the lock back */
             }
             close_other_clients(dpy);
             XCloseDisplay(dpy);
         }
+    } else {
+        trace("main: skipping dialog (assume_yes=%d DISPLAY=%s %s=%s)",
+              assume_yes, getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)",
+              XSERVER_NAME, x_is_running() ? "running" : "not running");
     }
 
     session_was_stopped = session_stop();
+    trace("main: session_was_stopped=%d, forking", session_was_stopped);
+
+    if (qvga_requested)
+        qvga_applied = set_qvga_mode();
+
+    show_splash(name);
 
     child_pid = fork();
     if (child_pid < 0) {
+        trace("main: fork failed: %s", strerror(errno));
         perror("matchbox-fbrun: fork");
         return 126;
     }
@@ -504,14 +881,27 @@ int main(int argc, char **argv)
         signal(SIGHUP,  SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
         setenv(REENTRY_ENV, "1", 1);
+        trace("main: child pid=%d exec'ing %s", (int)getpid(), prog_argv[0]);
         execvp(prog_argv[0], prog_argv);
+        trace("main: child execvp failed: %s", strerror(errno));
         fprintf(stderr, "matchbox-fbrun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         _exit(127);
     }
 
+    trace("main: forked child pid=%d, waiting", (int)child_pid);
     while (waitpid(child_pid, &status, 0) < 0 && errno == EINTR)
         ;
+
+    if (WIFEXITED(status))
+        trace("main: child pid=%d exited, status=%d", (int)child_pid, WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        trace("main: child pid=%d KILLED by signal %d (%s)%s", (int)child_pid,
+              WTERMSIG(status), strsignal(WTERMSIG(status)),
+              WTERMSIG(status) == SIGKILL ? " -- likely OOM kill, check dmesg" : "");
+    else
+        trace("main: child pid=%d wait returned unexpected status=0x%x", (int)child_pid, status);
+
     child_pid = 0;
 
     cleanup();

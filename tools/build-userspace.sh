@@ -217,6 +217,26 @@ else
     echo "==> skipping brightd (no $BRIGHTD_SRC)"
 fi
 
+# --- 1b1. piko-splash (stage-2 half of the boot splash) ---------------------
+# Static, libc only. Exists because this rootfs cannot draw the splash any
+# other way: its busybox has no fbsplash applet and no gzip, and w100fb has
+# no usable write() path, so `cat splash.raw > /dev/fb0` fails with EINVAL.
+# mmap is the only route -- see the header in piko-splash.c.
+PIKO_SPLASH_SRC="$REPO/userspace/src/piko-splash.c"
+PIKO_SPLASH_BIN="$REPO/userspace/src/piko-splash"
+if [ -f "$PIKO_SPLASH_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$PIKO_SPLASH_BIN" ] || [ "$PIKO_SPLASH_SRC" -nt "$PIKO_SPLASH_BIN" ]; then
+        echo "==> building userspace/src/piko-splash"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$PIKO_SPLASH_BIN" "$PIKO_SPLASH_SRC"
+        "${CROSS_COMPILE}strip" "$PIKO_SPLASH_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/piko-splash already up to date"
+    fi
+else
+    echo "==> skipping piko-splash (no $PIKO_SPLASH_SRC)"
+fi
+
 # --- 1b2. flipd (screen rotation on the swivel hinge) -----------------------
 # Same shape as brightd: static, libc only, reads evdev and sysfs directly.
 # It turns the display 180 degrees via the w100 CRTC's scanout rotation
@@ -314,7 +334,7 @@ fi
 # Same hole as kill and pkillx, one layer down: this busybox is built
 # without mkswap, swapon AND swapoff, so there is no shell path to a swap
 # area at all on this device. cardswap creates, signs and enables the
-# 64 MiB file at /mnt/card/.zaurus/swap with the syscalls directly, and is
+# 256 MiB file at /mnt/card/.zaurus/swap with the syscalls directly, and is
 # what /usr/sbin/sdcard (the mdev hook) and mb-applet-card's Eject both
 # call. Without it the card mounts exactly as before and the machine
 # simply has no swap -- everything degrades quietly, which is why the
@@ -334,6 +354,31 @@ if [ -f "$CARDSWAP_SRC" ]; then
     fi
 else
     echo "==> skipping cardswap (no $CARDSWAP_SRC)"
+fi
+
+# --- 1c-quater-bis. zramswap (compressed RAM swap, ahead of the card's) -----
+# The same missing-applet hole as cardswap just above, for a second swap
+# device: /dev/zram0, backed by CONFIG_ZRAM in kernel.config-corgi-7.1.4
+# rather than the SD card. zramswap creates/resizes it, signs it, and
+# swapon(2)s it at a priority that always beats cardswap's, so pages go to
+# RAM-compressed storage first and only spill to the (slower, removable)
+# card once zram's fixed capacity is full. Started from rcS at boot,
+# unconditionally -- unlike the card, it needs no card to be present.
+#
+# Same -static reasoning as md5sum above.
+ZRAMSWAP_SRC="$REPO/userspace/src/zramswap.c"
+ZRAMSWAP_BIN="$REPO/userspace/src/zramswap"
+if [ -f "$ZRAMSWAP_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$ZRAMSWAP_BIN" ] || [ "$ZRAMSWAP_SRC" -nt "$ZRAMSWAP_BIN" ]; then
+        echo "==> building userspace/src/zramswap"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$ZRAMSWAP_BIN" "$ZRAMSWAP_SRC"
+        "${CROSS_COMPILE}strip" "$ZRAMSWAP_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/zramswap already up to date"
+    fi
+else
+    echo "==> skipping zramswap (no $ZRAMSWAP_SRC)"
 fi
 
 # --- 1c-quinquies. vol (one-word volume control) ----------------------------
@@ -507,6 +552,9 @@ if [ -f "$KILL_BIN" ]; then
 fi
 if [ -f "$CARDSWAP_BIN" ]; then
     echo "    cardswap: $CARDSWAP_BIN"
+fi
+if [ -f "$ZRAMSWAP_BIN" ]; then
+    echo "    zramswap: $ZRAMSWAP_BIN"
 fi
 if [ -d "$REPO/userspace/stage-ssh" ]; then
     echo "    ssh:     $REPO/userspace/stage-ssh ($(du -sh "$REPO/userspace/stage-ssh" 2>/dev/null | cut -f1))"

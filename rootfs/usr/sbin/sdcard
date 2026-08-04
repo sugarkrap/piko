@@ -11,20 +11,25 @@
 # semi-dead (found 2026-07-27). Re-mount only when a card is actually
 # present (add), not on removal.
 #
-# SWAP. The card also carries this machine's only swap area, a 64 MiB file
-# at /mnt/card/.zaurus/swap -- with 64 MiB of RAM and a ~68 MiB root jffs2
-# there is nowhere else to put one. /usr/sbin/cardswap does the whole job
-# (create, sign, swapon(2), swapoff(2)); see its source for why it is a
-# binary and not four lines of shell here (this busybox has no mkswap,
-# swapon or swapoff applet at all).
+# SWAP. The card also carries this machine's backstop swap area, a 256 MiB
+# file at /mnt/card/.zaurus/swap -- with ~52 MiB of RAM and a ~68 MiB root
+# jffs2 there is nowhere else to put a file this size. (There is also a
+# 32 MiB compressed swap area in RAM itself, /dev/zram0, brought up by rcS
+# at boot independently of any card -- see docs/HOWTO-SWAP.md. This one is
+# what's left once that fills up, or when there's no card-independent RAM
+# to compress into.) /usr/sbin/cardswap does the whole job (create, sign,
+# swapon(2), swapoff(2)); see its source for why it is a binary and not
+# four lines of shell here (this busybox has no mkswap, swapon or swapoff
+# applet at all).
 #
 # THE WHOLE BODY RUNS IN THE BACKGROUND, as one sequence. Two separate
 # facts force that shape, and the obvious alternatives were both tried and
 # are both wrong.
 #
-# It cannot run synchronously. `cardswap on` writes 64 MiB to the card the
-# first time a given card is used, which takes the better part of a minute
-# (measured: 52s), and `cardswap off` calls swapoff(2), which pages
+# It cannot run synchronously. `cardswap on` writes 256 MiB to the card the
+# first time a given card is used, which takes several minutes (the 64 MiB
+# predecessor of this file measured 52s, so scale from that), and
+# `cardswap off` calls swapoff(2), which pages
 # everything still in swap back into RAM -- on a card that has just been
 # physically pulled, I/O that cannot complete. mdev processes events one
 # at a time, so blocking here stalls every other hotplug event, PCMCIA and

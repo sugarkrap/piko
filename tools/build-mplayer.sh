@@ -2,8 +2,12 @@
 set -eu
 
 # Cross-compiles MPlayer for the Zaurus SL-C760 (PXA255, ARMv5TE, soft-float,
-# NO FPU/VFP/NEON, uClibc) to play video on the framebuffer (w100fb,
-# /dev/fb0, 640x480/16bpp) with ALSA audio (WM8731/Corgi, card 0).
+# NO FPU/VFP/NEON, uClibc) to play video with ALSA audio (WM8731/Corgi,
+# card 0), via EITHER -vo fbdev (straight to /dev/fb0, 640x480/16bpp, for the
+# console) OR -vo x11 (into an X window). The X11 output is what the FLTK GUI
+# needs: userspace/src/piko-player.cxx embeds this MPlayer in a child window
+# with -wid and drives it in slave mode. Both video outputs are compiled in;
+# the caller picks one at runtime.
 #
 # WHY MPLAYER: mpv dropped vo_fbdev years ago (needs GL/DRM/X11, none of
 # which exist here); VLC is a heavy plugin/C++/threaded stack that dropped
@@ -64,11 +68,12 @@ set -eu
 # its installed libasound.la: dependency_libs is just '-lpthread -lrt', no
 # -ldl, meaning alsa-lib's PCM/control plugins (hw, plug, dmix, ...) are
 # compiled directly into libasound.a rather than dlopen()'d at runtime, so
-# static linking doesn't lose any of them. That makes a fully static
-# mplayer (--enable-static) both possible and simplest: no libasound.so to
-# ship, no runtime library path to get right on the device at all --
-# mplayer becomes a single self-contained ELF binary with zero NEEDED
-# entries and no interpreter.
+# static linking doesn't lose any of them. So ALSA adds no runtime dependency
+# either way -- it is baked into the binary. (This was once a fully static
+# mplayer with zero NEEDED entries; enabling -vo x11 ended that, since the
+# X11 stack ships as shared libs only. The binary is now dynamic, NEEDing
+# libX11.so.6 and its helpers plus libc.so.0 -- all already in the ROM. See
+# the configure and ELF-verification comments below.)
 #
 # Usage:
 #   tools/build-mplayer.sh [--force]
@@ -81,13 +86,15 @@ set -eu
 #   TOOLCHAIN_BIN_DIR   default <repo>/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin
 #   CROSS_COMPILE       default arm-unknown-linux-uclibcgnueabi-
 #   ALSA_STAGE_DIR      default <repo>/userspace/stage-alsa (headers + libasound.a for linking)
+#   X11_STAGE_DIR       default <repo>/userspace/stage-target (X11 headers + libX11.so for -vo x11)
 #   OUT_DIR             default <repo>/userspace/stage-mplayer (device payload, wholesale-copyable)
 #   JOBS                default: nproc
 #
 # Exit codes:
 #   0   $OUT_DIR/usr/bin/mplayer built (or already up to date) and verified
-#   1   a hard failure (download/checksum, missing ALSA dependency,
-#       configure, build, or a wrong-ABI/wrong-NEEDED-libs binary)
+#   1   a hard failure (download/checksum, missing ALSA or X11 dependency,
+#       configure, build, or a wrong-ABI binary / one that did not link -vo
+#       x11 / one that NEEDs a lib the ROM does not ship)
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MPLAYER_VERSION="${MPLAYER_VERSION:-1.5}"
@@ -98,6 +105,12 @@ MPLAYER_URL="https://fossies.org/linux/misc/MPlayer-$MPLAYER_VERSION.tar.xz"
 MPLAYER_SHA256="650cd55bb3cb44c9b39ce36dac488428559799c5f18d16d98edb2b7256cbbf85"
 
 ALSA_STAGE_DIR="${ALSA_STAGE_DIR:-$REPO/userspace/stage-alsa}"
+# The X11/Matchbox stack (tools/build-x11-stack.sh) stages its headers and
+# shared libs here. We build MPlayer's -vo x11 against them so it can render
+# into a window -- specifically the child window piko-player hands it with
+# -wid (see userspace/src/piko-player.cxx). This is the FLTK GUI's video
+# engine; without X11 here, -wid is a no-op and the GUI shows nothing.
+X11_STAGE_DIR="${X11_STAGE_DIR:-$REPO/userspace/stage-target}"
 OUT_DIR="${OUT_DIR:-$REPO/userspace/stage-mplayer}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
@@ -132,6 +145,23 @@ if [ ! -f "$ALSA_HEADER" ] || [ ! -f "$ALSA_LIB" ]; then
     echo "MPlayer's -ao alsa needs alsa-lib's headers + libasound.a to link against." >&2
     echo "Run tools/build-alsa.sh first (a separate effort in this repo builds it" >&2
     echo "into userspace/stage-alsa)." >&2
+    exit 1
+fi
+
+# X11 is likewise a hard dependency now: -vo x11 needs libX11's headers and
+# the shared library to link against, both staged by tools/build-x11-stack.sh.
+# Fail loudly rather than let MPlayer's configure quietly decide X11 is
+# unavailable and build a framebuffer-only binary that -wid cannot drive.
+X11_HEADER="$X11_STAGE_DIR/usr/include/X11/Xlib.h"
+X11_LIB="$X11_STAGE_DIR/usr/lib/libX11.so"
+if [ ! -f "$X11_HEADER" ] || [ ! -f "$X11_LIB" ]; then
+    echo "tools/build-mplayer.sh: X11 dev files not found under $X11_STAGE_DIR" >&2
+    echo "  expected: $X11_HEADER" >&2
+    echo "  expected: $X11_LIB" >&2
+    echo "MPlayer's -vo x11 (what piko-player embeds via -wid) needs libX11's" >&2
+    echo "headers + shared lib to link against." >&2
+    echo "Run tools/build-x11-stack.sh first (it stages them into" >&2
+    echo "userspace/stage-target)." >&2
     exit 1
 fi
 
@@ -179,15 +209,21 @@ cd "$BUILD_DIR"
 echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
 # See the header comment above for why: no --as= (breaks ARM .S assembly),
 # --enable-alsa (needs $ALSA_STAGE_DIR's headers/libasound.a via
-# extra-cflags/extra-ldflags below), --enable-static (libasound.a is
-# static-only, and everything else here -- libc/libm/libpthread/librt --
-# has a static .a in this toolchain's sysroot too, so the whole binary
-# comes out fully static with zero runtime library dependencies).
-# --enable-ossaudio kept as a cheap fallback ao that needs nothing beyond
-# the kernel's snd-pcm-oss/snd-mixer-oss OSS-emulation modules. Toolchain
-# defaults already target -march=armv5tej -mfloat-abi=soft (confirmed via
-# `gcc -Q --help=target`) matching the PXA255 exactly -- no extra
-# -march/-mfpu flags needed or wanted.
+# extra-cflags/extra-ldflags below). --enable-ossaudio kept as a cheap
+# fallback ao that needs nothing beyond the kernel's snd-pcm-oss/snd-mixer-oss
+# OSS-emulation modules. Toolchain defaults already target -march=armv5tej
+# -mfloat-abi=soft (confirmed via `gcc -Q --help=target`) matching the PXA255
+# exactly -- no extra -march/-mfpu flags needed or wanted.
+#
+# NOT fully static any more (the old --enable-static is gone): -vo x11 links
+# the X11/Matchbox stack's shared libX11, which is shipped as a .so only (no
+# .a), so a fully static link is impossible. The binary comes out dynamic,
+# NEEDing libX11.so.6 and its helpers (libXext/libxcb/libXau/libXdmcp) -- all
+# already in the ROM's /lib (build-matchbox-payload.sh ships them), plus
+# libc.so.0 from the rootfs. libasound is still static (libasound.a has no
+# .so), so ALSA adds no runtime dep. extra-cflags/-ldflags now point at BOTH
+# the ALSA and the X11 staging trees; -rpath-link lets the cross-linker
+# follow libX11's own NEEDED at link time without hardcoding a runtime path.
 ./configure \
   --target=arm-linux \
   --cc="${CROSS_COMPILE}gcc" \
@@ -197,9 +233,8 @@ echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
   --strip="${CROSS_COMPILE}strip" \
   --nm="${CROSS_COMPILE}nm" \
   --enable-cross-compile \
-  --enable-static \
-  --extra-cflags="-I${ALSA_STAGE_DIR}/usr/include" \
-  --extra-ldflags="-L${ALSA_STAGE_DIR}/usr/lib" \
+  --extra-cflags="-I${ALSA_STAGE_DIR}/usr/include -I${X11_STAGE_DIR}/usr/include" \
+  --extra-ldflags="-L${ALSA_STAGE_DIR}/usr/lib -L${X11_STAGE_DIR}/usr/lib -Wl,-rpath-link,${X11_STAGE_DIR}/usr/lib" \
   --extra-libs="-lasound -lpthread -lrt" \
   --enable-armv5te --disable-armv6 --disable-armv6t2 \
   --disable-armvfp --disable-vfpv3 --disable-neon --disable-iwmmxt --disable-thumb \
@@ -208,7 +243,7 @@ echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
   \
   --disable-mencoder \
   --disable-gui \
-  --disable-x11 --disable-xv --disable-xvmc --disable-vdpau --disable-vda \
+  --enable-x11 --disable-xv --disable-xvmc --disable-vdpau --disable-vda \
   --disable-gl --disable-matrixview --disable-direct3d --disable-directx \
   --disable-vm --disable-xinerama --disable-xss --disable-xshape \
   --disable-dga1 --disable-dga2 \
@@ -279,20 +314,42 @@ case "$elf_flags" in
         exit 1
         ;;
 esac
-# Fully static (--enable-static, libasound.a has no .so to link against
-# anyway): expect zero NEEDED entries and no ELF interpreter at all.
-needed="$("$READELF" -d mplayer 2>/dev/null | awk '/NEEDED/{print $NF}' | tr -d '[]')"
-if [ -n "$needed" ]; then
-    echo "tools/build-mplayer.sh: expected a fully static binary (no NEEDED libs) but found:" >&2
-    echo "$needed" >&2
-    exit 1
-fi
-if "$READELF" -l mplayer | grep -qi "interpreter"; then
-    echo "tools/build-mplayer.sh: expected a fully static binary (no ELF interpreter) but found one" >&2
-    exit 1
-fi
+# This is the X11 build (see the configure comment): a dynamic binary, no
+# longer the old zero-dep static one. The one thing that MUST be true is that
+# -vo x11 actually linked -- if configure had silently decided X11 was
+# unavailable it would build a framebuffer-only mplayer that -wid cannot
+# drive, and it would do so without failing. libX11.so.6 in DT_NEEDED is the
+# proof it did not. Every NEEDED lib beyond libc.so.0 must be one the ROM's
+# /lib already carries (build-matchbox-payload.sh's LIBS); we check the X11
+# set explicitly and print the rest for eyeballing.
+needed="$("$READELF" -d mplayer 2>/dev/null | awk '/NEEDED/{print $NF}' | tr -d '[]' | tr '\n' ' ')"
+case " $needed " in
+    *" libX11.so.6 "*) : ;;
+    *)
+        echo "tools/build-mplayer.sh: mplayer does not NEED libX11.so.6 -- -vo x11" >&2
+        echo "did not link. configure likely failed to find X11 under" >&2
+        echo "$X11_STAGE_DIR and quietly built a framebuffer-only binary that" >&2
+        echo "piko-player's -wid embedding cannot use. NEEDED was: $needed" >&2
+        exit 1
+        ;;
+esac
+# Every one of these is shipped by the ROM payload (libX11 libXext libxcb
+# libXau libXdmcp) or provided by the rootfs (libc.so.0). Anything else here
+# would be a lib nothing ships -- flag it now rather than at exec time on the
+# device with a bare "not found".
+for n in $needed; do
+    case "$n" in
+        libX11.so.*|libXext.so.*|libxcb.so.*|libXau.so.*|libXdmcp.so.*|libc.so.*) : ;;
+        *)
+            echo "tools/build-mplayer.sh: mplayer NEEDs $n, which the ROM does not ship." >&2
+            echo "Add it to build-matchbox-payload.sh's LIBS, or find why it got linked." >&2
+            echo "Full NEEDED: $needed" >&2
+            exit 1
+            ;;
+    esac
+done
 echo "    Flags: $elf_flags"
-echo "    NEEDED: (none -- fully static)"
+echo "    NEEDED: $needed"
 
 echo "==> staging into $OUT_DIR"
 mkdir -p "$OUT_DIR/usr/bin"
@@ -300,4 +357,4 @@ cp mplayer "$BIN_OUT"
 "${CROSS_COMPILE}strip" "$BIN_OUT"
 
 size_bytes="$(wc -c < "$BIN_OUT")"
-echo "==> done: $BIN_OUT ($size_bytes bytes stripped, statically linked, no runtime deps)"
+echo "==> done: $BIN_OUT ($size_bytes bytes stripped, dynamic; NEEDED: $needed)"

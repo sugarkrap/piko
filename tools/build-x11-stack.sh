@@ -115,6 +115,7 @@ D_COMMON="${D_COMMON:-/tmp/mb-stage-common}"
 D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
+D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
 
 FORCE=0
 SKIP_ST=0
@@ -136,11 +137,17 @@ FULL_BUILD=0
 # docs/archive/HANDOFF-2026-07-28-X11-XFBDEV.md for why this chain is what
 # it is (xcb-proto before libxcb: code generation input, not just a link
 # dependency; libXrender/libXft/libmatchbox before the matchbox-* apps).
+# libXau/libXdmcp before libxcb for the same "not just a link dependency"
+# reason as xcb-proto: libxcb's own configure.ac PKG_CHECK_MODULES for
+# xau/xdmcp fails outright, before anything compiles, if their .pc files
+# are not staged yet -- this previously listed libxcb first and only
+# never failed because whoever wrote it had xau/xdmcp available some
+# other way.
 [ -n "$PKGS" ] || PKGS="xorg-macros xtrans libfontenc libXfont xcb-proto \
-libxcb libXau libXdmcp libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
+libXau libXdmcp libxcb libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
 matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume \
-mb-brightness"
+mb-brightness mb-applet-pikaffeine"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -178,6 +185,62 @@ if [ "$FORCE" -eq 1 ]; then
     "$REPO/tools/setup-x11-src.sh" --force
 else
     "$REPO/tools/setup-x11-src.sh"
+fi
+echo ""
+
+# xorgproto (X11/Xproto.h, X11/Xfuncproto.h, ...): pure protocol headers,
+# no compiled code, so copying them into the staging tree carries none of
+# the host/target contamination risk a real library would. The comment at
+# the top of this file describes the OTHER way this is meant to work --
+# PKG_CONFIG_LIBDIR widened to the host's /usr/share/pkgconfig, so
+# xproto.pc's own Cflags supplies -I -- and that is enough on distros
+# whose xproto.pc actually emits one (Debian/Ubuntu). Arch's does not:
+# Cflags is empty there because /usr/include is already a default search
+# path for a NATIVE compiler, which the ARM cross-gcc does not share, so
+# libXfont's very first compile failed with "X11/Xfuncproto.h: No such
+# file or directory" despite pkg-config finding xproto.pc successfully.
+# Copying only the files `pacman -Ql xorgproto` actually owns (not a
+# blanket copy of /usr/include/X11, which also holds unrelated packages'
+# headers -- Xft, Xcursor, Xaw, ... -- that would shadow this project's
+# own staged versions of the same) fixes it on both distros without an
+# extra -I flag that would risk exposing the rest of /usr/include (glibc
+# headers use x86_64-specific builtins like _Float128 that do not exist
+# for this ARM/uclibc target).
+echo "==> staging xorgproto headers (host package, headers only)"
+if command -v pacman >/dev/null 2>&1 && pacman -Qq xorgproto >/dev/null 2>&1; then
+    pacman -Ql xorgproto | awk '{print $2}' | grep '^/usr/include/.*[^/]$' | while read -r f; do
+        rel="${f#/usr/include/}"
+        mkdir -p "$STAGE/usr/include/$(dirname "$rel")"
+        cp -n "$f" "$STAGE/usr/include/$rel" 2>/dev/null || true
+    done
+    echo "    staged: $(pacman -Ql xorgproto | awk '{print $2}' | grep -c '^/usr/include/.*[^/]$') headers from the xorgproto package"
+elif command -v dpkg-query >/dev/null 2>&1 && dpkg-query -s x11proto-dev >/dev/null 2>&1; then
+    dpkg-query -L x11proto-dev | grep '^/usr/include/.*[^/]$' | while read -r f; do
+        rel="${f#/usr/include/}"
+        mkdir -p "$STAGE/usr/include/$(dirname "$rel")"
+        cp -n "$f" "$STAGE/usr/include/$rel" 2>/dev/null || true
+    done
+    echo "    staged: $(dpkg-query -L x11proto-dev | grep -c '^/usr/include/.*[^/]$') headers from the x11proto-dev package"
+elif [ -f "$STAGE/usr/include/X11/Xfuncproto.h" ]; then
+    echo "    already staged"
+else
+    echo "FAILED: xorgproto headers not staged and neither pacman nor dpkg found it." >&2
+    echo "Install xorgproto (Arch) / x11proto-dev (Debian/Ubuntu) or copy" >&2
+    echo "its /usr/include/X11 files into $STAGE/usr/include/X11 by hand." >&2
+    exit 1
+fi
+echo ""
+
+# xsha1-compat, so xserver's configure below finds a SHA1 implementation.
+# See tools/build-xsha1-compat.sh: nothing in this cross toolchain
+# provides -lmd (or libc/libgcrypt/openssl SHA1), and xserver's configure
+# fails outright -- "No suitable SHA1 implementation found" -- without
+# one. Must run before xserver configures.
+echo "==> building xsha1-compat (tools/build-xsha1-compat.sh, needed for xserver's SHA1 check)"
+if [ "$FORCE" -eq 1 ]; then
+    "$REPO/tools/build-xsha1-compat.sh" --force
+else
+    "$REPO/tools/build-xsha1-compat.sh"
 fi
 echo ""
 
@@ -275,6 +338,7 @@ destdir_for() {
     mb-applet-card)                  echo "$D_CARD" ;;
     mb-volume)                       echo "$D_VOLUME" ;;
     mb-brightness)                   echo "$D_BRIGHT" ;;
+    mb-applet-pikaffeine)            echo "$D_PIKAFFEINE" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -310,6 +374,7 @@ marker_for() {
     mb-applet-card)           echo "$D_CARD/usr/bin/mb-applet-card" ;;
     mb-volume)                echo "$D_VOLUME/usr/bin/mb-volume" ;;
     mb-brightness)            echo "$D_BRIGHT/usr/bin/mb-brightness" ;;
+    mb-applet-pikaffeine)     echo "$D_PIKAFFEINE/usr/bin/mb-applet-pikaffeine" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -323,15 +388,15 @@ submodule_dir_for() {
     esac
 }
 
-# uses_autotools NAME -- false only for mb-applet-card and mb-volume, both
-# one-or-two-source-file packages against a couple of pkg-config modules
-# that deliberately ship a plain Makefile instead of autotools (their own
-# Makefiles say why). Neither has a configure or an autogen.sh, so the
-# generate-and-run-configure step below would fail on them with a bare
-# "no such file or directory".
+# uses_autotools NAME -- false only for mb-applet-card, mb-volume,
+# mb-brightness and mb-applet-pikaffeine, all one-or-two-source-file
+# packages against a couple of pkg-config modules that deliberately ship a
+# plain Makefile instead of autotools (their own Makefiles say why).
+# Neither has a configure or an autogen.sh, so the generate-and-run-configure
+# step below would fail on them with a bare "no such file or directory".
 uses_autotools() {
     case "$1" in
-    mb-applet-card|mb-volume|mb-brightness) return 1 ;;
+    mb-applet-card|mb-volume|mb-brightness|mb-applet-pikaffeine) return 1 ;;
     *) return 0 ;;
     esac
 }
@@ -524,6 +589,14 @@ build_one() {
       # usual case) the macro is long since expanded -- so this failed
       # exactly once, on a --force rebuild of xserver in a fresh checkout,
       # with "undefined or overquoted macro: XTRANS_CONNECTION_FLAGS".
+      # A package's own m4/ (xserver and libfontenc both carry
+      # m4/fontutil-compat.m4, the local stand-in for the real font-util
+      # package -- see setup-x11-src.sh) is not on aclocal's default
+      # search path unless configure.ac declares AC_CONFIG_MACRO_DIR,
+      # which neither does. Without it here, autogen only succeeds on a
+      # host that happens to have font-util installed system-wide,
+      # exactly what the compat macro exists to make unnecessary.
+      [ -d "$dir/m4" ] && ACLOCAL_PATH="$dir/m4${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
       export ACLOCAL_PATH="$SRC/xorg-macros:$STAGE/usr/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
       # shellcheck disable=SC2046
       if ! uses_autotools "$name"; then
@@ -574,6 +647,14 @@ build_one() {
           #
           # Same --force clean reasoning as mb-applet-card: no ./configure
           # to delete, so an up-to-date .o would otherwise be reused.
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
+          ;;
+      mb-applet-pikaffeine)
+          # Same plain-Makefile shape as mb-applet-card/mb-brightness:
+          # libmb is the only dependency, and it never touches the
+          # backlight itself -- it only pokes brightd's own
+          # /tmp/brightd.inhibit file. See that repo's README.
           [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
@@ -681,5 +762,5 @@ fi
 echo ""
 echo "==> X11/Matchbox stack ready."
 echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/"
-echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME"
+echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME $D_PIKAFFEINE"
 echo "    Package into a payload with:    tools/build-matchbox-payload.sh"

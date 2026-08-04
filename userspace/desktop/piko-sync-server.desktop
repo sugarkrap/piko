@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Piko Sync
+Comment=Receive files sent from a computer
+Exec=piko-sync-server
+Icon=piko-sync-server
+Terminal=false
+Categories=System;

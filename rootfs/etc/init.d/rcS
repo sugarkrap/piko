@@ -23,6 +23,64 @@ mount -t sysfs    sysfs    /sys             2>/dev/null
 # devtmpfs is auto-mounted by the kernel (CONFIG_DEVTMPFS_MOUNT), but mount
 # again harmlessly in case it wasn't.
 mount -t devtmpfs devtmpfs /dev             2>/dev/null
+
+# --- compressed RAM swap (zram), ahead of the SD card's ---
+# CONFIG_ZRAM is built into this kernel, so /dev/zram0 already exists by
+# the time this runs -- no modprobe needed. zramswap sets it up as a
+# second swap area and swapon(2)s it at a priority that always beats the
+# card's (see userspace/src/zramswap.c and docs/HOWTO-SWAP.md): a page
+# that compresses even 2:1 is cheaper to keep in RAM than to write
+# anywhere, and unlike the card's it needs no card to be present at all.
+# Run here, right after /sys and /dev are up (zramswap needs
+# /sys/block/zram0) and long before the card's swap can possibly come up
+# -- that waits on mdev's coldplug scan much later in this script.
+#
+# Never fatal: if the binary is missing (a deploy from before this
+# existed) or this kernel lacks CONFIG_ZRAM, the machine just has less
+# swap, not none -- the card path below is unaffected either way.
+if test -x /usr/sbin/zramswap; then
+    /usr/sbin/zramswap on >/tmp/zramswap.log 2>&1 || true
+fi
+
+# --- boot splash, continued from stage 1 ---
+# The bootstrap draws this same picture before it kexecs (see
+# docs/HOWTO-BOOT-SPLASH.md); redrawing it here as early as /dev exists is
+# what makes it look like one continuous splash rather than a white flash
+# between two kernels.
+#
+# Drawn with piko-splash, not `cat`. This rootfs's busybox is prebuilt in
+# the mtd3 image with no fbsplash applet and no gzip/gunzip/zcat -- so the
+# obvious move is a raw RGB565 dump piped straight to the device. That does
+# not work here: w100fb has no usable write() path and `cat` fails with
+#
+#     cat: write error: Invalid argument
+#
+# The framebuffer has to be mmap'd (which is also why fbsplash works in
+# stage 1). piko-splash is the smallest thing that does that -- see
+# userspace/src/piko-splash.c. The image is emitted from the same master
+# artwork as the stage-1 PPM by tools/make-splash.py, so the two halves of
+# the splash cannot drift apart.
+#
+# Never fatal, and it must not hold up boot: if /dev/fb0 is missing or the
+# asset is gone, we lose a picture, not the system.
+if test -x /usr/sbin/piko-splash && test -f /usr/share/piko/splash.raw; then
+    if /usr/sbin/piko-splash /usr/share/piko/splash.raw 2>/dev/null; then
+        # The picture is up, so stop writing text on top of it.
+        #
+        # Making stage 2's *kernel* quiet (CONFIG_CMDLINE, see #110) only
+        # silences printk. Everything below is userspace writing to the
+        # console -- a dozen or so status echoes -- and it scribbles across
+        # the splash just as effectively. Rebind to a log instead.
+        #
+        # Deliberately inside the success branch: if the splash did NOT
+        # draw, the console is the only thing we have and it stays exactly
+        # as it was. We only go quiet when we have actually put something
+        # there worth keeping, so a boot with no picture is never also a
+        # boot with no output.
+        exec > /tmp/rcS.log 2>&1
+    fi
+fi
+
 mkdir -p /dev/pts
 mount -t devpts   devpts   /dev/pts  -o mode=0620,ptmxmode=0666  2>/dev/null
 # dropbear opens /dev/ptmx to allocate a pseudo-terminal, but devtmpfs does
@@ -160,6 +218,14 @@ insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
 # unnoticed because WiFi cards here are normally inserted after boot,
 # well past this window).
 mdev -s 2>/dev/null
+
+# piko-sync-server's deploy staging area (see resolve_staging_dir() in
+# piko-sync-server.cxx) holds in-flight ".part" files for whatever deploy
+# was running when the device last went down -- a reboot means that
+# deploy session is definitely over, so anything left here is dead
+# weight, not something to resume. Cleared every boot rather than left to
+# accumulate; recreated on demand by the app itself, not here.
+rm -rf /mnt/card/.zaurus/tmp 2>/dev/null
 
 # --- audio stack (WM8731 codec via I2S, ALSA OSS emulation) ---
 # Loads the same modules as the manual /usr/sbin/audioon helper (see

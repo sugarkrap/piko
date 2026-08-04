@@ -114,8 +114,15 @@ ssh $SSH_OPTS "$TARGET" "chmod 0755 '$REMOTE_WRITER' && ls -l '$REMOTE_IMAGE' '$
 # Resolve the smf partition by name, never by number: this stage-2 kernel
 # calls it mtd0 while the Cacko/recovery kernel calls the same partition
 # mtd1 (AGENTS.md).
-SMF_DEV=$(ssh $SSH_OPTS "$TARGET" \
-    "grep '\"smf\"' /proc/mtd | head -n 1 | cut -d: -f1 | sed 's#^#/dev/#'")
+#
+# Parsed on the host, not on the target: the target only has to `cat`. The
+# stage-2 rootfs builds busybox without `cut` (or `awk`), so the obvious
+# remote pipeline dies with "ash: cut: not found" and leaves SMF_DEV empty
+# -- which then looks exactly like "no smf partition", i.e. a scary
+# hardware-shaped error for a missing applet. Do the text work at this end,
+# where the toolset is known.
+SMF_DEV=$(ssh $SSH_OPTS "$TARGET" "cat /proc/mtd" \
+    | grep '"smf"' | head -n 1 | sed 's#:.*##; s#^#/dev/#')
 if [ -z "$SMF_DEV" ]; then
     echo "error: no \"smf\" partition found in /proc/mtd on $TARGET" >&2
     exit 1

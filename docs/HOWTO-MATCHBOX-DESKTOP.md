@@ -16,6 +16,11 @@ For **writing our own GUI apps** against this X server, see
 `docs/HOWTO-FLTK.md`: building FLTK, testing it on the device, and the
 cross-compile line for your own programs.
 
+For the **Settings window** -- how `piko-settings` builds its list out of
+the same `.desktop` files this document describes, and the
+`X-Piko-NoDesktop` key that keeps a settings app off the desktop while
+leaving it in the panel menu -- see `docs/HOWTO-SETTINGS-APP.md`.
+
 ---
 
 ## Why classic Matchbox and not matchbox-desktop-2

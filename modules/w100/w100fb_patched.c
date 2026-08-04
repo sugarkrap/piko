@@ -37,6 +37,7 @@
 #include <asm/io.h>
 #include <linux/uaccess.h>
 #include <video/w100fb.h>
+#include <video/w100fb_accel.h>
 
 #include "w100fb.h"
 
@@ -536,45 +537,63 @@ static void w100_init_graphic_engine(struct w100fb_par *par)
 }
 
 
-static void w100fb_fillrect(struct fb_info *info,
-                            const struct fb_fillrect *rect)
+/*
+ * Generalized 2D engine primitives, parameterized on (offset, pitch)
+ * instead of assuming the live framebuffer (W100_FB_BASE / par->xres).
+ * w100fb_fillrect()/w100fb_copyarea() below (fbcon's own hooks) are thin
+ * wrappers that pass the live framebuffer's own offset/pitch, and
+ * W100FB_IOC_FILL/BLIT (see w100fb_ioctl()) pass whatever offset/pitch
+ * userspace asked for -- one code path for programming the engine instead
+ * of two that could drift.
+ *
+ * DST_OFFSET/DST_PITCH/SRC_OFFSET/SRC_PITCH are shared, stateful chip
+ * registers (see w100_init_graphic_engine(), which programs them once at
+ * mode-set time and nothing used to touch again), so every call here
+ * reprograms whichever of them it uses rather than assuming a previous
+ * caller left them where this call wants them.
+ *
+ * The clip rectangle (mmSC_TOP_LEFT/mmSC_BOTTOM_RIGHT) is NOT reprogrammed
+ * here -- it stays fixed to the current display mode's own [0,0]-[xres,yres]
+ * from w100_init_graphic_engine(), for every caller, on-screen or off. A
+ * caller targeting a different surface still gets clipped to the current
+ * mode's own width/height, not the target surface's -- w100fb_ioctl()
+ * enforces that as an explicit -EINVAL rather than relying on silent
+ * hardware clipping to make an oversized request merely ineffective.
+ */
+static void w100_accel_fillrect(unsigned long dst_offset, u32 dst_pitch,
+				 u32 dx, u32 dy, u32 width, u32 height,
+				 u32 color)
 {
 	union dp_gui_master_cntl_u gmc;
 
-	if (info->state != FBINFO_STATE_RUNNING)
-		return;
-	if (info->flags & FBINFO_HWACCEL_DISABLED) {
-		cfb_fillrect(info, rect);
-		return;
-	}
+	w100_fifo_wait(2);
+	writel(dst_offset, remapped_regs + mmDST_OFFSET);
+	writel(dst_pitch, remapped_regs + mmDST_PITCH);
 
 	gmc.val = readl(remapped_regs + mmDP_GUI_MASTER_CNTL);
 	gmc.f.gmc_rop3 = ROP3_PATCOPY;
 	gmc.f.gmc_brush_datatype = GMC_BRUSH_SOLID_COLOR;
 	w100_fifo_wait(2);
 	writel(gmc.val, remapped_regs + mmDP_GUI_MASTER_CNTL);
-	writel(rect->color, remapped_regs + mmDP_BRUSH_FRGD_CLR);
+	writel(color, remapped_regs + mmDP_BRUSH_FRGD_CLR);
 
 	w100_fifo_wait(2);
-	writel((rect->dy << 16) | (rect->dx & 0xffff), remapped_regs + mmDST_Y_X);
-	writel((rect->width << 16) | (rect->height & 0xffff),
-	       remapped_regs + mmDST_WIDTH_HEIGHT);
+	writel((dy << 16) | (dx & 0xffff), remapped_regs + mmDST_Y_X);
+	writel((width << 16) | (height & 0xffff), remapped_regs + mmDST_WIDTH_HEIGHT);
 }
 
-
-static void w100fb_copyarea(struct fb_info *info,
-                            const struct fb_copyarea *area)
+static void w100_accel_copyarea(unsigned long src_offset, u32 src_pitch,
+				 unsigned long dst_offset, u32 dst_pitch,
+				 u32 sx, u32 sy, u32 dx, u32 dy,
+				 u32 width, u32 height)
 {
-	u32 dx = area->dx, dy = area->dy, sx = area->sx, sy = area->sy;
-	u32 h = area->height, w = area->width;
 	union dp_gui_master_cntl_u gmc;
 
-	if (info->state != FBINFO_STATE_RUNNING)
-		return;
-	if (info->flags & FBINFO_HWACCEL_DISABLED) {
-		cfb_copyarea(info, area);
-		return;
-	}
+	w100_fifo_wait(4);
+	writel(src_offset, remapped_regs + mmSRC_OFFSET);
+	writel(src_pitch, remapped_regs + mmSRC_PITCH);
+	writel(dst_offset, remapped_regs + mmDST_OFFSET);
+	writel(dst_pitch, remapped_regs + mmDST_PITCH);
 
 	gmc.val = readl(remapped_regs + mmDP_GUI_MASTER_CNTL);
 	gmc.f.gmc_rop3 = ROP3_SRCCOPY;
@@ -585,7 +604,43 @@ static void w100fb_copyarea(struct fb_info *info,
 	w100_fifo_wait(3);
 	writel((sy << 16) | (sx & 0xffff), remapped_regs + mmSRC_Y_X);
 	writel((dy << 16) | (dx & 0xffff), remapped_regs + mmDST_Y_X);
-	writel((w << 16) | (h & 0xffff), remapped_regs + mmDST_WIDTH_HEIGHT);
+	writel((width << 16) | (height & 0xffff), remapped_regs + mmDST_WIDTH_HEIGHT);
+}
+
+static void w100fb_fillrect(struct fb_info *info,
+                            const struct fb_fillrect *rect)
+{
+	struct w100fb_par *par = info->par;
+
+	if (info->state != FBINFO_STATE_RUNNING)
+		return;
+	if (info->flags & FBINFO_HWACCEL_DISABLED) {
+		cfb_fillrect(info, rect);
+		return;
+	}
+
+	w100_accel_fillrect(W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
+			     rect->dx, rect->dy, rect->width, rect->height,
+			     rect->color);
+}
+
+
+static void w100fb_copyarea(struct fb_info *info,
+                            const struct fb_copyarea *area)
+{
+	struct w100fb_par *par = info->par;
+
+	if (info->state != FBINFO_STATE_RUNNING)
+		return;
+	if (info->flags & FBINFO_HWACCEL_DISABLED) {
+		cfb_copyarea(info, area);
+		return;
+	}
+
+	w100_accel_copyarea(W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
+			     W100_FB_BASE, par->xres * BITS_PER_PIXEL / 8,
+			     area->sx, area->sy, area->dx, area->dy,
+			     area->width, area->height);
 }
 
 
@@ -715,8 +770,39 @@ static int w100fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 static int w100fb_set_par(struct fb_info *info)
 {
 	struct w100fb_par *par=info->par;
+	unsigned long needed;
+	int want_extmem;
 
-	if (par->xres != info->var.xres || par->yres != info->var.yres)	{
+	/*
+	 * How much real, backed memory this par actually needs: the larger of
+	 * the visible frame and whatever xres_virtual/yres_virtual
+	 * w100fb_check_var() just approved -- NOT the visible frame alone.
+	 *
+	 * This used to be decided from par->xres*par->yres by itself. That
+	 * missed the case a QVGA-visible mode with a large yres_virtual is
+	 * exactly meant for: spare/pannable buffer beyond the visible frame.
+	 * check_var()'s own `available` ceiling is
+	 * min(mach->mem->size+1, REMAPPED_FB_LEN+1) regardless of how small
+	 * the visible frame is, so it will approve a virtual_size that only
+	 * external SDRAM can actually hold even while the visible frame alone
+	 * would fit in internal SRAM. Deciding extmem_active from the visible
+	 * frame alone left that approved virtual_size UNBACKED:
+	 * w100_setup_memory() suspends and unmaps external SDRAM whenever
+	 * extmem_active is 0 (see w100_suspend(W100_SUSPEND_EXTMEM) and the
+	 * mc_ext_mem_top < mc_ext_mem_start "unmap" write below) -- so a pan
+	 * or an accel surface reaching past MEM_INT_SIZE+1 landed on memory
+	 * the chip had just powered down, not merely memory that wasn't
+	 * "yours". Using `needed` keeps extmem_active/smem_len in agreement
+	 * with what check_var() already promised, in both directions.
+	 */
+	needed = max_t(unsigned long,
+		       (unsigned long)par->xres * par->yres,
+		       (unsigned long)info->var.xres_virtual * info->var.yres_virtual)
+		 * BITS_PER_PIXEL / 8;
+	want_extmem = par->mach->mem && needed > MEM_INT_SIZE + 1;
+
+	if (par->xres != info->var.xres || par->yres != info->var.yres ||
+	    want_extmem != par->extmem_active) {
 		par->xres = info->var.xres;
 		par->yres = info->var.yres;
 		par->mode = w100fb_get_mode(par, &par->xres, &par->yres, 0);
@@ -745,7 +831,7 @@ static int w100fb_set_par(struct fb_info *info)
 		info->fix.line_length = par->xres * BITS_PER_PIXEL / 8;
 
 		mutex_lock(&info->mm_lock);
-		if ((par->xres*par->yres*BITS_PER_PIXEL/8) > (MEM_INT_SIZE+1)) {
+		if (want_extmem) {
 			par->extmem_active = 1;
 			info->fix.smem_len = par->mach->mem->size+1;
 		} else {
@@ -896,9 +982,56 @@ static int w100fb_pan_display(struct fb_var_screeninfo *var,
 	return 0;
 }
 
+/*
+ * Reject anything W100FB_IOC_FILL/BLIT would otherwise hand the engine a
+ * coordinate it can't represent, before it's used in any arithmetic below --
+ * mmDST_Y_X/mmSRC_Y_X/mmDST_WIDTH_HEIGHT are packed 16-bit fields, so an x/y/
+ * width/height at or above 65536 would silently truncate instead of erroring,
+ * and (per w100fb_rect_fits() below) could make an out-of-range offset look
+ * in-range after wrapping.
+ */
+static bool w100fb_coord_ok(u32 x, u32 y, u32 width, u32 height)
+{
+	return x < 65536 && y < 65536 && width < 65536 && height < 65536;
+}
+
+/*
+ * True if a (offset, pitch, x, y, width, height) rect both (a) fits inside
+ * the CURRENT display mode's fixed scissor -- see the comment above
+ * w100_accel_fillrect() -- and (b) never asks the engine to touch a byte
+ * past what w100fb_set_par() actually mapped in for this par (smem_len,
+ * corrected to track xres_virtual/yres_virtual rather than only the visible
+ * frame -- see the "needed" comment there). (b) is the one that matters for
+ * memory safety: the scissor bounds which (x,y) the engine will draw, but
+ * the engine still computes an actual bus address as
+ * offset + y*pitch + x*bpp, and a caller-controlled pitch can push that
+ * address arbitrarily far from offset even for small, in-scissor x/y.
+ *
+ * Callers must run w100fb_coord_ok() on every x/y/width/height first: the
+ * u64 arithmetic here assumes none of them can be anywhere near U32_MAX.
+ */
+static bool w100fb_rect_fits(struct w100fb_par *par, struct fb_info *info,
+			      u32 offset, u32 pitch, u32 x, u32 y,
+			      u32 width, u32 height)
+{
+	u64 last_byte;
+
+	if (!pitch || !width || !height)
+		return false;
+	if (x + width > par->xres || y + height > par->yres)
+		return false;
+
+	last_byte = (u64)offset + (u64)(y + height - 1) * pitch +
+		    (u64)(x + width) * (BITS_PER_PIXEL / 8);
+	return last_byte <= info->fix.smem_len;
+}
+
 static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg)
 {
+	struct w100fb_par *par = info->par;
+	void __user *argp = (void __user *)arg;
+
 	if (cmd == FBIO_WAITFORVSYNC) {
 		/*
 		 * Coarse poll is right here. The caller only wants to be woken
@@ -908,6 +1041,53 @@ static int w100fb_ioctl(struct fb_info *info, unsigned int cmd,
 		 * needs to land inside the blanking window.
 		 */
 		return w100_vsync(false);
+	}
+
+	if (cmd == W100FB_IOC_SYNC)
+		return w100fb_sync(info);
+
+	if (cmd == W100FB_IOC_FILL) {
+		struct w100fb_fill_args a;
+
+		if (info->state != FBINFO_STATE_RUNNING)
+			return -EBUSY;
+		if (info->flags & FBINFO_HWACCEL_DISABLED)
+			return -ENOTTY;
+		if (copy_from_user(&a, argp, sizeof(a)))
+			return -EFAULT;
+		if (!w100fb_coord_ok(a.x, a.y, a.width, a.height))
+			return -EINVAL;
+		if (!w100fb_rect_fits(par, info, a.dst_offset, a.dst_pitch,
+				      a.x, a.y, a.width, a.height))
+			return -EINVAL;
+
+		w100_accel_fillrect(W100_FB_BASE + a.dst_offset, a.dst_pitch,
+				     a.x, a.y, a.width, a.height, a.color);
+		return 0;
+	}
+
+	if (cmd == W100FB_IOC_BLIT) {
+		struct w100fb_blit_args a;
+
+		if (info->state != FBINFO_STATE_RUNNING)
+			return -EBUSY;
+		if (info->flags & FBINFO_HWACCEL_DISABLED)
+			return -ENOTTY;
+		if (copy_from_user(&a, argp, sizeof(a)))
+			return -EFAULT;
+		if (!w100fb_coord_ok(a.sx, a.sy, a.width, a.height) ||
+		    !w100fb_coord_ok(a.dx, a.dy, a.width, a.height))
+			return -EINVAL;
+		if (!w100fb_rect_fits(par, info, a.src_offset, a.src_pitch,
+				      a.sx, a.sy, a.width, a.height) ||
+		    !w100fb_rect_fits(par, info, a.dst_offset, a.dst_pitch,
+				      a.dx, a.dy, a.width, a.height))
+			return -EINVAL;
+
+		w100_accel_copyarea(W100_FB_BASE + a.src_offset, a.src_pitch,
+				     W100_FB_BASE + a.dst_offset, a.dst_pitch,
+				     a.sx, a.sy, a.dx, a.dy, a.width, a.height);
+		return 0;
 	}
 
 	return -EINVAL;

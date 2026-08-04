@@ -119,12 +119,21 @@ fi
 
 BB_CONFIG_SRC="$REPO/modules/initramfs/busybox.config"
 INIT_SRC="$REPO/modules/initramfs/init"
+# Pre-rendered boot splash: a full-screen 640x480 PPM, stored gzipped
+# because that is the form the size budget is actually measured in (see
+# tools/make-splash.py). Only the host needs to unpack it -- the device
+# never does, and this busybox has no gunzip.
+SPLASH_SRC="$REPO/modules/initramfs/splash.ppm.gz"
 if [ ! -f "$BB_CONFIG_SRC" ]; then
     echo "tools/build-initramfs.sh: missing tracked input: $BB_CONFIG_SRC" >&2
     exit 1
 fi
 if [ ! -f "$INIT_SRC" ]; then
     echo "tools/build-initramfs.sh: missing tracked input: $INIT_SRC" >&2
+    exit 1
+fi
+if [ ! -f "$SPLASH_SRC" ]; then
+    echo "tools/build-initramfs.sh: missing tracked input: $SPLASH_SRC" >&2
     exit 1
 fi
 
@@ -157,7 +166,7 @@ mkdir -p "$ROOTFS_BUILD_DIR/bin" "$ROOTFS_BUILD_DIR/sbin" \
          "$ROOTFS_BUILD_DIR/usr/bin" "$ROOTFS_BUILD_DIR/usr/sbin" \
          "$ROOTFS_BUILD_DIR/dev" "$ROOTFS_BUILD_DIR/proc" \
          "$ROOTFS_BUILD_DIR/sys" "$ROOTFS_BUILD_DIR/tmp" \
-         "$ROOTFS_BUILD_DIR/root" "$ROOTFS_BUILD_DIR/mnt/sd"
+         "$ROOTFS_BUILD_DIR/root"
 
 cp "$BUILD_DIR/busybox" "$ROOTFS_BUILD_DIR/bin/busybox"
 chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"
@@ -165,11 +174,17 @@ chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"
 cp "$INIT_SRC" "$ROOTFS_BUILD_DIR/init"
 chmod 755 "$ROOTFS_BUILD_DIR/init"
 
+# Splash goes in uncompressed: the cpio is gzipped as a whole immediately
+# below, so storing it compressed here would just be gzip-on-gzip (bigger,
+# and unreadable to a busybox built without CONFIG_FEATURE_SEAMLESS_GZ).
+gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
+chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
+
 # Applet symlink set, hand-enumerated from the known-good
 # initramfs/rootfs-minimal/ tree (busybox in this config has
 # CONFIG_FEATURE_INSTALLER disabled, so `busybox --install` isn't
 # available at runtime to regenerate this list automatically).
-BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync touch umount uname vi"
+BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync touch umount uname vi"
 SBIN_APPLETS="halt init mdev poweroff reboot switch_root"
 USR_BIN_APPLETS="basename clear dirname env find free hd head hexdump reset setsid tail test tr wc which"
 USR_SBIN_APPLETS="fbset"
