@@ -151,13 +151,23 @@ LOG="$STAGE/boot.log"
 # module debug info, and piko-smoke-init reads modules straight out of
 # update.tar rather than needing a second loose-extracted copy -- see its
 # own header comment); what changed here is giving /tmp its own storage
-# (the -drive/-device pair below) instead of asking everything, including
+# (the -drive if=sd below) instead of asking everything, including
 # piko-update's own --dry-run staging copy, to fit in that same 64M.
+#
+# -drive if=sd (not the generic -device sd-card + id'd -drive if=none
+# pairing): -M spitz's board code wires its onboard MMC slot to the
+# legacy IF_SD/index-0 drive itself, and auto-registers its own default
+# block backend for that slot -- which QEMU names "sd0" -- whenever no
+# if=sd drive was given. Passing an explicitly id'd `-drive id=sd0,
+# if=none ... -device sd-card,drive=sd0` collided with that auto-created
+# same-named backend ("Device with id 'sd0' already exists", confirmed
+# in CI). Handing the image to the board's own if=sd slot instead avoids
+# the collision and is the traditional way to attach storage to this
+# machine type.
 timeout "$QEMU_TIMEOUT" qemu-system-arm -M spitz \
     -kernel "$STAGE/zImage-qemu-variant" \
     -initrd "$STAGE/initramfs.cpio.gz" \
-    -drive id=sd0,if=none,file="$SD_IMG",format=raw \
-    -device sd-card,drive=sd0 \
+    -drive if=sd,format=raw,file="$SD_IMG" \
     -append "console=ttyS0 earlyprintk panic=1" \
     -serial stdio -nographic -monitor none -no-reboot \
     > "$LOG" 2>&1 || true
