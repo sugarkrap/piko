@@ -25,19 +25,32 @@
  * replaces it rather than sitting beside it.
  *
  * USAGE
- *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] program [args...]
+ *   matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--fast-pll] [--] program [args...]
  *
- *   -n NAME    application name for the dialog (default: the binary's name)
- *   -r REASON  extra line of explanation in the dialog
- *   -y         skip the dialog and proceed (for scripts and for the
- *              console case, where there is nothing to ask about)
- *   --qvga     switch /dev/fb0 to half its native resolution before running
- *              the program, and back afterwards. Several of this ROM's
- *              devices pixel-double a QVGA framebuffer back up to their
- *              native VGA glass in the LCD controller itself, so a program
- *              that struggles at native resolution can ask for a quarter of
- *              the pixels, for the same physical screen size, without
- *              knowing anything about the panel underneath it.
+ *   -n NAME      application name for the dialog (default: the binary's name)
+ *   -r REASON    extra line of explanation in the dialog
+ *   -y           skip the dialog and proceed (for scripts and for the
+ *                console case, where there is nothing to ask about)
+ *   --qvga       switch /dev/fb0 to half its native resolution before running
+ *                the program, and back afterwards. Several of this ROM's
+ *                devices pixel-double a QVGA framebuffer back up to their
+ *                native VGA glass in the LCD controller itself, so a program
+ *                that struggles at native resolution can ask for a quarter of
+ *                the pixels, for the same physical screen size, without
+ *                knowing anything about the panel underneath it.
+ *   --fast-pll   raise the w100's PLL (see the "fastpllclk" sysfs attribute
+ *                in modules/w100/w100fb_patched.c): 100->125MHz in QVGA,
+ *                75->100MHz in VGA. See docs/DEADLETTER-W100-CLOCK-DOMAINS.md
+ *                for which combinations are actually proven safe on hardware
+ *                -- this flag does not itself validate anything, it only
+ *                asks the kernel driver for the mode's own fast_pll_freq.
+ *
+ * When neither --qvga nor --fast-pll is given on the command line, the
+ * effective video mode instead comes from whatever was last chosen in the
+ * confirmation dialog's Advanced panel, persisted in
+ * /etc/zaurus/matchbox-fbrun.cfg (see load_video_mode_config()). An explicit
+ * flag always overrides that persisted default for the current run; picking
+ * a different mode in the dialog updates it for the next one.
  *
  * EXIT STATUS
  *   the program's own exit status, or 0 if the user chose Abort, or
@@ -47,7 +60,10 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Box.H>
+#include <FL/Fl_Button.H>
 #include <FL/Fl_Return_Button.H>
+#include <FL/Fl_Table.H>
+#include <FL/fl_draw.H>
 #include <FL/x.H>
 
 #include <X11/Xlib.h>
@@ -164,6 +180,8 @@ static int   lock_held;
 static int   cleaned_up;
 static int   qvga_requested;
 static int   qvga_applied;
+static int   fast_pll_requested;
+static int   fast_pll_applied;
 static struct fb_var_screeninfo saved_var;
 
 /* ── /proc scanning ─────────────────────────────────────────────────────── */
@@ -245,8 +263,8 @@ static int process_alive(pid_t pid)
  * Put the console back into text mode. A framebuffer app sets KD_GRAPHICS so
  * fbcon stops drawing over it, and can revert that on a clean exit -- but
  * SIGKILL, a crash or an OOM kill cannot be caught by anything, and leave the
- * console stuck with no visible shell. Doing it here unconditionally is the
- * safety net the standalone fbtext used to provide.
+ * console stuck with no visible shell. Doing it here is the safety net the
+ * standalone fbtext used to provide.
  *
  * Also restores the text cursor (DECTCEM show, \033[?25h) hidden by
  * show_splash() below. KD_GRAPHICS on this fbcon does not reliably blank
@@ -254,6 +272,15 @@ static int process_alive(pid_t pid)
  * into the framebuffer during the splash text phase, while still in
  * KD_TEXT -- so it is hidden and shown explicitly rather than assumed to
  * follow the text/graphics mode switch.
+ *
+ * Only called from cleanup() when session_was_stopped -- see that call
+ * site's comment. Calling this unconditionally (found live, 2026-08-06)
+ * forced KD_TEXT on the ACTIVE console even when the graphical session was
+ * never touched, e.g. on Abort: main() returns straight after the dialog,
+ * before session_stop() ever runs, but atexit(cleanup) still fired this.
+ * The result was a visible flash of the text console (a stray cursor,
+ * looking like a quick VT switch) over the still-running X session, which
+ * then had to reassert its own KD_GRAPHICS to repaint over it.
  */
 static void console_text_mode(void)
 {
@@ -373,8 +400,9 @@ static int set_qvga_mode(void)
     return 1;
 }
 
-/* No-op unless set_qvga_mode() actually switched something -- called
- * unconditionally from cleanup(), same as console_text_mode(). */
+/* No-op unless set_qvga_mode() actually switched something -- self-guarded
+ * via qvga_applied, so it is safe to call unconditionally from cleanup()
+ * regardless of how far main() got (e.g. Abort, where it was never set). */
 static void restore_video_mode(void)
 {
     int fd;
@@ -395,6 +423,46 @@ static void restore_video_mode(void)
     else
         trace("restore_video_mode: restored %ux%u", saved_var.xres, saved_var.yres);
     close(fd);
+}
+
+#define FASTPLL_SYSFS "/sys/devices/platform/w100fb/fastpllclk"
+
+/*
+ * Write 1/0 to the w100fb driver's "fastpllclk" sysfs attribute. Does not
+ * decide which frequency that resolves to -- that is entirely the current
+ * w100_mode's own fast_pll_freq (100->125MHz in QVGA, 75->100MHz in VGA;
+ * see modules/mach-pxa/corgi_patched.c), fixed by the kernel's mode table.
+ * See docs/DEADLETTER-W100-CLOCK-DOMAINS.md for which combinations of this
+ * and --qvga are actually proven safe on hardware -- this function does not
+ * itself validate anything, it only asks the driver for what it already
+ * exposes.
+ */
+static int set_fast_pll(int enable)
+{
+    int fd = open(FASTPLL_SYSFS, O_WRONLY);
+
+    if (fd < 0) {
+        trace("set_fast_pll: open %s failed: %s", FASTPLL_SYSFS, strerror(errno));
+        return 0;
+    }
+    if (write(fd, enable ? "1" : "0", 1) < 0) {
+        trace("set_fast_pll: write(%d) failed: %s", enable, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    trace("set_fast_pll: %s", enable ? "enabled" : "disabled");
+    return 1;
+}
+
+/* No-op unless set_fast_pll(1) actually succeeded -- same self-guarded,
+ * unconditional-from-cleanup() shape as restore_video_mode() above. */
+static void restore_fast_pll(void)
+{
+    if (!fast_pll_applied)
+        return;
+    fast_pll_applied = 0;
+    set_fast_pll(0);
 }
 
 /* ── the graphical session ──────────────────────────────────────────────── */
@@ -531,10 +599,16 @@ static void cleanup(void)
     trace("cleanup: entered (session_was_stopped=%d)", session_was_stopped);
 
     restore_video_mode();
-    console_text_mode();
+    restore_fast_pll();
 
-    if (session_was_stopped)
+    /* Both gated on session_was_stopped: nothing below this point was ever
+     * touched if we never got past the confirmation dialog (e.g. Abort),
+     * so there is nothing to put back -- see console_text_mode()'s comment
+     * for what forcing it unconditionally broke. */
+    if (session_was_stopped) {
+        console_text_mode();
         session_restore();
+    }
 
     if (lock_held)
         unlink(LOCK_PATH);
@@ -616,6 +690,201 @@ static int take_lock(void)
     return 1;
 }
 
+/* ── video mode preference (persisted) ──────────────────────────────────── */
+
+/*
+ * The four combinations --qvga/--fast-pll can actually reach, in the order
+ * they appear in the dialog's Advanced list. Labelled with the PLL
+ * frequency each one actually runs at (modules/mach-pxa/corgi_patched.c's
+ * w100_mode table), not just "normal"/"fast", since that is the number
+ * that matters for docs/DEADLETTER-W100-CLOCK-DOMAINS.md's validation
+ * table.
+ */
+enum video_mode {
+    VIDEO_MODE_QVGA_NORMAL = 0,
+    VIDEO_MODE_QVGA_FAST,
+    VIDEO_MODE_VGA_NORMAL,
+    VIDEO_MODE_VGA_FAST,
+    VIDEO_MODE_COUNT
+};
+
+static const char *video_mode_labels[VIDEO_MODE_COUNT] = {
+    "QVGA (100MHz PLL)",
+    "QVGA (125MHz PLL)",
+    "VGA (75MHz PLL)",
+    "VGA (100MHz PLL)",
+};
+
+/* Stable on-disk names, independent of the enum's own ordering/values --
+ * so reordering video_mode later can't silently reinterpret an old
+ * /etc/zaurus/matchbox-fbrun.cfg written by a previous build. */
+static const char *video_mode_keys[VIDEO_MODE_COUNT] = {
+    "qvga-normal",
+    "qvga-fast",
+    "vga-normal",
+    "vga-fast",
+};
+
+static enum video_mode mode_from_flags(int qvga, int fast_pll)
+{
+    if (qvga)
+        return fast_pll ? VIDEO_MODE_QVGA_FAST : VIDEO_MODE_QVGA_NORMAL;
+    return fast_pll ? VIDEO_MODE_VGA_FAST : VIDEO_MODE_VGA_NORMAL;
+}
+
+static void mode_to_flags(enum video_mode mode, int *qvga, int *fast_pll)
+{
+    *qvga     = (mode == VIDEO_MODE_QVGA_NORMAL || mode == VIDEO_MODE_QVGA_FAST);
+    *fast_pll = (mode == VIDEO_MODE_QVGA_FAST    || mode == VIDEO_MODE_VGA_FAST);
+}
+
+#define FBRUN_CONFIG_DIR  "/etc/zaurus"
+#define FBRUN_CONFIG_PATH "/etc/zaurus/matchbox-fbrun.cfg"
+
+/*
+ * Same convention as mb-volume.c's CONFIG_PATH/brightd.c's CONFIG_PATH:
+ * key=value, one per line, '#' comments and blank lines skipped, unknown
+ * keys silently ignored (forward-compatible with a future key this build
+ * doesn't know about). Falls back to VIDEO_MODE_VGA_NORMAL -- today's
+ * default behaviour with no flags at all -- if the file is missing or has
+ * no recognised video_mode line.
+ */
+static enum video_mode load_video_mode_config(void)
+{
+    FILE *f = fopen(FBRUN_CONFIG_PATH, "r");
+    enum video_mode mode = VIDEO_MODE_VGA_NORMAL;
+    char line[128];
+
+    if (!f)
+        return mode;
+
+    while (fgets(line, sizeof(line), f)) {
+        char *eq, *key, *val, *nl;
+        int i;
+
+        if (line[0] == '#' || line[0] == '\n')
+            continue;
+        nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
+        eq = strchr(line, '=');
+        if (!eq)
+            continue;
+        *eq = '\0';
+        key = line;
+        val = eq + 1;
+
+        if (strcmp(key, "video_mode") != 0)
+            continue;
+        for (i = 0; i < VIDEO_MODE_COUNT; i++) {
+            if (!strcmp(val, video_mode_keys[i])) {
+                mode = (enum video_mode)i;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    trace("load_video_mode_config: video_mode=%s", video_mode_keys[mode]);
+    return mode;
+}
+
+/* Atomic tmp+rename write, same as mb-volume.c's save_config() -- this is
+ * flash storage, and a config file half-written by a kill mid-write must
+ * never be what the next launch reads back. */
+static void save_video_mode_config(enum video_mode mode)
+{
+    char tmp_path[sizeof(FBRUN_CONFIG_PATH) + 4];
+    FILE *f;
+
+    mkdir(FBRUN_CONFIG_DIR, 0755);
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", FBRUN_CONFIG_PATH);
+
+    f = fopen(tmp_path, "w");
+    if (!f) {
+        trace("save_video_mode_config: fopen %s failed: %s", tmp_path, strerror(errno));
+        return;
+    }
+    fprintf(f, "# matchbox-fbrun persisted video mode -- see the dialog's Advanced panel\n");
+    fprintf(f, "video_mode=%s\n", video_mode_keys[mode]);
+    fclose(f);
+
+    if (rename(tmp_path, FBRUN_CONFIG_PATH) < 0)
+        trace("save_video_mode_config: rename %s -> %s failed: %s",
+              tmp_path, FBRUN_CONFIG_PATH, strerror(errno));
+    else
+        trace("save_video_mode_config: saved video_mode=%s", video_mode_keys[mode]);
+}
+
+/*
+ * The Advanced panel's mode list. Same table-of-hand-drawn-cells technique
+ * as piko-sync's TransferTable/pikostore's HistoryTable (see
+ * userspace/src/piko-sync/transfer_table.h) -- this project's own
+ * established list-widget idiom, rather than Fl_Browser (used nowhere in
+ * this codebase outside the bundled FLTK library itself). One column, one
+ * row per video_mode, click-to-select via Fl_Table's own callback/context
+ * mechanism rather than a handle() override.
+ */
+class VideoModeList : public Fl_Table {
+public:
+    VideoModeList(int X, int Y, int W, int H)
+        : Fl_Table(X, Y, W, H), selected_(VIDEO_MODE_VGA_NORMAL)
+    {
+        col_header(0);
+        col_resize(0);
+        row_header(0);
+        row_resize(0);
+        row_height_all(26);
+        cols(1);
+        col_width_all(W - 4);
+        rows(VIDEO_MODE_COUNT);
+        end();
+        callback(table_cb, this);
+        when(FL_WHEN_CHANGED | FL_WHEN_RELEASE);
+    }
+
+    void selected(enum video_mode m) { selected_ = m; redraw(); }
+    enum video_mode selected(void) const { return selected_; }
+
+protected:
+    void draw_cell(TableContext context, int R = 0, int C = 0,
+                   int X = 0, int Y = 0, int W = 0, int H = 0)
+    {
+        (void)C;
+        switch (context) {
+        case CONTEXT_CELL: {
+            int is_selected = (R == (int)selected_);
+
+            fl_push_clip(X, Y, W, H);
+            fl_draw_box(FL_THIN_UP_BOX, X, Y, W, H,
+                        is_selected ? FL_SELECTION_COLOR : FL_BACKGROUND2_COLOR);
+            fl_color(is_selected ? FL_WHITE : FL_BLACK);
+            fl_draw(video_mode_labels[R], X + 6, Y, W - 12, H, FL_ALIGN_LEFT);
+            fl_pop_clip();
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+private:
+    static void table_cb(Fl_Widget *, void *v)
+    {
+        VideoModeList *self = (VideoModeList *)v;
+
+        if (self->callback_context() == CONTEXT_CELL) {
+            int r = self->callback_row();
+
+            if (r >= 0 && r < VIDEO_MODE_COUNT) {
+                self->selected_ = (enum video_mode)r;
+                self->redraw();
+            }
+        }
+    }
+
+    enum video_mode selected_;
+};
+
 /* ── the dialog ─────────────────────────────────────────────────────────── */
 
 /*
@@ -642,13 +911,61 @@ static int dialog_result = 0;
 static void abort_cb(Fl_Widget *, void *w)     { dialog_result = 0; ((Fl_Window *)w)->hide(); }
 static void continue_cb(Fl_Widget *, void *w)  { dialog_result = 1; ((Fl_Window *)w)->hide(); }
 
+/* Collapsed dialog height (today's original size) and how much taller it
+ * grows to fit the "Video mode:" label + list when Advanced is toggled on.
+ * The button row (advanced/abort/continue) sits at DIALOG_BTN_Y normally,
+ * or DIALOG_BTN_Y + DIALOG_EXTRA_H once expanded -- everything else about
+ * the layout (text box, label, list) stays at fixed positions and is only
+ * shown/hidden. */
+#define DIALOG_BASE_W   420
+#define DIALOG_BASE_H   200
+#define DIALOG_EXTRA_H  150
+#define DIALOG_BTN_Y    150
+
+struct advanced_ui {
+    Fl_Window        *win;
+    Fl_Box           *mode_label;
+    VideoModeList    *list;
+    Fl_Button        *advanced_btn;
+    Fl_Button        *abort_btn;
+    Fl_Return_Button *continue_btn;
+    int               expanded;
+};
+
+static void advanced_cb(Fl_Widget *, void *v)
+{
+    struct advanced_ui *ui = (struct advanced_ui *)v;
+    int button_y;
+
+    ui->expanded = !ui->expanded;
+    button_y = DIALOG_BTN_Y + (ui->expanded ? DIALOG_EXTRA_H : 0);
+
+    if (ui->expanded) {
+        ui->mode_label->show();
+        ui->list->show();
+    } else {
+        ui->mode_label->hide();
+        ui->list->hide();
+    }
+
+    ui->win->size(DIALOG_BASE_W, DIALOG_BASE_H + (ui->expanded ? DIALOG_EXTRA_H : 0));
+    ui->advanced_btn->position(ui->advanced_btn->x(), button_y);
+    ui->abort_btn->position(ui->abort_btn->x(), button_y);
+    ui->continue_btn->position(ui->continue_btn->x(), button_y);
+    ui->win->redraw();
+}
+
 /*
  * Asked while X is still up, because afterwards there is nothing left to ask
- * with. Returns non-zero to proceed.
+ * with. Returns non-zero to proceed. *mode is both the Advanced panel's
+ * initial selection (the caller's already-resolved CLI-flags-or-config
+ * choice) and, on return, whatever the user left it at -- unchanged if they
+ * never opened Advanced.
  */
-static int confirm(const char *name, const char *reason)
+static int confirm(const char *name, const char *reason, enum video_mode *mode)
 {
     char msg[512];
+    struct advanced_ui ui;
 
     snprintf(msg, sizeof(msg),
              "%s needs the whole screen.\n\n"
@@ -658,17 +975,36 @@ static int confirm(const char *name, const char *reason)
              reason ? "\n" : "",
              reason ? reason : "");
 
-    Fl_Window win(420, 200, "Start application");
+    Fl_Window win(DIALOG_BASE_W, DIALOG_BASE_H, "Start application");
     Fl_Box text(10, 10, 400, 130, msg);
     text.align(FL_ALIGN_WRAP | FL_ALIGN_LEFT | FL_ALIGN_TOP | FL_ALIGN_INSIDE);
-    /* Buttons render right to left, matching fl_choice()'s old layout, so
-     * the safe default (Abort) is where a thumb already resting at the
-     * bottom-right of the screen would land on an accidental tap. */
-    Fl_Button abort_btn(210, 150, 100, 30, "Abort");
-    Fl_Return_Button continue_btn(310, 150, 100, 30, "Continue");
+
+    Fl_Box mode_label(10, 145, 200, 20, "Video mode:");
+    mode_label.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    mode_label.hide();
+
+    VideoModeList mode_list(10, 168, 400, 112);
+    mode_list.selected(*mode);
+    mode_list.hide();
+
+    /* Advanced sits bottom-left; Abort/Continue stay bottom-right, still
+     * rendering right to left (Continue rightmost/default), matching
+     * fl_choice()'s old layout and the thumb-ergonomics reasoning above. */
+    Fl_Button advanced_btn(10, DIALOG_BTN_Y, 90, 30, "Advanced");
+    Fl_Button abort_btn(210, DIALOG_BTN_Y, 100, 30, "Abort");
+    Fl_Return_Button continue_btn(310, DIALOG_BTN_Y, 100, 30, "Continue");
     win.end();
 
     dialog_result = 0;
+    ui.win = &win;
+    ui.mode_label = &mode_label;
+    ui.list = &mode_list;
+    ui.advanced_btn = &advanced_btn;
+    ui.abort_btn = &abort_btn;
+    ui.continue_btn = &continue_btn;
+    ui.expanded = 0;
+
+    advanced_btn.callback(advanced_cb, &ui);
     abort_btn.callback(abort_cb, &win);
     continue_btn.callback(continue_cb, &win);
     win.set_modal();
@@ -729,9 +1065,11 @@ static int confirm(const char *name, const char *reason)
 
     fprintf(stderr, "confirm: wait loop exited, result=%d\n", dialog_result);
     fflush(stderr);
-    trace("confirm: answered, result=%d (%s)", dialog_result,
-          dialog_result ? "Continue" : "Abort");
+    trace("confirm: answered, result=%d (%s), video_mode=%s", dialog_result,
+          dialog_result ? "Continue" : "Abort",
+          video_mode_keys[mode_list.selected()]);
 
+    *mode = mode_list.selected();
     return dialog_result;
 }
 
@@ -740,14 +1078,16 @@ static int confirm(const char *name, const char *reason)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] [--] "
-            "program [args...]\n");
+            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] "
+            "[--fast-pll] [--] program [args...]\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *name = NULL, *reason = NULL;
     int assume_yes = 0;
+    int mode_flag_given = 0;
+    enum video_mode mode;
     int i, status = 0;
     char **prog_argv;
 
@@ -755,10 +1095,23 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "-n") && i + 1 < argc)      name   = argv[++i];
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) reason = argv[++i];
         else if (!strcmp(argv[i], "-y"))                 assume_yes = 1;
-        else if (!strcmp(argv[i], "--qvga"))             qvga_requested = 1;
+        else if (!strcmp(argv[i], "--qvga"))
+            { qvga_requested = 1; mode_flag_given = 1; }
+        else if (!strcmp(argv[i], "--fast-pll"))
+            { fast_pll_requested = 1; mode_flag_given = 1; }
         else if (!strcmp(argv[i], "--"))                 { i++; break; }
         else if (argv[i][0] == '-')                      { usage(); return 2; }
         else                                             break;
+    }
+
+    /* An explicit --qvga/--fast-pll always wins for this run. With neither
+     * given, fall back to whatever the Advanced panel last saved -- see
+     * the usage comment at the top of this file. */
+    if (mode_flag_given) {
+        mode = mode_from_flags(qvga_requested, fast_pll_requested);
+    } else {
+        mode = load_video_mode_config();
+        mode_to_flags(mode, &qvga_requested, &fast_pll_requested);
     }
 
     if (i >= argc) {
@@ -840,13 +1193,20 @@ int main(int argc, char **argv)
               dpy ? "opened, showing confirm dialog" : "XOpenDisplay FAILED, skipping dialog");
 
         if (dpy) {
-            int proceed = confirm(name, reason);
+            int proceed = confirm(name, reason, &mode);
 
             if (!proceed) {
                 trace("main: user chose Abort");
                 XCloseDisplay(dpy);
                 return 0;         /* atexit puts the lock back */
             }
+
+            /* Sync back from whatever the Advanced panel was left at (a
+             * no-op if the user never opened it) and persist it as the
+             * new default for next time. */
+            mode_to_flags(mode, &qvga_requested, &fast_pll_requested);
+            save_video_mode_config(mode);
+
             close_other_clients(dpy);
             XCloseDisplay(dpy);
         }
@@ -861,6 +1221,8 @@ int main(int argc, char **argv)
 
     if (qvga_requested)
         qvga_applied = set_qvga_mode();
+    if (fast_pll_requested)
+        fast_pll_applied = set_fast_pll(1);
 
     show_splash(name);
 
