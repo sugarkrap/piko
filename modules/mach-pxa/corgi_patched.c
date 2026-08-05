@@ -192,7 +192,40 @@ static struct scoop_pcmcia_config corgi_pcmcia_config = {
 
 static struct w100_mem_info corgi_fb_mem = {
 	.ext_cntl          = 0x00040003,
-	.sdram_mode_reg    = 0x00650021,
+	/*
+	 * CAS latency 3, not the stock 2 (low byte 0x21 -> 0x31; see
+	 * w100_setup_memory()'s JEDEC-style precharge/MRS write sequence,
+	 * which is the only place this value is ever consumed).
+	 *
+	 * VERIFIED ON HARDWARE (Corgi, 2026-08-05). This mode's own
+	 * fast_pll_freq=100 has shipped since before this file's own git
+	 * history, exposed at runtime via the "fastpllclk" sysfs attribute
+	 * -- but nothing had ever actually run it in THIS mode (external
+	 * SDRAM live) until the w100 clock-domain bring-up work tested it:
+	 * SCLK=100MHz with the stock CL2 corrupted the live desktop
+	 * (visible garbage, confirmed twice). CL3 at the same 100MHz fixed
+	 * it cleanly -- pixel-perfect W100FB_IOC_FILL/BLIT readback and
+	 * 30/30 FBIO_WAITFORVSYNC waits, both with external SDRAM genuinely
+	 * live (verified via fix.smem_len, not assumed from resolution --
+	 * see the w100fb_set_par() fix below, the QVGA-based test protocol
+	 * this depended on was itself broken until that landed).
+	 *
+	 * 125 MHz was ALSO tried with CL3 and is NOT safe here: a
+	 * pixel-perfect W100FB_IOC_BLIT readback caught 3 of 256 pixels
+	 * wrong (a single-bit difference, 0x07e0 vs 0x07c0) -- invisible on
+	 * screen and to FBIO_WAITFORVSYNC timing, which stayed clean. 125
+	 * MHz IS proven safe when confined to internal SRAM (this mode's
+	 * OWN QVGA sibling below, which never touches this struct at all),
+	 * just not with any sdram_mode_reg/timing combination tried so far
+	 * for external SDRAM. See docs/DEADLETTER-W100-VSYNC.md and the w100
+	 * clock-domain handoff for the full writeup, including why CL3 is
+	 * expected to be safe (not just untested-and-lucky) at the stock
+	 * 75 MHz too: a higher CAS latency only adds settling margin, it
+	 * cannot remove margin a lower-frequency clock didn't need -- and
+	 * that was itself confirmed on hardware (pixel-perfect at 75 MHz +
+	 * CL3), not left as an assumption.
+	 */
+	.sdram_mode_reg    = 0x00650031,
 	.ext_timing_cntl   = 0x10002a4a,
 	.io_cntl           = 0x7ff87012,
 	.size              = 0x1fffff,
@@ -239,6 +272,27 @@ static struct w100_mode corgi_fb_modes[] = {
 	.sysclk_divider  = 0,
 	.pixclk_src      = CLK_SRC_PLL,
 	.pixclk_divider  = 2,
+	/*
+	 * pixclk_divider_rotated stays 6 (stock ~25.6Hz), deliberately NOT
+	 * lowered to 5 (~30Hz, PLL/6 = 12.5MHz off the 75MHz normal PLL)
+	 * despite that value being validated safe on hardware -- because it
+	 * was only validated at pll_freq=75. This single field is shared
+	 * between the normal (75MHz) and fastpllclk (100MHz, see
+	 * fast_pll_freq above) states: at 100MHz the SAME divider gives
+	 * 100/6 = 16.7MHz, close to the 15MHz (divider=4, pll_freq=75) that
+	 * already failed on hardware (visible corruption) -- untested at
+	 * fastpllclk but almost certainly the same failure, since this is a
+	 * panel-scanout-timing limit (not a memory-timing one, so it's a
+	 * function of the actual pixel-clock Hz, not which divider/PLL
+	 * combination produced it). Baking divider=5 in here would silently
+	 * turn the pre-existing fastpllclk toggle into a corruption trigger.
+	 * A real fix needs per-speed dividers (pixclk_divider_rotated_fast,
+	 * selected on par->fastpll_mode the way w100_set_dispregs() already
+	 * selects pixclk_divider vs _rotated on orientation) -- deferred,
+	 * see the w100 clock-domain handoff's stage 4. The "pixclk" sysfs
+	 * attribute still reaches divider=5 at runtime today; it just isn't
+	 * the compiled-in default.
+	 */
 	.pixclk_divider_rotated = 6,
 },{
 	.xres            = 240,
@@ -280,11 +334,35 @@ static struct w100_mode corgi_fb_modes[] = {
 	 * (it programs the PLL if EITHER asks for it), which the 480x640
 	 * entry already relies on by running pixclk at PLL/2 and PLL/6.
 	 *
-	 * fast_pll_freq deliberately left 0: the fastpllclk sysfs knob then
-	 * cannot push this mode to 100MHz, which nothing has tested.
+	 * pll_freq=100 / fast_pll_freq=125: raised from the original 75/0
+	 * (fast_pll_freq was deliberately left 0 -- "the fastpllclk sysfs
+	 * knob then cannot push this mode to 100MHz, which nothing has
+	 * tested"). Both are now tested, on hardware, specifically in THIS
+	 * mode. See the w100 clock-domain handoff and
+	 * docs/DEADLETTER-W100-VSYNC.md for the full writeup; summary:
+	 *
+	 * This mode's own w100fb_set_par() sizes memory from the visible
+	 * frame (240x320x16bpp = 76800 bytes), well under the 393216-byte
+	 * internal-SRAM bucket, so external SDRAM stays fully powered down
+	 * here (w100_suspend(W100_SUSPEND_EXTMEM)) regardless of what SCLK
+	 * runs at -- unlike the 480x640 mode above, where sdram_mode_reg's
+	 * CAS latency actually matters. Verified via fix.smem_len == 393216
+	 * (not assumed from resolution: a w100fb_set_par() bug that used the
+	 * mode's OLD resolution instead of the new one when deciding this --
+	 * fixed in the same round of work -- had silently left external
+	 * memory mapped in across a 640x480->240x320 switch until caught).
+	 *
+	 * At 125MHz (SCLK, hence also the 2D engine and internal memory
+	 * controller): pixel-perfect W100FB_IOC_FILL/BLIT readback and
+	 * 30/30 FBIO_WAITFORVSYNC waits, confirmed with external memory
+	 * genuinely off. 100MHz was walked through first and is clean too.
+	 * Both are 100x / far past what nothing-tested-it used to mean.
+	 *
+	 * pixclk stays on the crystal, untouched -- this mode's SCLK/PLL
+	 * question is independent of it either way.
 	 */
-	.pll_freq        = 75,
-	.fast_pll_freq   = 0,
+	.pll_freq        = 100,
+	.fast_pll_freq   = 125,
 	.sysclk_src      = CLK_SRC_PLL,
 	.sysclk_divider  = 0,
 	.pixclk_src      = CLK_SRC_XTAL,
