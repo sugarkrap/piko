@@ -469,9 +469,35 @@ static const uint32_t corgikbd_keymap[] = {
 	KEY(5, 3, KEY_MINUS),
 	KEY(5, 4, KEY_SPACE),
 	KEY(5, 5, KEY_COMMA),
-	KEY(5, 7, KEY_UP),
+	/*
+	 * Mainline's positions, and they are correct -- do not "fix" them.
+	 *
+	 * These two were briefly swapped, because the symptoms pointed
+	 * straight at them: the Home button did nothing and the d-pad's up
+	 * showed the desktop, which is exactly what a transposed pair looks
+	 * like. It was not. The X server was compiling its keymap with the
+	 * XFREE86 keycode set (its configure defaults to "base" rules
+	 * without HAL), where <PRSC> is 111 and <UP> is 98 -- while the
+	 * kernel sends evdev codes, so KEY_UP (103) arrived as 111 and the
+	 * server called it Print, and KEY_SYSRQ (99) arrived as 107 and the
+	 * server called it Delete. Both keys were reported perfectly by this
+	 * table and mistranslated afterwards.
+	 *
+	 * Swapping them here made Home send KEY_UP, which landed on Print
+	 * and looked like a fix, at the price of the arrow keys. The real
+	 * fix is --with-xkb-default-rules=evdev in tools/build-x11-stack.sh.
+	 *
+	 * If a key here is ever in doubt, dump what it actually reports
+	 * rather than reasoning about the matrix -- that is how the on/off
+	 * button was confirmed as row 7 column 0 (MSC_SCAN 0x70, KEY_SUSPEND)
+	 * when it was suspected of being mismapped too, and it was not:
+	 *
+	 *   dd if=/dev/input/event1 of=/tmp/k.bin bs=16 count=8   (on device)
+	 *   tools/decode-input-events.py k.bin                    (on host)
+	 */
+	KEY(5, 7, KEY_UP),		/* d-pad up */
 	KEY(5, 11, CORGI_KEY_FN),
-	KEY(6, 0, KEY_SYSRQ),
+	KEY(6, 0, KEY_SYSRQ),		/* Home (house keycap) -> Print */
 	KEY(6, 1, CORGI_KEY_JAP1),
 	KEY(6, 2, CORGI_KEY_JAP2),
 	KEY(6, 3, CORGI_KEY_CANCEL),

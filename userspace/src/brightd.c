@@ -1,7 +1,7 @@
 /*
  * brightd -- backlight policy daemon for the Sharp Zaurus C7x0 (corgi).
  *
- * Does five things, all of them by watching the evdev nodes directly:
+ * Does six things, all of them by watching the evdev nodes directly:
  *
  *   1. Fn+3 / Fn+4 step the backlight down / up.
  *   2. After an idle period the backlight dims, then blanks; any key or
@@ -12,6 +12,10 @@
  *   5. Optionally (suspend_on_lid=yes, off by default), closing the lid
  *      also suspends the whole system, not just the backlight. See
  *      SUSPEND ON LID below before turning this on.
+ *   6. The on/off button suspends the system, and the backlight comes
+ *      back when it resumes. Not optional and not configurable -- see
+ *      request_suspend(). The button reaches us over the FIFO while an X
+ *      session is running and from evdev directly when one is not.
  *
  * WHY NOT X
  * ---------
@@ -195,6 +199,13 @@
  *        is the one blank request that does NOT already pass through the
  *        "lid_closed || inhibited()" gate near the bottom of the main
  *        loop -- it has to be checked here instead.
+ *   'z'  the on/off button was pressed -- suspend the machine. Sent by
+ *        PowerKey() in the X server's evdev driver, which consumes the
+ *        key rather than passing it to X (there is no keysym for it; see
+ *        that function). Handled here and not there because this daemon
+ *        already owns /sys/power/state for the lid path, and because it
+ *        is also the only thing that brings the backlight back on the
+ *        far side of a resume.
  *   'w'  screen saver OFF. Counts as activity: X only sends this because
  *        something legitimate happened (DPMSForceLevel, XSetScreenSaver
  *        reset, a future screensaver client, ...), same as 'u'/'d'.
@@ -299,6 +310,23 @@ static time_t last_heartbeat = 0;
  * because do_suspend() needs to reset it after a resume. */
 static time_t last_activity = 0;
 
+/* When we last came back from a suspend. 0 means never this run. See
+ * request_suspend(). */
+static time_t last_resume = 0;
+
+/* How long after a resume an on/off press is ignored.
+ *
+ * The button that wakes the machine is the same button that suspends it,
+ * and the press happens while the CPU is off: what the keypad reports
+ * once it is scanning again is up to how the key was still being held and
+ * how the driver resynchronises, so a press or a release can turn up
+ * immediately after resume with nobody having touched anything since. Act
+ * on that and the device goes straight back to sleep, which from the far
+ * side of the screen is indistinguishable from never having woken up.
+ * Two seconds is longer than any such echo and far shorter than the
+ * interval between a deliberate wake and a deliberate re-suspend. */
+#define RESUME_GUARD_SECS 2
+
 static void
 usage(void)
 {
@@ -311,6 +339,7 @@ usage(void)
 	puts("  -v        log transitions to stdout");
 	puts("");
 	puts("Fn+3 / Fn+4 step brightness. Closing the lid blanks.");
+	puts("The on/off button suspends; pressing it again wakes the device.");
 	puts("Create /tmp/brightd.inhibit to suspend dimming (e.g. video).");
 	puts("");
 	puts("/etc/zaurus/power-management.cfg overrides dim_secs/blank_secs/");
@@ -632,22 +661,73 @@ go_active(void)
 static void
 do_suspend(void)
 {
-	int fd = open("/sys/power/state", O_WRONLY);
+	int fd;
 
+	/*
+	 * Select "deep" first, exactly as /usr/sbin/suspend does and for the
+	 * same reason its comment gives: /sys/power/mem_sleep offers s2idle
+	 * and deep, and this board does not suspend properly unless deep is
+	 * chosen explicitly right before the transition -- even when the file
+	 * already shows it as the selected one. Writing the active choice is
+	 * a no-op, so this costs one write and removes a way for "mem" to
+	 * quietly mean the shallow state instead.
+	 *
+	 * Non-fatal: a kernel without mem_sleep has only one implementation
+	 * of "mem" anyway, so there is nothing to choose.
+	 */
+	fd = open("/sys/power/mem_sleep", O_WRONLY);
+	if (fd >= 0) {
+		if (write(fd, "deep", 4) != 4)
+			fprintf(stderr, "brightd: could not select deep sleep: %s\n",
+				strerror(errno));
+		close(fd);
+	}
+
+	fd = open("/sys/power/state", O_WRONLY);
 	if (fd < 0) {
 		fprintf(stderr, "brightd: cannot open /sys/power/state: %s\n",
 			strerror(errno));
 		return;
 	}
 
-	say("brightd: suspending (echo mem > /sys/power/state)");
+	/*
+	 * Printed unconditionally, not through say(). A suspend that the
+	 * kernel refuses is otherwise completely invisible: the write fails,
+	 * nothing sleeps, and the button looks dead -- which is exactly how
+	 * this failure presents from the outside. rcS keeps brightd's stderr
+	 * (see /etc/init.d/rcS), so the reason survives.
+	 */
+	fprintf(stderr, "brightd: suspending (echo mem > /sys/power/state)\n");
 	if (write(fd, "mem", 3) != 3)
 		fprintf(stderr, "brightd: suspend failed: %s\n", strerror(errno));
+	else
+		fprintf(stderr, "brightd: back from suspend\n");
 	close(fd);
 
 	say("brightd: resumed");
+	last_resume = now_mono();
 	go_active();
 	last_activity = now_mono();
+}
+
+/*
+ * Suspend on request -- the on/off button, from evdev here or as 'z' over
+ * the FIFO from the X server (which holds the keyboard grab, so on a
+ * running session that is the only path). Unlike the lid, this needs no
+ * opting in: a button whose only legend is the power symbol has exactly
+ * one job.
+ *
+ * The guard is what makes waking up work. See RESUME_GUARD_SECS.
+ */
+static void
+request_suspend(void)
+{
+	if (last_resume && (now_mono() - last_resume) < RESUME_GUARD_SECS) {
+		say("brightd: ignoring on/off, just resumed");
+		return;
+	}
+
+	do_suspend();
 }
 
 /*
@@ -864,6 +944,19 @@ main(int argc, char **argv)
 					if (ev.type != EV_KEY)
 						continue;
 
+					/* The on/off button (CORGI_KEY_OFF,
+					 * plain KEY_SUSPEND). Only reaches us
+					 * on a console boot -- with an X
+					 * session running the server holds the
+					 * grab and sends 'z' instead. Press
+					 * only, for the reason in
+					 * RESUME_GUARD_SECS. */
+					if (ev.code == KEY_SUSPEND) {
+						if (ev.value == 1)
+							request_suspend();
+						continue;
+					}
+
 					/* Track the Fn chord. KEY_F3 is what the
 					 * matrix keypad reports for the physical
 					 * Fn key (CORGI_KEY_FN in corgi.c); XKB
@@ -931,6 +1024,13 @@ main(int argc, char **argv)
 							if (state != ST_BLANKED &&
 							    !inhibited())
 								go_blank();
+							break;
+						case 'z':
+							/* On/off button. Not
+							 * activity: the point is
+							 * to go down, not to
+							 * wake the panel up. */
+							request_suspend();
 							break;
 						case 'w':
 							go_active();

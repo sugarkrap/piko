@@ -286,9 +286,15 @@ fi
 # BusyBox has no nohup. Stop it with "pkillx brightd" (there is no plain
 # kill on this rootfs); suppress dimming for video with
 # "touch /tmp/brightd.inhibit" rather than stopping the daemon.
+#
+# stderr goes to a log rather than /dev/null. brightd only writes there
+# when something actually failed -- a suspend the kernel refused, a sysfs
+# node it could not open -- and those are precisely the failures that are
+# otherwise indistinguishable from "the button does nothing". One small
+# file on flash, written only on error.
 if test -x /usr/sbin/brightd; then
 	trap "" HUP
-	/usr/sbin/brightd 2>/dev/null &
+	/usr/sbin/brightd 2>/tmp/brightd.err &
 	trap - HUP
 fi
 
