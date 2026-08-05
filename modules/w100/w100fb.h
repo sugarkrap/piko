@@ -138,6 +138,46 @@ struct w100fb_par {
 	unsigned int flip;
 	unsigned int blanked;
 	unsigned int fastpll_mode;
+	/* Last frequency w100_set_pll_freq() actually locked, in Hz. 0 if the
+	 * PLL has never been locked (e.g. before the first mode set). Purely
+	 * instrumentation -- see the "clocks" sysfs attribute -- and does not
+	 * feed back into any register programming. */
+	unsigned int pll_freq_hz;
+	/* Last PLL frequency (MHz) that actually locked -- w100_set_pll_freq()
+	 * falls back to this on a failed w100_pll_set_clk() rather than
+	 * leaving the chip on whatever half-applied state calibration
+	 * failure left behind (w100_pll_set_clk() parks SCLK on XTAL and
+	 * writes the new divider before it knows calibration will succeed).
+	 * 0 until the first successful lock. */
+	unsigned int pll_freq_last_good;
+	/* Runtime PLL override (MHz), set via the "sysclk" sysfs attribute.
+	 * When nonzero, w100_init_clocks() uses this instead of the current
+	 * mode's own pll_freq/fast_pll_freq, so a mode change (e.g. a
+	 * rotation) does not silently revert an operator-requested clock. */
+	unsigned int pll_override;
+	/* Runtime pixel-clock override, in Hz, set via the "pixclk" sysfs
+	 * attribute. 0 = no override (use the current mode's own
+	 * pixclk_divider/pixclk_divider_rotated). Stored as a target
+	 * frequency, not a raw divider, because rotated and non-rotated
+	 * orientations want different dividers off the same source -- see
+	 * w100_current_pixclk_divider(), which re-solves this against
+	 * whichever orientation is live every time w100_set_dispregs() runs.
+	 * Always clamped to W100_PCLK_MAX_HZ in the kernel regardless of what
+	 * was written here -- this is the one value in the whole clock-domain
+	 * bring-up plan that can run the panel out of spec. */
+	unsigned int pixclk_override_hz;
+	/* Runtime override for w100_mem_info.sdram_mode_reg, set via the
+	 * "sdram_mode_reg" sysfs attribute (0 = unset, use the compiled-in
+	 * mach->mem->sdram_mode_reg). CAS-latency bisection tool -- see
+	 * w100_setup_memory()'s comment on why this can ONLY safely apply on
+	 * a genuine external-memory off->on transition, never as a live
+	 * register poke: the write sequence it feeds is the SDRAM's
+	 * precharge/MRS init, which does not preserve existing content and
+	 * assumes nothing is actively scanning that memory out yet. Setting
+	 * this does NOT itself reprogram anything -- it only changes what the
+	 * NEXT off->on transition (e.g. bouncing through QVGA and back) will
+	 * write. */
+	unsigned int sdram_mode_reg_override;
 	unsigned long hsync_len;
 	struct w100_mode *mode;
 	struct w100_pll_info *pll_table;

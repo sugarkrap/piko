@@ -65,6 +65,8 @@ static void w100_update_disable(void);
 static void calc_hsync(struct w100fb_par *par);
 static void w100_init_graphic_engine(struct w100fb_par *par);
 struct w100_pll_info *w100_get_xtal_table(unsigned int freq);
+static unsigned int w100_get_testcount(unsigned int testclk_sel);
+static int w100_set_pll_freq(struct w100fb_par *par, unsigned int freq);
 
 /*
  * 0: vline IRQ status wait (works -- the only usable mode on Corgi)
@@ -208,6 +210,36 @@ module_param_cb(force_fullrate, &w100_force_fullrate_ops,
  */
 #define W100_VBLANK_US		182
 
+/*
+ * Ceiling for the "sysclk" sysfs knob (see clocks_show()/sysclk_store()
+ * below), in MHz. xtal_12500000[] carries entries up to 150, but this board
+ * has only ever run 75/100 in the field -- 125 is one synthesized step past
+ * the highest *documented* value (100), not the table's own limit. Raise
+ * this only after stage 1/2 of the w100 clock-domain bring-up plan have
+ * validated higher values on real hardware; see the handoff doc.
+ */
+#define W100_PLL_MAX_MHZ	125
+#define W100_PLL_MIN_MHZ	50
+
+/*
+ * Hard ceiling for the "pixclk" sysfs knob (see w100_current_pixclk_divider()
+ * / pixclk_store() below), in Hz.
+ *
+ * This is the one value in the whole w100 clock-domain bring-up plan that
+ * can put the panel itself out of spec rather than merely corrupt a frame:
+ * every other clamp here (W100_PLL_MAX_MHZ, the QVGA-first testing order)
+ * exists to keep the 2D engine / memory controller inside something that
+ * fails safe (tearing, a failed calibration, a rejected write). The pixel
+ * clock drives the Sharp HR-TFT panel's own timing directly, and 25.0 MHz
+ * is the only pixel clock this panel is PROVEN at -- it is the stock
+ * non-rotated (portrait) mode's own pixclk_divider=2 result at PLL 75
+ * (75/3), a configuration that has run in the field. Enforced here, in the
+ * kernel, unconditionally -- not just at the sysfs entry point -- per the
+ * handoff doc: "the clamp is the safety mechanism, a script is a
+ * convenience."
+ */
+#define W100_PCLK_MAX_HZ	25000000
+
 /* Pseudo palette size */
 #define MAX_PALETTES      16
 
@@ -320,8 +352,275 @@ static ssize_t fastpllclk_store(struct device *dev, struct device_attribute *att
 
 static DEVICE_ATTR_RW(fastpllclk);
 
+/*
+ * Solve the pclk_post_div register value (0-15, register holds divider-1)
+ * that gets src_hz down to AT MOST target_hz. Always rounds the divider UP
+ * (i.e. the achieved frequency DOWN) rather than to the nearest divider --
+ * ceil(src/target), not round(src/target) -- so a caller enforcing
+ * W100_PCLK_MAX_HZ by clamping target_hz first can never end up with an
+ * achieved frequency above what it asked for due to rounding. Returns 15
+ * (the slowest available) if target_hz is 0 or the ratio doesn't fit in 4
+ * bits; never returns a divider that would exceed target_hz.
+ */
+static unsigned int w100_pclk_divider_for(unsigned int src_hz, unsigned int target_hz)
+{
+	unsigned int ratio, div;
+
+	if (!src_hz || !target_hz)
+		return 15;
+
+	ratio = (src_hz + target_hz - 1) / target_hz; /* ceil(src_hz/target_hz) */
+	if (ratio < 1)
+		ratio = 1;
+	div = ratio - 1;
+	if (div > 15)
+		div = 15;
+	return div;
+}
+
+/*
+ * Which pclk_post_div is actually in effect for the given orientation: an
+ * operator override (the "pixclk" sysfs attribute, a target Hz) resolved
+ * against the mode's own pclk source, or the mode table's own
+ * pixclk_divider/pixclk_divider_rotated if no override is set. Shared by
+ * w100_set_dispregs() (which programs it) and clocks_show() (which reports
+ * it), so the two cannot drift apart.
+ *
+ * W100_PCLK_MAX_HZ is enforced HERE, unconditionally, not just at the
+ * pixclk_store() entry point -- see that macro's comment for why.
+ */
+static unsigned int w100_current_pixclk_divider(struct w100fb_par *par,
+						 struct w100_mode *mode, bool rotated)
+{
+	unsigned int table_div = rotated ? mode->pixclk_divider_rotated : mode->pixclk_divider;
+	unsigned int src_hz, target_hz;
+
+	if (!par->pixclk_override_hz)
+		return table_div;
+
+	src_hz = (mode->pixclk_src == CLK_SRC_PLL) ? par->pll_freq_hz : par->mach->xtal_freq;
+	target_hz = par->pixclk_override_hz;
+	if (target_hz > W100_PCLK_MAX_HZ)
+		target_hz = W100_PCLK_MAX_HZ;
+
+	return w100_pclk_divider_for(src_hz, target_hz);
+}
+
+/*
+ * Read-only clock-domain dump. Instrumentation only -- see
+ * docs/DEADLETTER-W100-VSYNC.md and the "w100 clock domains" handoff for why
+ * this exists: PCLK and SCLK are independently derived from one PLL, and the
+ * low rotated-mode refresh (~25.6 Hz measured) is a pixclk_divider_rotated
+ * choice, not a hardware ceiling. This attribute exists to prove that
+ * arithmetic against real hardware before anything about the clocking
+ * changes.
+ *
+ * xtal/pll/sclk/pclk are computed, not measured: xtal_freq is a fixed board
+ * constant, pll is the last frequency w100_set_pll_freq() actually locked
+ * (par->pll_freq_hz), and sclk/pclk follow from the current mode's
+ * src/divider fields using the same formula already validated against a
+ * real FBIO_WAITFORVSYNC measurement in the deadletter doc. If this ever
+ * disagrees with an independent FBIO_WAITFORVSYNC-loop measurement, trust
+ * the measurement and treat this arithmetic as wrong, not the other way
+ * round.
+ *
+ * testcount_raw is CLK_TEST_CNTL's test_count for each source, straight off
+ * the hardware via w100_get_testcount() -- but it is NOT a calibrated
+ * frequency counter. Elsewhere in this driver (w100_pll_adjust()) it is
+ * only ever compared against a per-target tfgoal threshold, never converted
+ * to Hz, and its 8-bit width saturates well below the frequencies these
+ * domains actually run at. Reported for forensic/calibration use only --
+ * do not read it as Hz.
+ */
+static ssize_t clocks_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+	struct w100_mode *mode = par->mode;
+	bool rotated;
+	unsigned int divider, pclk_src_hz, sclk_src_hz;
+	unsigned int pll_hz, sclk_hz, pclk_hz;
+
+	if (!mode)
+		return scnprintf(buf, PAGE_SIZE, "no mode set yet\n");
+
+	rotated = (par->xres != mode->xres);
+	divider = w100_current_pixclk_divider(par, mode, rotated);
+
+	pll_hz = par->pll_freq_hz;
+
+	sclk_src_hz = (mode->sysclk_src == CLK_SRC_PLL) ? pll_hz : par->mach->xtal_freq;
+	sclk_hz = sclk_src_hz / (mode->sysclk_divider + 1);
+
+	pclk_src_hz = (mode->pixclk_src == CLK_SRC_PLL) ? pll_hz : par->mach->xtal_freq;
+	pclk_hz = pclk_src_hz / (divider + 1);
+
+	return scnprintf(buf, PAGE_SIZE,
+		"xtal  %u\n"
+		"pll   %u\n"
+		"sclk  %u\n"
+		"pclk  %u\n"
+		"mode  %ux%u rotated=%d div=%u\n"
+		"pixclk_override_hz %u (0 = none; clamped to %u)\n"
+		"testcount_raw xtal=%u pll=%u sclk=%u pclk=%u (uncalibrated CLK_TEST_CNTL counts, not Hz)\n",
+		par->mach->xtal_freq, pll_hz, sclk_hz, pclk_hz,
+		par->xres, par->yres, rotated, divider,
+		par->pixclk_override_hz, W100_PCLK_MAX_HZ,
+		w100_get_testcount(TESTCLK_SRC_XTAL),
+		w100_get_testcount(TESTCLK_SRC_PLL),
+		w100_get_testcount(TESTCLK_SRC_SCLK),
+		w100_get_testcount(TESTCLK_SRC_PCLK));
+}
+
+static DEVICE_ATTR_RO(clocks);
+
+/*
+ * Runtime PLL frequency override, in MHz (W100_PLL_MIN_MHZ..W100_PLL_MAX_MHZ).
+ * Stage 1 of the w100 clock-domain bring-up plan: prove the PLL can be
+ * retargeted at runtime over SSH, with a value written here surviving mode
+ * changes (w100_init_clocks() prefers par->pll_override -- see
+ * w100_target_pll_mhz()) and a failed lock recovering to the last frequency
+ * known to have worked (par->pll_freq_last_good, in w100_set_pll_freq()).
+ *
+ * Clamped in the kernel, not left to whatever calls this from userspace:
+ * the clamp is the actual safety mechanism on a device with no serial
+ * console and only WiFi->SSH as a recovery path, not a courtesy.
+ *
+ * Test in QVGA (240x320) first: there the framebuffer lives in internal
+ * SRAM and w100_setup_memory() powers external SDRAM down entirely, so a
+ * bad frequency there cannot corrupt external memory -- only the internal
+ * SRAM path and the panel itself are exposed. See the handoff doc.
+ */
+static ssize_t sysclk_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", par->pll_freq_hz / 1000000);
+}
+
+static ssize_t sysclk_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+	unsigned long mhz;
+
+	mhz = simple_strtoul(buf, NULL, 10);
+	if (mhz < W100_PLL_MIN_MHZ || mhz > W100_PLL_MAX_MHZ)
+		return -EINVAL;
+
+	if (!w100_set_pll_freq(par, mhz))
+		return -EIO;
+
+	par->pll_override = mhz;
+	calc_hsync(par);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(sysclk);
+
+/*
+ * Runtime pixel-clock override, in Hz. Stage 2 of the w100 clock-domain
+ * bring-up plan: raise the rotated-mode refresh rate above the stock
+ * ~25.6 Hz, which is a pixclk_divider_rotated choice (see
+ * docs/DEADLETTER-W100-VSYNC.md), not a hardware ceiling.
+ *
+ * Write 0 to clear the override and go back to the current mode's own
+ * pixclk_divider/pixclk_divider_rotated. Any other value is clamped to
+ * W100_PCLK_MAX_HZ regardless of what's written here -- see that macro's
+ * comment for why this is the one knob in the whole plan that is not just
+ * "reversible if wrong".
+ *
+ * Applied immediately via w100_set_dispregs(), NOT through
+ * w100fb_set_par()/w100fb_check_var() -- set_par() early-outs when
+ * xres/yres haven't changed, and this is a clock-only change at a fixed
+ * resolution, the same reasoning fastpllclk_store() above already applies
+ * to w100_init_clocks(). Bracketed with w100_update_disable()/
+ * w100_update_enable() the same way flip_store() above brackets its own
+ * w100_set_dispregs() call, so a display update can't land mid-write.
+ */
+static ssize_t pixclk_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", par->pixclk_override_hz);
+}
+
+static ssize_t pixclk_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+	unsigned long hz;
+
+	hz = simple_strtoul(buf, NULL, 10);
+	if (hz > W100_PCLK_MAX_HZ)
+		return -EINVAL;
+
+	par->pixclk_override_hz = hz;
+
+	w100_update_disable();
+	w100_set_dispregs(par);
+	w100_update_enable();
+
+	calc_hsync(par);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(pixclk);
+
+/*
+ * CAS-latency bisection tool for the external-SDRAM/SCLK ceiling found
+ * while validating the "sysclk" knob above: raising SCLK past 75 MHz in VGA
+ * (external SDRAM live) corrupted the display even with pixclk untouched.
+ * mem->sdram_mode_reg's low byte (0x21 in corgi_fb_mem) looks like a
+ * standard JEDEC mode-register word -- burst length 2, sequential, CAS
+ * latency 2 -- and CL2 may simply be too aggressive once SCLK is no longer
+ * 75 MHz. 0x31 (CL3) is the first thing worth trying. Pattern-matching, not
+ * a datasheet -- treat as a hypothesis, per the handoff doc.
+ *
+ * Read/write raw hex (e.g. "31" or "0x31"). Does NOT reprogram anything by
+ * itself -- see par->sdram_mode_reg_override's comment in w100fb.h and
+ * w100_setup_memory(): it only takes effect on the next genuine
+ * external-memory off->on transition. To actually test a value: set this,
+ * set sysclk to the target frequency, then force that transition by
+ * switching to a mode that doesn't need external memory (QVGA) and back to
+ * one that does (VGA) -- e.g. via the setmode-style FBIOPUT_VSCREENINFO
+ * dance, NOT by writing here while VGA is already the live desktop.
+ */
+static ssize_t sdram_mode_reg_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+
+	return scnprintf(buf, PAGE_SIZE, "%#x (compiled-in default %#lx)\n",
+			  par->sdram_mode_reg_override,
+			  par->mach->mem ? par->mach->mem->sdram_mode_reg : 0);
+}
+
+static ssize_t sdram_mode_reg_store(struct device *dev, struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct w100fb_par *par = info->par;
+
+	par->sdram_mode_reg_override = simple_strtoul(buf, NULL, 16);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(sdram_mode_reg);
+
 static struct attribute *w100fb_attrs[] = {
 	&dev_attr_fastpllclk.attr,
+	&dev_attr_clocks.attr,
+	&dev_attr_sysclk.attr,
+	&dev_attr_pixclk.attr,
+	&dev_attr_sdram_mode_reg.attr,
 	&dev_attr_reg_read.attr,
 	&dev_attr_reg_write.attr,
 	&dev_attr_flip.attr,
@@ -811,9 +1110,24 @@ static int w100fb_set_par(struct fb_info *info)
 	 * the chip had just powered down, not merely memory that wasn't
 	 * "yours". Using `needed` keeps extmem_active/smem_len in agreement
 	 * with what check_var() already promised, in both directions.
+	 *
+	 * BUG FIXED 2026-08-05: the visible-frame term used par->xres/yres,
+	 * the OLD resolution -- this function hasn't assigned the new one
+	 * yet at this point, that happens a few lines below. info->var.xres/
+	 * yres already hold the NEW, check_var()-validated target (the fbdev
+	 * core runs check_var() before set_par() and stores the result into
+	 * info->var), so par->xres/yres was simply the wrong field to read
+	 * here. Concretely: dropping from the 640x480 desktop to 240x320
+	 * computed `needed` against the OLD 640x480 (307200 px) instead of
+	 * the NEW 240x320 (76800 px), so want_extmem came out true and
+	 * external SDRAM never actually powered down -- silently defeating
+	 * every "switch to QVGA to keep a test off external memory" step in
+	 * the w100 clock-domain bring-up plan. Caught by hand while
+	 * investigating unexpected smem_len output after such a switch, not
+	 * by anything that flags on its own -- there is no other symptom.
 	 */
 	needed = max_t(unsigned long,
-		       (unsigned long)par->xres * par->yres,
+		       (unsigned long)info->var.xres * info->var.yres,
 		       (unsigned long)info->var.xres_virtual * info->var.yres_virtual)
 		 * BITS_PER_PIXEL / 8;
 	want_extmem = par->mach->mem && needed > MEM_INT_SIZE + 1;
@@ -1830,18 +2144,110 @@ static int w100_pll_set_clk(struct w100_pll_info *pll)
 	return status;
 }
 
-/* freq = target frequency of the PLL */
-static int w100_set_pll_freq(struct w100fb_par *par, unsigned int freq)
+/*
+ * Synthesize a w100_pll_info for an arbitrary target frequency instead of
+ * requiring an exact xtal_12500000[]-table hit.
+ *
+ * f = xtal / (M+1) * (N_int+1 + N_fac/8). M is fixed at 0 here -- this board
+ * only ever runs the 12.5 MHz crystal, and every existing table entry for it
+ * already uses M=0 -- so granularity is xtal_hz/8 (1.5625 MHz at 12.5 MHz).
+ * pll_fb_div_int is 6 bits (max 63, see w100fb_private.h's
+ * struct pll_ref_fb_div_t), far above anything this VCO can actually reach,
+ * so encoding is never the limiting factor.
+ *
+ * tfgoal/lock_time match every existing table entry except the 75 MHz row's
+ * tfgoal=0xde outlier -- irrelevant here since an exact 75 MHz request hits
+ * that table entry directly in w100_pll_resolve() and never reaches this
+ * function.
+ *
+ * This only picks the PLL_REF_FB_DIV bit pattern for the target frequency;
+ * it does not verify the VCO can actually lock there. w100_pll_adjust()
+ * (via w100_pll_set_clk() -> w100_pll_calibration()) still does that
+ * measurement on real hardware and fails cleanly (return 0) if it can't
+ * bracket tfgoal -- an unreachable target is caught there, not here.
+ */
+static int w100_pll_compute(struct w100_pll_info *out, unsigned int xtal_hz,
+			     unsigned int target_hz)
+{
+	unsigned int total, target_mhz;
+
+	target_mhz = target_hz / 1000000;
+	if (!xtal_hz || !target_mhz)
+		return 0;
+
+	/* target_hz * 8 fits comfortably in 32 bits for any frequency this
+	 * chip can run (W100_PLL_MAX_MHZ is 125 MHz); avoid a 64-bit divide,
+	 * which needs __aeabi_uldivmod and does not link on this target
+	 * without do_div(). */
+	total = (target_hz * 8) / xtal_hz;
+	if (total < 8 || (total / 8 - 1) > 63)
+		return 0;
+
+	out->freq = target_mhz;
+	out->M = 0;
+	out->N_int = (total / 8) - 1;
+	out->N_fac = total % 8;
+	out->tfgoal = 0xe0;
+	out->lock_time = 2800 / target_mhz;
+	if (!out->lock_time)
+		out->lock_time = 1;
+
+	return 1;
+}
+
+/*
+ * Resolve a target PLL frequency (MHz) to a pll_info: an exact hit in
+ * par->pll_table if there is one (preserves e.g. the 75 MHz row's tuned
+ * tfgoal=0xde), or a synthesized entry via w100_pll_compute() otherwise.
+ * Returns 1 and fills *out on success, 0 if freq can't be represented at
+ * all (not the same as "can't lock" -- see w100_pll_compute()'s comment).
+ */
+static int w100_pll_resolve(struct w100fb_par *par, unsigned int freq,
+			     struct w100_pll_info *out)
 {
 	struct w100_pll_info *pll = par->pll_table;
 
 	do {
 		if (freq == pll->freq) {
-			return w100_pll_set_clk(pll);
+			*out = *pll;
+			return 1;
 		}
 		pll++;
-	} while(pll->freq);
-	return 0;
+	} while (pll->freq);
+
+	return w100_pll_compute(out, par->mach->xtal_freq, freq * 1000000);
+}
+
+/* freq = target frequency of the PLL, in MHz. */
+static int w100_set_pll_freq(struct w100fb_par *par, unsigned int freq)
+{
+	struct w100_pll_info pll;
+	int status;
+
+	if (!w100_pll_resolve(par, freq, &pll))
+		return 0;
+
+	status = w100_pll_set_clk(&pll);
+	if (status) {
+		par->pll_freq_hz = freq * 1000000;
+		par->pll_freq_last_good = freq;
+	} else if (par->pll_freq_last_good && par->pll_freq_last_good != freq) {
+		/*
+		 * w100_pll_set_clk() parks SCLK on XTAL and writes the new
+		 * divider before calibration is known to succeed -- it does
+		 * not leave the chip as it found it on failure. Recover to
+		 * the last frequency known to have locked rather than
+		 * stranding the chip on a half-applied bad value. This calls
+		 * w100_pll_set_clk() directly (not w100_set_pll_freq()) so a
+		 * second failure here cannot recurse.
+		 */
+		struct w100_pll_info recover;
+
+		if (w100_pll_resolve(par, par->pll_freq_last_good, &recover) &&
+		    w100_pll_set_clk(&recover))
+			par->pll_freq_hz = par->pll_freq_last_good * 1000000;
+	}
+	return status;
 }
 
 /* Set up an initial state.  Some values/fields set
@@ -1924,6 +2330,20 @@ static void w100_pwm_setup(struct w100fb_par *par)
 
 
 /*
+ * Which PLL frequency (MHz) a mode wants right now: an operator override
+ * (the "sysclk" sysfs attribute) if one is set, otherwise the mode's own
+ * pll_freq/fast_pll_freq -- the same choice w100_init_clocks() and
+ * calc_hsync() must each make, so it lives in one place rather than two
+ * that could drift.
+ */
+static unsigned int w100_target_pll_mhz(struct w100fb_par *par, struct w100_mode *mode)
+{
+	if (par->pll_override)
+		return par->pll_override;
+	return (par->fastpll_mode && mode->fast_pll_freq) ? mode->fast_pll_freq : mode->pll_freq;
+}
+
+/*
  * Setup the w100 clocks for the specified mode
  */
 static void w100_init_clocks(struct w100fb_par *par)
@@ -1931,7 +2351,7 @@ static void w100_init_clocks(struct w100fb_par *par)
 	struct w100_mode *mode = par->mode;
 
 	if (mode->pixclk_src == CLK_SRC_PLL || mode->sysclk_src == CLK_SRC_PLL)
-		w100_set_pll_freq(par, (par->fastpll_mode && mode->fast_pll_freq) ? mode->fast_pll_freq : mode->pll_freq);
+		w100_set_pll_freq(par, w100_target_pll_mhz(par, mode));
 
 	w100_pwr_state.sclk_cntl.f.sclk_src_sel = mode->sysclk_src;
 	w100_pwr_state.sclk_cntl.f.sclk_post_div_fast = mode->sysclk_divider;
@@ -2043,7 +2463,14 @@ static void w100_setup_memory(struct w100fb_par *par)
 		udelay(100);
 		writel(0x80200021, remapped_regs + mmMEM_SDRAM_MODE_REG);
 		udelay(100);
-		writel(mem->sdram_mode_reg, remapped_regs + mmMEM_SDRAM_MODE_REG);
+		/* par->sdram_mode_reg_override (see its comment in w100fb.h) --
+		 * a CAS-latency bisection tool, applied here rather than as a
+		 * live poke because this is the SDRAM's own precharge/MRS init
+		 * sequence: it only runs on a genuine external-memory off->on
+		 * transition, when nothing is depending on the memory's
+		 * existing content yet. */
+		writel(par->sdram_mode_reg_override ? par->sdram_mode_reg_override : mem->sdram_mode_reg,
+		       remapped_regs + mmMEM_SDRAM_MODE_REG);
 		udelay(100);
 		writel(mem->ext_timing_cntl, remapped_regs + mmMEM_EXT_TIMING_CNTL);
 		writel(mem->io_cntl, remapped_regs + mmMEM_IO_CNTL);
@@ -2062,15 +2489,15 @@ static void w100_setup_memory(struct w100fb_par *par)
 static void w100_set_dispregs(struct w100fb_par *par)
 {
 	unsigned long rot=0, divider, offset=0;
+	bool rotated = (par->xres != par->mode->xres);
 	union graphic_ctrl_u graphic_ctrl;
 
 	/* See if the mode has been rotated */
-	if (par->xres == par->mode->xres) {
+	if (!rotated) {
 		if (par->flip) {
 			rot=3; /* 180 degree */
 			offset=(par->xres * par->yres) - 1;
 		} /* else 0 degree */
-		divider = par->mode->pixclk_divider;
 	} else {
 		if (par->flip) {
 			rot=2; /* 270 degree */
@@ -2079,8 +2506,8 @@ static void w100_set_dispregs(struct w100fb_par *par)
 			rot=1; /* 90 degree */
 			offset=par->xres * (par->yres - 1);
 		}
-		divider = par->mode->pixclk_divider_rotated;
 	}
+	divider = w100_current_pixclk_divider(par, par->mode, rotated);
 
 	graphic_ctrl.val = 0; /* w32xx doesn't like undefined bits */
 	switch (par->chip_id) {
@@ -2165,7 +2592,7 @@ static void calc_hsync(struct w100fb_par *par)
 	if (mode->pixclk_src == CLK_SRC_XTAL)
 		hsync=par->mach->xtal_freq;
 	else
-		hsync=((par->fastpll_mode && mode->fast_pll_freq) ? mode->fast_pll_freq : mode->pll_freq)*100000;
+		hsync=w100_target_pll_mhz(par, mode)*100000;
 
 	hsync /= (w100_pwr_state.pclk_cntl.f.pclk_post_div + 1);
 
