@@ -71,6 +71,7 @@ Devices and drivers:
 |---|---|
 | [`DEADLETTER-AUDIO-I2S-SILENT.md`](DEADLETTER-AUDIO-I2S-SILENT.md) | Registered sound card ≠ working audio. Two mainline fixes plus a mandatory mixer setting. |
 | [`DEADLETTER-W100-VSYNC.md`](DEADLETTER-W100-VSYNC.md) | The w100 vsync timeout — worked around, root cause still open. |
+| [`DEADLETTER-W100-CLOCK-DOMAINS.md`](DEADLETTER-W100-CLOCK-DOMAINS.md) | Runtime PLL/pixclk/CAS-latency knobs, what got validated vs. baked in, and a `w100fb_set_par()` bug that silently defeated the "QVGA is memory-safe" testing assumption. |
 | [`DEADLETTER-DROPBEAR-PTY.md`](DEADLETTER-DROPBEAR-PTY.md) | Dropbear PTY allocation. |
 
 ## Open handoffs
