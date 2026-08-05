@@ -138,6 +138,46 @@ static unsigned long corgibl_flags;
 static int comadj_override = -1;
 static int phadadj_override = -1;
 
+/*
+ * ---------------------------------------------------------------------
+ * Adopting a panel that is already lit (piko)
+ *
+ * corgi_lcd_power_on() is not an "if off, turn on" -- it is an
+ * unconditional bring-up that STARTS by driving the LCDTG to a known
+ * powered-down state (PICTRL_POWER_DOWN | PICTRL_INIOFF | ...) and walks
+ * the rails back up from there. Run against a dark panel that is exactly
+ * right. Run against a lit one it is an off-then-on: the visible blink
+ * this project's two-stage boot shows between the bootstrap's splash and
+ * stage 2.
+ *
+ * The bootstrap now lights the panel itself -- it has to, or the splash
+ * it draws is invisible (see modules/initramfs/init and
+ * docs/HOWTO-BOOT-SPLASH.md). kexec does not power-cycle anything: the
+ * LCDTG is an external SPI chip that keeps its registers, and the
+ * backlight GPIOs keep their levels, so by the time stage 2's probe runs
+ * the panel is already up and correctly programmed. Re-running the
+ * sequence re-derives a state the hardware is already in, and pays for it
+ * with the blink.
+ *
+ * assume_powered=1 says "the panel is already on, adopt it": record the
+ * power state, skip the sequence, leave the backlight GPIOs where they
+ * were found. Set on stage 2's kernel command line (CONFIG_CMDLINE in
+ * kernel.config-corgi-7.1.4), which is the only boot that is ever
+ * entered by kexec from a kernel that lit the panel first.
+ *
+ * DEFAULT OFF, DELIBERATELY. A cold boot straight into this kernel with
+ * nothing having programmed the LCDTG needs the full sequence; getting
+ * that wrong is a black screen on a board with no serial console. The
+ * safe behaviour is what you get unless the boot path explicitly says
+ * otherwise. Suspend/resume is unaffected either way -- resume really
+ * does come back from a powered-down panel, and still runs the sequence.
+ * ---------------------------------------------------------------------
+ */
+static bool assume_powered;
+module_param(assume_powered, bool, 0444);
+MODULE_PARM_DESC(assume_powered,
+	"panel is already lit by an earlier kernel: adopt it at probe instead of re-running the power-on sequence");
+
 static void corgi_lcd_power_on(struct corgi_lcd *lcd);
 
 /*
@@ -601,13 +641,23 @@ static int setup_gpio_backlight(struct corgi_lcd *lcd,
 {
 	struct spi_device *spi = lcd->spi_dev;
 
-	lcd->backlight_on = devm_gpiod_get_optional(&spi->dev,
-						    "BL_ON", GPIOD_OUT_LOW);
+	/*
+	 * GPIOD_OUT_LOW drives the line as it is claimed, so on an
+	 * already-lit panel the backlight enable goes off here and comes
+	 * back a few hundred microseconds later in backlight_update_status()
+	 * -- half of the boot blink, and the half that survives skipping the
+	 * LCDTG sequence. GPIOD_ASIS claims the line without touching its
+	 * level; the first real intensity write sets it either way.
+	 */
+	lcd->backlight_on = devm_gpiod_get_optional(&spi->dev, "BL_ON",
+						    assume_powered ?
+						      GPIOD_ASIS : GPIOD_OUT_LOW);
 	if (IS_ERR(lcd->backlight_on))
 		return PTR_ERR(lcd->backlight_on);
 
 	lcd->backlight_cont = devm_gpiod_get_optional(&spi->dev, "BL_CONT",
-						      GPIOD_OUT_LOW);
+						      assume_powered ?
+							GPIOD_ASIS : GPIOD_OUT_LOW);
 	if (IS_ERR(lcd->backlight_cont))
 		return PTR_ERR(lcd->backlight_cont);
 
@@ -659,7 +709,29 @@ static int corgi_lcd_probe(struct spi_device *spi)
 	lcd->kick_battery = pdata->kick_battery;
 
 	spi_set_drvdata(spi, lcd);
-	corgi_lcd_set_power(lcd->lcd_dev, LCD_POWER_ON);
+
+	if (assume_powered) {
+		/*
+		 * Adopt, do not re-run. Recording the state is the whole
+		 * job: corgi_lcd_set_power() only acts on a transition, so
+		 * every later ON request (a mode change, a resume) still
+		 * behaves exactly as it would have, and an OFF request
+		 * still walks the panel down properly.
+		 */
+		lcd->power = LCD_POWER_ON;
+		dev_info(&spi->dev,
+			 "panel assumed already powered, skipping power-on\n");
+	} else {
+		corgi_lcd_set_power(lcd->lcd_dev, LCD_POWER_ON);
+	}
+
+	/*
+	 * Still applied when adopting: this is a brightness level, not a
+	 * power transition, so it cannot blink the panel -- and skipping it
+	 * would leave the backlight class reporting a level the hardware is
+	 * not at, which is worse than a one-step change at boot. rcS's
+	 * "bright restore" puts the user's own level back moments later.
+	 */
 	backlight_update_status(lcd->bl_dev);
 
 	lcd->limit_mask = pdata->limit_mask;

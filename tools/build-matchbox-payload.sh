@@ -227,8 +227,15 @@ done
 
 # XKB database + our Zaurus layout. Without the database the server cannot
 # compile any keymap at all; without the layout the Fn symbol row (/ : [ ]
-# | ...) is untypable. zaurus.xkb is the wrapper /etc/init.d/xsession
-# feeds to xkbcomp at session start.
+# | ...) is untypable.
+#
+# BOTH ARE READ BY THE SERVER ITSELF, at startup, not by any session
+# script: it is built with --with-xkb-default-layout=zaurus (see
+# tools/build-x11-stack.sh), so it execs xkbcomp against symbols/zaurus
+# here while bringing the keyboard up. zaurus.xkb is no longer applied by
+# xsession -- uploading it to a live server never actually took, see the
+# note in rootfs/etc/init.d/xsession -- and ships purely as the
+# hand-testable equivalent for trying a layout edit without a rebuild.
 mkdir -p "$PAYLOAD/usr/share/X11" "$PAYLOAD/etc/X11"
 cp -a "$STAGE/usr/share/X11/xkb" "$PAYLOAD/usr/share/X11/"
 cp "$REPO/userspace/xkb/symbols/zaurus" "$PAYLOAD/usr/share/X11/xkb/symbols/zaurus"

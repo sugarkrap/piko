@@ -54,8 +54,9 @@ APPLETS="$APPLETS,mb-applet-card"
 # lid switch (see that repo's README). Always docked, not self-hiding --
 # per docs/HOWTO-MATCHBOX-PANEL-APPLETS.md "Do NOT make it self-hiding", an
 # applet that hides before the main loop delays every applet listed after
-# it by the full session timeout. Starts showing the empty-cup (off) icon;
-# there is no persisted state, so every session starts disabled. Listed
+# it by the full session timeout. Reads /tmp/brightd.inhibit at startup and
+# on a 2s timer, so it docks showing whatever brightd is actually doing --
+# an inhibit left by a killed applet is adopted, not silently lost. Listed
 # after mb-applet-card so it lands to card's left (later --default-apps
 # entries dock further left, see the ORDER MATTERS note above).
 APPLETS="$APPLETS,mb-applet-pikaffeine"
@@ -87,7 +88,23 @@ APPLETS="$APPLETS,mb-applet-tasks"
 
 matchbox-desktop &
 
-matchbox-panel --orientation south --no-session --default-apps "$APPLETS" &
+# --no-flip: stay at the bottom in BOTH postures.
+#
+# The panel's default is to turn with the screen -- swivel to tablet and it
+# re-docks to the east edge, which is where a panel goes on a desktop whose
+# rotation means "the same physical edge stays put". This machine is not
+# that: the swivel changes which way the user is HOLDING it, so the bottom
+# of the picture is the bottom of the picture in either posture, and a
+# panel that jumps to the side in tablet mode has moved for no reason the
+# user can see.
+#
+# South here therefore means south of whatever is on screen: 640 wide along
+# the bottom in the clamshell, 480 wide along the bottom in tablet. The
+# panel re-packs its applets into the new width on every shape change (see
+# panel_apps_relayout() in the panel fork) -- that repacking is what makes
+# this switch usable at all, and without it the applets drift outside the
+# bar and it looks empty.
+matchbox-panel --orientation south --no-flip --no-session --default-apps "$APPLETS" &
 
 # -use_cursor no: this device has a touchscreen, not a mouse, so the
 # pointer only ever appears where a finger just was and serves no

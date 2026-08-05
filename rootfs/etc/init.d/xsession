@@ -18,9 +18,6 @@
 # is jffs2), so logs here hit flash -- keep them small.
 
 XSERVER=/usr/local/bin/Xfbdev
-XKBCOMP=/usr/bin/xkbcomp
-KEYMAP=/etc/X11/zaurus.xkb
-XKBDIR=/usr/share/X11/xkb
 SESSION=/usr/bin/matchbox-session
 XLOG=/tmp/xfbdev.log
 SLOG=/tmp/matchbox-session.log
@@ -122,14 +119,28 @@ if [ -r /etc/zaurus-card.sh ]; then
 	. /etc/zaurus-card.sh
 fi
 
-# Zaurus keyboard layout: redefines the physical Fn key (which the kernel
-# reports as plain KEY_F3) as ISO_Level3_Shift and maps the Fn symbol
-# layer, so / : [ ] | etc. are typable. Non-fatal -- without it the
-# keyboard still works, it just falls back to the stock us layout.
-if [ -r "$KEYMAP" ]; then
-	"$XKBCOMP" -I"$XKBDIR" "$KEYMAP" :0 > /dev/null 2>&1 \
-		|| echo "warning: could not apply $KEYMAP, using default layout"
-fi
+# Zaurus keyboard layout: NOT uploaded here any more.
+#
+# The server is now BUILT with it -- --with-xkb-default-rules=evdev and
+# --with-xkb-default-layout=zaurus (tools/build-x11-stack.sh) -- so the
+# keymap it compiles for itself at startup is already "pc+zaurus" against
+# evdev keycodes, which is exactly what this step used to ask for.
+#
+# Uploading it live never worked. `xkbcomp zaurus.xkb :0` returns success,
+# and the keycode SET does change, but the symbols do not: dumping the
+# running keymap afterwards showed stock <AE02> = 2/at rather than this
+# layout's 2/quotedbl, and <FK03> as plain F3 rather than the
+# ISO_Level3_Shift that makes the whole Fn symbol layer work. So for as
+# long as this line existed, the Fn layer, the Fn digit row and the
+# Cut/Copy/Paste remaps were all silently absent -- the failure had no
+# error to notice, because there was no error. See
+# docs/DEADLETTER-XKB-LIVE-SETMAP.md for the related live-SetMap trouble.
+#
+# The layout still ships (/usr/share/X11/xkb/symbols/zaurus): the server
+# reads it from there when it builds its own keymap. /etc/X11/zaurus.xkb
+# is kept too, as the hand-testable equivalent -- `xkbcomp -I/usr/share/X11/xkb
+# /etc/X11/zaurus.xkb :0` is still the way to try a layout edit against a
+# running server without rebuilding.
 
 # matchbox-session execs matchbox-window-manager after backgrounding the
 # desktop and panel, so this blocks for the life of the session. If the

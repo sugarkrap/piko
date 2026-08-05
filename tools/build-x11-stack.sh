@@ -283,10 +283,39 @@ extra_configure_args() {
         # kdrive/Xfbdev only -- no GLX/DRI (no GPU), no other server
         # flavours (Xorg/Xnest/Xvfb/Xwin/XQuartz/Xdmx all need things this
         # board doesn't have or want).
+        #
+        # --with-default-xkb-rules=evdev IS NOT OPTIONAL, and the reason is
+        # not obvious. configure picks the ruleset like this (configure.ac):
+        #
+        #     linux*) if test "x$CONFIG_HAL" = xyes; then evdev; else base; fi
+        #
+        # We build without HAL, so it silently chose "base" -- and "base"
+        # with model pc105 compiles the XFREE86 keycode set, where <UP> is
+        # 98 and <PRSC> is 111. The kernel hands this server evdev codes
+        # (keycode + 8), so KEY_UP (103) arrives as 111 and the server
+        # reads it as Print, KEY_LEFT arrives as 113 and means nothing at
+        # all. Letters, digits and the function keys have identical numbers
+        # in both sets, which is exactly why this hid for so long: typing
+        # worked perfectly and only the arrows, Print/SysRq, Insert, Delete,
+        # Home, End and the keypad were wrong. The Home button doing nothing
+        # while the up arrow "showed the desktop" was this, not the kernel
+        # keymap it was first blamed on.
+        #
+        # --with-default-xkb-layout=zaurus then compiles OUR layout into
+        # the keymap the server builds at startup: the evdev ruleset maps a
+        # layout name straight through ("* * = pc+%l%(v)"), so this is
+        # literally the "pc+zaurus" that /etc/X11/zaurus.xkb asks for. That
+        # matters because the live xkbcomp upload xsession used to do never
+        # actually applied the symbols -- see the note in
+        # rootfs/etc/init.d/xsession and docs/DEADLETTER-XKB-LIVE-SETMAP.md.
+        # Building the layout in sidesteps the live SetMap path completely.
+        # symbols/zaurus ships in the payload's XKB tree, so the server can
+        # find it when it compiles its own default keymap.
         echo "--disable-glx --disable-aiglx --disable-dri --disable-dri2 \
 --disable-dmx --disable-xvfb --disable-xnest --disable-xorg --disable-xquartz \
 --disable-xwin --enable-kdrive --enable-xfbdev --enable-kdrive-evdev \
---enable-kdrive-kbd --enable-kdrive-mouse"
+--enable-kdrive-kbd --enable-kdrive-mouse \
+--with-default-xkb-rules=evdev --with-default-xkb-layout=zaurus"
         ;;
     matchbox-window-manager)
         # NOT --enable-standalone: that mode predates libmatchbox and its
