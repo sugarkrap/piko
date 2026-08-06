@@ -87,50 +87,13 @@ name: Build piko.zip (SD-card recovery-flash package)
 # the real cost of the from-scratch reproducibility this buys.
 
 on:
+  # Manual dispatch only (2026-08-05) -- this build regularly runs 60-90+
+  # minutes even with a warm toolchain cache, and PRs on this repo merge
+  # immediately without waiting on checks, so an automatic push trigger
+  # was just burning CI minutes on every main push with nothing gating
+  # on the result. Run it by hand (Actions tab -> Run workflow) when a
+  # change actually needs validating.
   workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - "flash/src/piko-install.c"
-      - "flash/piko-backup.c"
-      - "flash/updater-uncoded.sh"
-      - "tools/encode-updater.py"
-      - "flash/piko.cfg.mtd1-mtd3-combined"
-      - "kernel.config-corgi-7.1.4-minimal"
-      - "kernel.config-corgi-7.1.4"
-      - "modules/**"
-      - "drivers/**"
-      - "initramfs/**"
-      - "tools/build-initramfs.sh"
-      - "tools/build-piko-install.sh"
-      - "tools/build-oabi-toolchain.sh"
-      - "tools/oabi-toolchain.config"
-      - "flash/mtd3.jffs2"
-      - "flash/build-mtd3-jffs2.sh"
-      - "tools/setup-kernel-src.sh"
-      - "tools/kernel-modules.sh"
-      - "tools/build-ssh.sh"
-      - "tools/ssh-payload.sh"
-      - "tools/build-uclibc-toolchain.sh"
-      - "tools/uclibc-toolchain.config"
-      - "rootfs/**"
-      - "tools/build-uclibc-toolchain.sh"
-      - "tools/uclibc-toolchain.config"
-      - "tools/build-thirdparty-deps.sh"
-      - "tools/setup-x11-src.sh"
-      - "tools/build-x11-stack.sh"
-      # build-x11-stack.sh calls all three of these at its end -- st, FLTK
-      # and toasters link against the stage it populates and are shipped in
-      # the payload.
-      - "tools/build-st.sh"
-      - "tools/build-fltk.sh"
-      - "tools/build-toasters.sh"
-      - "tools/build-matchbox-payload.sh"
-      # matchbox-fbrun is built by build-fltk.sh and shipped in the payload.
-      - "userspace/src/**"
-      - "modules/x11/**"
-      - ".gitmodules"
-      - ".github/workflows/build-piko-zip.yml"
 
 jobs:
   build:

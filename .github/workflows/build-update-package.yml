@@ -61,44 +61,13 @@ name: Build piko-update package
 # build had a bad day.
 
 on:
+  # Manual dispatch only (2026-08-05) -- this build regularly runs 60-90+
+  # minutes even with a warm toolchain cache, and PRs on this repo merge
+  # immediately without waiting on checks, so an automatic push trigger
+  # was just burning CI minutes on every main push with nothing gating
+  # on the result. Run it by hand (Actions tab -> Run workflow) when a
+  # change actually needs validating.
   workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - "userspace/src/**"
-      - "userspace/desktop/**"
-      - "rootfs/**"
-      - "flash/build-update-package.sh"
-      # Compiled into the package and exec'd by piko-update for every smf
-      # operation, so a change here changes what ships.
-      - "flash/piko-smf-write.c"
-      # The ROM manifest generator: its output ships in every package and
-      # is what the Software Center displays.
-      - "tools/gen-rom-manifest.sh"
-      - "CHANGELOG"
-      - "tools/setup-kernel-src.sh"
-      - "tools/build-ssh.sh"
-      - "tools/ssh-payload.sh"
-      - "tools/build-uclibc-toolchain.sh"
-      - "tools/uclibc-toolchain.config"
-      - "tools/build-thirdparty-deps.sh"
-      - "tools/setup-x11-src.sh"
-      - "tools/build-x11-stack.sh"
-      - "tools/build-st.sh"
-      - "tools/build-toasters.sh"
-      - "tools/build-libiw.sh"
-      - "tools/build-fltk.sh"
-      - "tools/build-matchbox-payload.sh"
-      # matchbox-fbrun lives under userspace/src and is built by
-      # build-fltk.sh, so a change to it has to rebuild the payload that
-      # ships it -- otherwise the update package keeps the stale binary.
-      - "userspace/src/**"
-      - "flash/qemu-smoke-test.sh"
-      - "modules/**"
-      - "modules/x11/**"
-      - "kernel.config-corgi-7.1.4"
-      - ".gitmodules"
-      - ".github/workflows/build-update-package.yml"
 
 jobs:
   build:
