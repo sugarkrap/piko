@@ -33,6 +33,12 @@
  * `echo "==>"` milestone lines -- a soft coupling, same as
  * ssh-payload.sh's own documented one, kept in one place (MILESTONES
  * below) so it is obvious what to update if the script's wording changes.
+ *
+ * Settings persist to $HOME/.config/piko-sync/settings.cfg (settings.h).
+ * Both tabs' fields are restored at startup and written back on exit, on
+ * OK in the Settings dialog, and when a build is launched -- see
+ * SettingsStore below for why those three moments and not every
+ * keystroke.
  */
 
 #include <FL/Fl.H>
@@ -75,6 +81,7 @@
 #include "transfer_table.h"
 #include "net_io.h"
 #include "icon_xpm.h"
+#include "settings.h"
 
 using namespace piko_sync;
 
@@ -124,6 +131,33 @@ static std::vector<std::string> list_network_interfaces()
     }
     freeifaddrs(ifap);
     return names;
+}
+
+/* Restore an Fl_Choice from a saved setting by the item's LABEL, never
+ * by its index. The Adapter menu is built from whatever interfaces
+ * exist right now, so index 1 can be a different NIC on the next launch
+ * (or not exist at all -- a USB tether that isn't plugged in). No match
+ * leaves the widget on whatever default the constructor picked.
+ * Inactive items are skipped for the same reason they're inactive:
+ * selecting "cf" here would pass --staging cf to a ROM that can't mount
+ * one. */
+static void select_choice_by_label(Fl_Choice *choice, const std::string &label)
+{
+    if (label.empty())
+        return;
+    for (int i = 0; i < choice->size(); i++) {
+        const Fl_Menu_Item *item = choice->menu() + i;
+        if (item->label() && item->active() && label == item->label()) {
+            choice->value(i);
+            return;
+        }
+    }
+}
+
+static std::string choice_label(const Fl_Choice *choice)
+{
+    const char *t = const_cast<Fl_Choice *>(choice)->text();
+    return t ? std::string(t) : std::string();
 }
 
 class ClientApp;
@@ -201,8 +235,20 @@ class BuildRunner; /* defined below, owns the Build & Deploy tab */
 
 class ClientApp {
 public:
-    ClientApp(Fl_Group *transfer_tab, int X, int Y, int W, int H);
+    ClientApp(Fl_Group *transfer_tab, int X, int Y, int W, int H, const Settings &cfg);
     ~ClientApp();
+
+    /* Copies this tab's persistent fields into cfg; SettingsStore does
+     * the writing. The in-flight queue is deliberately NOT saved: a
+     * half-sent file's resume offset lives on the SERVER, and only for
+     * as long as that server process does (transfer_state.h), so
+     * restoring a queue across launches would show rows that cannot
+     * actually resume. */
+    void store_settings(Settings &cfg) const
+    {
+        cfg.set("transfer.address", address_->value() ? address_->value() : "");
+        cfg.set("transfer.last_dir", last_dir_);
+    }
 
     TransferQueue &queue() { return queue_; }
     QueuedFile &file(int i) { return files_[i]; }
@@ -494,14 +540,25 @@ void FileSend::handle_frame(uint32_t type, const std::string &payload)
  * ClientApp                                                                *
  * ---------------------------------------------------------------------- */
 
-ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H)
+ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
 {
     (void)tab;
     int m = 10;
 
+    /* Only if it still exists: a saved directory that has since been
+     * removed (a build tree that got wiped, an unmounted card) would
+     * otherwise be handed to Fl_File_Chooser, which shows an empty
+     * listing for it rather than falling back anywhere useful. */
+    std::string saved_dir = cfg.get("transfer.last_dir");
+    if (!saved_dir.empty()) {
+        struct stat st;
+        if (stat(saved_dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+            last_dir_ = saved_dir;
+    }
+
     address_ = new Fl_Input(X + m + 90, Y + m, 160, 24, "Zaurus:");
     address_->align(FL_ALIGN_LEFT);
-    address_->value(DEFAULT_ADDRESS);
+    address_->value(cfg.get("transfer.address", DEFAULT_ADDRESS).c_str());
 
     Fl_Button *add_btn = new Fl_Button(X + m + 260, Y + m, 100, 24, "Add Files...");
     add_btn->callback(add_files_cb, this);
@@ -604,11 +661,18 @@ static const Milestone MILESTONES[] = {
 };
 static const int MILESTONE_COUNT = sizeof(MILESTONES) / sizeof(MILESTONES[0]);
 
+class SettingsStore;
+
 class BuildRunner {
 public:
-    BuildRunner(Fl_Group *tab, int X, int Y, int W, int H);
+    BuildRunner(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg,
+                SettingsStore *store);
+
+    void store_settings(Settings &cfg) const;
 
 private:
+    void apply_settings(const Settings &cfg);
+
     static void run_cb(Fl_Widget *, void *v) { static_cast<BuildRunner *>(v)->do_run(); }
     void do_run();
 
@@ -661,17 +725,49 @@ private:
     std::string pending_line_;
     int milestone_idx_;
     bool running_;
+    SettingsStore *store_;
 };
 
-BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
-    : pid_(-1), out_fd_(-1), milestone_idx_(0), running_(false)
+/* ---------------------------------------------------------------------- *
+ * SettingsStore: owns the on-disk config and the two tabs that feed it.   *
+ * ---------------------------------------------------------------------- *
+ *
+ * Saving happens at three moments, not on every keystroke: on exit, on
+ * OK in the Settings dialog, and when a build is launched. The dialog
+ * and the build launch are the two points where the user has clearly
+ * committed to a set of values, and a build is also the longest window
+ * in which the app might be killed (a hung ssh, a closed terminal) --
+ * writing the flags that just started it means they survive that.
+ * Per-keystroke saving would mean rewriting the file while the user is
+ * still halfway through typing an address.
+ */
+class SettingsStore {
+public:
+    SettingsStore() : client_(0), runner_(0) { cfg_.load(); }
+
+    const Settings &cfg() const { return cfg_; }
+
+    /* Called once both tabs exist -- they need cfg() during their own
+     * construction, so the pointers can't be constructor arguments. */
+    void bind(ClientApp *client, BuildRunner *runner)
+    {
+        client_ = client;
+        runner_ = runner;
+    }
+
+    void save_now(); /* defined below, once both classes are complete */
+
+private:
+    Settings cfg_;
+    ClientApp *client_;
+    BuildRunner *runner_;
+};
+
+BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H,
+                         const Settings &cfg, SettingsStore *store)
+    : pid_(-1), out_fd_(-1), milestone_idx_(0), running_(false), store_(store)
 {
     (void)tab;
-    /* Seed from the environment so an existing PIKO_SYNC_REPO_ROOT export
-     * keeps working exactly as before; the Settings dialog overrides it
-     * from here on. */
-    if (const char *env_root = getenv("PIKO_SYNC_REPO_ROOT"))
-        if (*env_root) repo_root_ = env_root;
 
     int m = 10, y = Y + m;
 
@@ -758,6 +854,81 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H)
     log_->textfont(FL_COURIER);
     log_->textsize(11);
     log_->cursor_style(Fl_Text_Display::SIMPLE_CURSOR);
+
+    /* Last, so every widget above exists and each saved value simply
+     * overwrites the default that was just set. */
+    apply_settings(cfg);
+}
+
+void BuildRunner::apply_settings(const Settings &cfg)
+{
+    repo_root_ = cfg.get("build.repo_root");
+    toolchain_bin_dir_ = cfg.get("build.toolchain_bin_dir");
+    jobs_ = cfg.get("build.jobs");
+
+    /* The environment still wins over the saved value, so an existing
+     * `PIKO_SYNC_REPO_ROOT=... piko-sync-client` invocation keeps doing
+     * exactly what it says on the command line rather than being
+     * silently overridden by whatever was last saved. It is a per-launch
+     * override; the config is the standing default. Note the asymmetry
+     * this creates: a Repo chosen in Settings IS saved, but stays
+     * shadowed for as long as the export is in the environment. */
+    if (const char *env_root = getenv("PIKO_SYNC_REPO_ROOT"))
+        if (*env_root) repo_root_ = env_root;
+
+    std::string target = cfg.get("build.target");
+    if (!target.empty())
+        target_->value(target.c_str());
+
+    select_choice_by_label(adapter_, cfg.get("build.adapter"));
+    select_choice_by_label(destination_, cfg.get("build.staging"));
+
+    kernel_only_->value(cfg.get_bool("build.kernel_only", false) ? 1 : 0);
+    force_kernel_src_->value(cfg.get_bool("build.force_kernel_src", false) ? 1 : 0);
+    skip_userspace_->value(cfg.get_bool("build.skip_userspace", false) ? 1 : 0);
+    skip_st_->value(cfg.get_bool("build.skip_st", false) ? 1 : 0);
+    skip_x11_->value(cfg.get_bool("build.skip_x11", false) ? 1 : 0);
+    build_only_->value(cfg.get_bool("build.build_only", false) ? 1 : 0);
+    no_backup_->value(cfg.get_bool("build.no_backup", true) ? 1 : 0);
+}
+
+void BuildRunner::store_settings(Settings &cfg) const
+{
+    /* repo_root_ may currently be holding PIKO_SYNC_REPO_ROOT's value
+     * rather than anything the user chose here. Writing that back would
+     * turn a one-off environment override into a permanent setting the
+     * user never asked for, so an environment-provided root is left out
+     * of the file entirely -- whatever was saved before stays saved. */
+    const char *env_root = getenv("PIKO_SYNC_REPO_ROOT");
+    if (!env_root || !*env_root)
+        cfg.set("build.repo_root", repo_root_);
+
+    cfg.set("build.toolchain_bin_dir", toolchain_bin_dir_);
+    cfg.set("build.jobs", jobs_);
+    cfg.set("build.target", target_->value() ? target_->value() : "");
+    cfg.set("build.adapter", choice_label(adapter_));
+    cfg.set("build.staging", choice_label(destination_));
+
+    cfg.set_bool("build.kernel_only", kernel_only_->value() != 0);
+    cfg.set_bool("build.force_kernel_src", force_kernel_src_->value() != 0);
+    cfg.set_bool("build.skip_userspace", skip_userspace_->value() != 0);
+    cfg.set_bool("build.skip_st", skip_st_->value() != 0);
+    cfg.set_bool("build.skip_x11", skip_x11_->value() != 0);
+    cfg.set_bool("build.build_only", build_only_->value() != 0);
+    cfg.set_bool("build.no_backup", no_backup_->value() != 0);
+}
+
+void SettingsStore::save_now()
+{
+    if (client_)
+        client_->store_settings(cfg_);
+    if (runner_)
+        runner_->store_settings(cfg_);
+    /* A failure here is deliberately silent -- see settings.h. There is
+     * nothing the user can do about an unwritable $HOME in the middle of
+     * a build, and a modal alert on every save would be worse than
+     * losing the settings. */
+    cfg_.save();
 }
 
 std::string BuildRunner::script_path() const
@@ -958,6 +1129,9 @@ void BuildRunner::do_settings()
                       "make -j will be passed this value as-is.", jobs_text.c_str());
     }
     jobs_ = jobs_text;
+
+    if (store_)
+        store_->save_now();
 }
 
 void BuildRunner::append(const char *text)
@@ -1054,6 +1228,13 @@ void BuildRunner::do_run()
     status_label_->label("Building...");
     status_label_->redraw();
     run_btn_->deactivate();
+
+    /* The flags that just launched this build are worth keeping even if
+     * the app doesn't survive it -- a build/deploy is the longest thing
+     * this window does, and the run that fails is exactly the one you
+     * want to repeat with the same options. */
+    if (store_)
+        store_->save_now();
 }
 
 void BuildRunner::on_out(int fd)
@@ -1146,6 +1327,11 @@ int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
 
+    /* Read before any widget is built, so each tab can seed its fields
+     * from it as it constructs. A missing or unreadable file just means
+     * every field keeps its compiled-in default. */
+    SettingsStore settings;
+
     Fl_Double_Window win(720, 520, "Piko Sync");
     win.begin();
 
@@ -1153,12 +1339,14 @@ int main(int argc, char **argv)
     tabs.begin();
 
     Fl_Group transfer_tab(0, 24, 720, 496, "Transfer");
-    ClientApp client(&transfer_tab, 0, 24, 720, 496);
+    ClientApp client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
     transfer_tab.end();
 
     Fl_Group deploy_tab(0, 24, 720, 496, "Build && Deploy");
-    BuildRunner runner(&deploy_tab, 0, 24, 720, 496);
+    BuildRunner runner(&deploy_tab, 0, 24, 720, 496, settings.cfg(), &settings);
     deploy_tab.end();
+
+    settings.bind(&client, &runner);
 
     tabs.end();
     tabs.resizable(transfer_tab);
@@ -1175,5 +1363,11 @@ int main(int argc, char **argv)
 
     win.show(argc, argv);
 
-    return Fl::run();
+    int rc = Fl::run(); /* returns once the last window is closed */
+
+    /* The normal save point. A SIGKILL (or a machine that goes down mid
+     * build) skips this, which is why the Settings dialog and the build
+     * launch save eagerly too. */
+    settings.save_now();
+    return rc;
 }

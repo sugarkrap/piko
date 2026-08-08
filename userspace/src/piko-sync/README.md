@@ -74,12 +74,48 @@ make server STAGE=/path/to/userspace/stage-target \
             CXX=arm-unknown-linux-uclibcgnueabi-g++
 make client HOST_FLTK_CXXFLAGS="$(fltk-config --cxxflags)" \
             HOST_FLTK_LDFLAGS="$(fltk-config --ldflags)"
-make test   # protocol/transfer_state/transfer_queue, no FLTK, no device
+make test   # protocol/transfer_state/transfer_queue/settings, no FLTK, no device
 ```
 
 Run `piko-sync-client` from the piko repo root (or set
-`PIKO_SYNC_REPO_ROOT`) so its Build & Deploy tab can find
-`tools/build-and-deploy.sh`.
+`PIKO_SYNC_REPO_ROOT`, or point Settings... → Repo at it) so its Build &
+Deploy tab can find `tools/build-and-deploy.sh`.
+
+## Client settings
+
+`piko-sync-client` remembers everything you can set in it —  the Zaurus
+address and the last directory you added files from, plus the Build &
+Deploy tab's adapter, target, staging destination, every flag checkbox,
+and the repo/toolchain/jobs paths from Settings... — in:
+
+```
+$HOME/.config/piko-sync/settings.cfg      # or $XDG_CONFIG_HOME/piko-sync/
+```
+
+Plain `key = value` lines, safe to hand-edit while the app is not
+running; see `settings.h` for the format's (deliberate) limits. Keys the
+running build doesn't recognize are written back untouched rather than
+dropped, so an older client won't quietly eat a newer one's settings.
+
+Three things are worth knowing:
+
+- **It is written on exit, on OK in the Settings dialog, and when a
+  build is launched** — not on every keystroke. A `kill -9` (or a
+  machine that goes down mid-build) loses whatever changed since the
+  last of those.
+- **`PIKO_SYNC_REPO_ROOT` still wins over the saved Repo**, since it is
+  a deliberate per-launch override. It is also never written back into
+  the file, so exporting it for one run doesn't silently become your
+  permanent setting.
+- **Adapter and Staging are stored by name, not by menu position** ("`wlan0`",
+  "`sd`"), and a saved name that no longer exists just leaves the
+  default selected — a USB tether that isn't plugged in this time
+  can't shift the selection onto some unrelated interface.
+
+The transfer queue itself is not saved: a partial file's resume offset
+lives in the *server* process (see `transfer_state.h`), so a queue
+restored across launches would show rows that could not actually
+resume.
 
 ## Notes
 
