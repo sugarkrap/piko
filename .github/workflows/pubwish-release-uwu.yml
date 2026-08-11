@@ -31,7 +31,16 @@ jobs:
           key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
 
       - name: build eabi (uclibc) toolchain
-        run: tools/toolchain/build-uclibc-toolchain.sh
+        run: |
+          n=0
+          until tools/toolchain/build-uclibc-toolchain.sh; do
+              n=$((n + 1))
+              if [ "$n" -ge 3 ]; then
+                  exit 1
+              fi
+              echo "build-uclibc-toolchain.sh failed (attempt $n), retrying in 30s"
+              sleep 30
+          done
 
       - name: verify oabi capability
         run: tools/toolchain/build-oabi-toolchain.sh
