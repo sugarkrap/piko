@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Configure the device
+Exec=piko-settings
+Icon=piko-settings
+Terminal=false
+Categories=Settings;
+X-Piko-Heading=true

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+uname -a
+echo "-- lsmod (audio) --"
+lsmod | grep -E 'snd|wm8731|corgi|regmap|i2c' || true
+echo "-- /proc/asound --"
+ls -la /proc/asound || true
+cat /proc/asound/cards 2>/dev/null || true
+echo "-- device nodes --"
+ls -l /dev/dsp /dev/mixer 2>/dev/null || true

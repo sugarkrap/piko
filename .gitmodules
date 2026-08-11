@@ -1,0 +1,114 @@
+[submodule "matchbox-window-manager"]
+	path = userspace/src/matchbox-window-manager
+	url = ../matchbox-window-manager
+	branch = master
+[submodule "libX11"]
+	path = userspace/src/libX11
+	url = https://github.com/sugarkrap/libx11
+	branch = main
+[submodule "xserver"]
+	path = userspace/src/xserver
+	url = https://github.com/sugarkrap/xserver
+	branch = main
+[submodule "xorg-macros"]
+	path = userspace/src/xorg-macros
+	url = https://gitlab.freedesktop.org/xorg/util/macros.git
+[submodule "xtrans"]
+	path = userspace/src/xtrans
+	url = https://gitlab.freedesktop.org/xorg/lib/libxtrans.git
+[submodule "libXfont"]
+	path = userspace/src/libXfont
+	url = https://gitlab.freedesktop.org/xorg/lib/libXfont.git
+[submodule "libfontenc"]
+	path = userspace/src/libfontenc
+	url = https://github.com/sugarkrap/libfontenc
+	branch = main
+[submodule "xcb-proto"]
+	path = userspace/src/xcb-proto
+	url = https://gitlab.freedesktop.org/xorg/proto/xcbproto.git
+[submodule "libXau"]
+	path = userspace/src/libXau
+	url = https://gitlab.freedesktop.org/xorg/lib/libxau.git
+[submodule "libXdmcp"]
+	path = userspace/src/libXdmcp
+	url = https://gitlab.freedesktop.org/xorg/lib/libxdmcp.git
+[submodule "libxcb"]
+	path = userspace/src/libxcb
+	url = https://gitlab.freedesktop.org/xorg/lib/libxcb.git
+[submodule "libxkbfile"]
+	path = userspace/src/libxkbfile
+	url = https://gitlab.freedesktop.org/xorg/lib/libxkbfile.git
+[submodule "pixman"]
+	path = userspace/src/pixman
+	url = https://gitlab.freedesktop.org/pixman/pixman.git
+[submodule "libXext"]
+	path = userspace/src/libXext
+	url = https://gitlab.freedesktop.org/xorg/lib/libxext.git
+[submodule "xkbcomp"]
+	path = userspace/src/xkbcomp
+	url = https://gitlab.freedesktop.org/xorg/app/xkbcomp.git
+[submodule "xev"]
+	path = userspace/src/xev
+	url = https://gitlab.freedesktop.org/xorg/app/xev.git
+[submodule "matchbox-desktop"]
+	path = userspace/src/matchbox-desktop
+	url = https://git.yoctoproject.org/matchbox-desktop-2
+[submodule "libmatchbox"]
+	path = userspace/src/libmatchbox
+	url = https://github.com/sugarkrap/libmatchbox
+[submodule "libXrender"]
+	path = userspace/src/libXrender
+	url = https://gitlab.freedesktop.org/xorg/lib/libxrender.git
+[submodule "libXft"]
+	path = userspace/src/libXft
+	url = https://gitlab.freedesktop.org/xorg/lib/libxft.git
+[submodule "matchbox-desktop-classic"]
+	path = userspace/src/matchbox-desktop-classic
+	url = https://github.com/sugarkrap/matchbox-desktop-classic
+[submodule "matchbox-panel"]
+	path = userspace/src/matchbox-panel
+	url = https://github.com/sugarkrap/matchbox-panel
+	branch = main
+[submodule "matchbox-common"]
+	path = userspace/src/matchbox-common
+	url = https://git.yoctoproject.org/matchbox-common
+[submodule "st"]
+	path = userspace/src/st
+	url = https://github.com/Shourai/st
+[submodule "userspace/src/fltk"]
+	path = userspace/src/fltk
+	url = https://github.com/fltk/fltk.git
+[submodule "mb-applet-card"]
+	path = userspace/src/mb-applet-card
+	url = https://github.com/sugarkrap/mb-applet-card
+[submodule "pikostore"]
+	path = userspace/src/pikostore
+	url = https://github.com/sugarkrap/pikostore
+	branch = main
+[submodule "mb-volume"]
+	path = userspace/src/mb-volume
+	url = https://github.com/sugarkrap/mb-volume
+	branch = main
+[submodule "flying-toasters"]
+	path = userspace/src/flying-toasters
+	url = https://github.com/torunar/flying-toasters-xscreensaver
+	branch = master
+[submodule "libXpm"]
+	path = userspace/src/libXpm
+	url = https://gitlab.freedesktop.org/xorg/lib/libxpm.git
+[submodule "found-file-browser"]
+	path = userspace/src/found-file-browser
+	url = https://github.com/sugarkrap/found-file-browser.git
+	branch = main
+[submodule "mb-brightness"]
+	path = userspace/src/mb-brightness
+	url = https://github.com/sugarkrap/mb-brightness.git
+	branch = main
+[submodule "mb-applet-pikaffeine"]
+	path = userspace/src/mb-applet-pikaffeine
+	url = https://github.com/sugarkrap/mb-applet-pikaffeine
+	branch = main
+[submodule "zmenunx"]
+	path = userspace/src/zmenunx
+	url = https://github.com/sugarkrap/zmenunx.git
+	branch = master

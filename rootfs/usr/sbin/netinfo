@@ -1,0 +1,11 @@
+#!/bin/sh
+
+echo "== iwconfig (assoc: AP mac, channel, rate, quality) =="
+iwconfig wlan0
+echo "== tx/rx  (rx: bytes pkts ...  tx: bytes pkts ...) =="
+grep wlan0 /proc/net/dev
+echo "== recent kernel msgs (warnings?) =="
+dmesg | tail -n 15
+echo "== ping dev machine 10.43.112.1 =="
+ping -c 3 -W 2 10.43.112.1
+echo "== done =="

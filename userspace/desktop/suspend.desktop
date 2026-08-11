@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Suspend
+Comment=Suspend to RAM
+Exec=/usr/sbin/suspend
+Icon=suspend.png
+Terminal=false
+Categories=Action;

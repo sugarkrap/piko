@@ -1,0 +1,8 @@
+#!/bin/sh
+sync
+
+if [ -w /sys/power/mem_sleep ]; then
+	echo deep > /sys/power/mem_sleep
+fi
+
+echo mem > /sys/power/state

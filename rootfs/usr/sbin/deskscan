@@ -1,0 +1,36 @@
+#!/bin/sh
+
+KILL=/usr/local/bin/kill
+found=0
+signalled=0
+
+if [ ! -x "$KILL" ]; then
+    echo "deskscan: $KILL is missing."
+    echo "This busybox has no kill/killall/pkill applet at all, so there is"
+    echo "no other way to signal a process here. Build it with:"
+    echo "    \$GCC -march=armv5te -O2 -static -o kill userspace/src/kill.c"
+    exit 1
+fi
+
+for d in /proc/[0-9]*; do
+    [ -r "$d/comm" ] || continue
+    c=$(cat "$d/comm" 2>/dev/null)
+    case "$c" in
+        matchbox-desktop|matchbox-deskto)
+            found=$((found + 1))
+            p=${d#/proc/}
+            if "$KILL" -1 "$p" 2>/dev/null; then
+                signalled=$((signalled + 1))
+            fi
+            ;;
+    esac
+done
+
+if [ "$found" -eq 0 ]; then
+    echo "deskscan: matchbox-desktop is not running -- nothing to refresh."
+    echo "(The graphical session may not have started. Check /tmp/matchbox-session.log)"
+    exit 1
+fi
+
+echo "deskscan: asked $signalled matchbox-desktop process(es) to reload."
+exit 0

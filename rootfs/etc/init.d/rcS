@@ -1,0 +1,111 @@
+#!/bin/sh
+
+echo ""
+echo "########  STAGE2-BUILD-G  (ash default + editable shell)  ########"
+echo ""
+
+echo "6 4 1 7" > /proc/sys/kernel/printk 2>/dev/null
+
+mount -t proc     proc     /proc            2>/dev/null
+mount -t sysfs    sysfs    /sys             2>/dev/null
+mount -t devtmpfs devtmpfs /dev             2>/dev/null
+
+if test -x /usr/sbin/zramswap; then
+    /usr/sbin/zramswap on >/tmp/zramswap.log 2>&1 || true
+fi
+
+if test -x /usr/sbin/piko-splash && test -f /usr/share/piko/splash.raw; then
+    if /usr/sbin/piko-splash /usr/share/piko/splash.raw 2>/dev/null; then
+        exec > /tmp/rcS.log 2>&1
+    fi
+fi
+
+mkdir -p /dev/pts
+mount -t devpts   devpts   /dev/pts  -o mode=0620,ptmxmode=0666  2>/dev/null
+if test -e /dev/pts/ptmx; then
+    ln -sf pts/ptmx /dev/ptmx
+else
+    test -e /dev/ptmx || mknod /dev/ptmx c 5 2
+    chmod 666 /dev/ptmx 2>/dev/null
+fi
+
+hostname zaurus
+
+if test -e /dev/rtc0; then
+	test -x /usr/sbin/hwclock && /usr/sbin/hwclock -s 2>/dev/null
+else
+	echo "rcS: no /dev/rtc0 -- the clock starts at the epoch this boot"
+	echo "rcS: needs CONFIG_RTC_DRV_SA1100=y"
+fi
+
+chown -R piko:piko /home/piko 2>/dev/null
+chmod 700 /home/piko/.ssh 2>/dev/null
+chmod 600 /home/piko/.ssh/authorized_keys 2>/dev/null
+
+mdev -d 2>/dev/null &
+
+modprobe hostap 2>/dev/null
+
+modprobe pxa2xx_base 2>/dev/null
+modprobe pxa2xx_sharpsl 2>/dev/null
+
+KVER="$(uname -r)"
+
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp850.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/nls/nls_iso8859-15.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/fat/fat.ko" 2>/dev/null
+insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
+
+mdev -s 2>/dev/null
+
+rm -rf /mnt/card/.zaurus/tmp 2>/dev/null
+
+if test -x /usr/sbin/audioon; then
+	/usr/sbin/audioon 2>/dev/null
+fi
+
+ifconfig lo 127.0.0.1 up 2>/dev/null
+
+if test -w /sys/devices/platform/w100fb/fastpllclk; then
+	echo 0 > /sys/devices/platform/w100fb/fastpllclk
+fi
+if test -w /sys/module/w100fb/parameters/force_fullrate; then
+	echo Y > /sys/module/w100fb/parameters/force_fullrate
+fi
+if test -w /sys/module/w100fb/parameters/vsync_mode; then
+	echo 0 > /sys/module/w100fb/parameters/vsync_mode
+fi
+if test -w /sys/module/w100fb/parameters/vsync_debug; then
+	echo N > /sys/module/w100fb/parameters/vsync_debug
+fi
+
+if test -x /usr/sbin/bright; then
+	/usr/sbin/bright restore 2>/dev/null
+fi
+
+if test -x /usr/sbin/brightd; then
+	trap "" HUP
+	/usr/sbin/brightd 2>/tmp/brightd.err &
+	trap - HUP
+fi
+
+if test -x /usr/sbin/flipd; then
+	trap "" HUP
+	/usr/sbin/flipd 2>/dev/null &
+	trap - HUP
+fi
+
+mkdir -p /etc/dropbear
+if ! test -f /etc/dropbear/dropbear_ed25519_host_key; then
+	echo "generating dropbear host keys (first boot)..."
+	dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
+	dropbearkey -t rsa     -f /etc/dropbear/dropbear_rsa_host_key     2>/dev/null
+fi
+dropbear -R 2>/dev/null
+
+echo ""
+echo "=== zaurus-refresh stage 2 ready -- log in at the console ==="
+echo ""
+
+/bin/busybox loadkmap < /etc/zaurus.bmap 2>/dev/null

@@ -1,0 +1,61 @@
+#!/bin/sh
+
+HWCLOCK=/usr/sbin/hwclock
+NTPSYNC=/usr/sbin/ntpsync
+
+usage() {
+	echo "usage: settime                    show both clocks"
+	echo "       settime YEAR MON DAY HOUR MIN [SEC]"
+	echo "       settime ntp                set from the network, then save"
+	echo "       settime save               system clock -> RTC"
+	echo "       settime load               RTC -> system clock"
+}
+
+if ! test -x "$HWCLOCK"; then
+	echo "settime: no $HWCLOCK"
+	echo "settime: run tools/userspace/build-userspace.sh and redeploy"
+	exit 1
+fi
+
+case "$1" in
+	"")
+		echo "system: $(date)"
+		echo "rtc:    $($HWCLOCK)"
+		exit 0
+		;;
+	help|-h|--help)
+		usage
+		exit 0
+		;;
+	save)
+		exec "$HWCLOCK" -w
+		;;
+	load)
+		exec "$HWCLOCK" -s
+		;;
+	ntp)
+		if ! test -x "$NTPSYNC"; then
+			echo "settime: no $NTPSYNC"
+			exit 1
+		fi
+		exec "$NTPSYNC"
+		;;
+esac
+
+case "$#" in
+	5) set -- "$1" "$2" "$3" "$4" "$5" 0 ;;
+	6) ;;
+	*)
+		echo "settime: want 5 or 6 numbers (YEAR MON DAY HOUR MIN [SEC]),"
+		echo "settime: or one of: ntp, save, load, help"
+		usage
+		exit 2
+		;;
+esac
+
+"$HWCLOCK" --setfields "$1" "$2" "$3" "$4" "$5" "$6" || exit 1
+
+"$HWCLOCK" -s || exit 1
+
+echo "system: $(date)"
+echo "rtc:    $($HWCLOCK)"

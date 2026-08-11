@@ -1,0 +1,123 @@
+// Keyboard layout for the Sharp Zaurus SL-C760/SL-C860 (corgi) thumb
+// keyboard. Base (unshifted/shifted) letters and digits match the
+// physical keycap legends photographed directly off the device; the Fn
+// legend per key comes from the same photo, cross-validated against the
+// existing (working) console keymap at rootfs/etc/zaurus.bmap (table 2 /
+// AltGr) for every letter-row key -- both sources agreed exactly except
+// for the digit row, where the console keymap's AltGr slot turned out to
+// hold leftover placeholder values from whatever stock template it was
+// built from (a German-style AltGr number row), not this device's real
+// Fn function (which for digits is non-textual: zoom/brightness/IME
+// icons, out of scope here except Fn+0=Delete, which is unambiguous and
+// useful).
+//
+// Physical Fn key reports plain KEY_F3 (evdev) / <FK03> in XKB; this
+// file redefines it as the real ISO_Level3_Shift modifier so levels 3/4
+// on other keys become reachable, exactly like symbols/level3's
+// "ralt_switch" does for AltGr on a normal PC keyboard.
+//
+// Legend key: Q has no Fn symbol printed -> NoSymbol. D's keycap prints
+// "." for Fn+D even though it doesn't currently do anything on the old
+// console keymap -- treated as a bug to fix here, not an omission.
+// X/C/V print "Cut"/"Copy"/"Paste" -- implemented as real Control+X/C/V
+// (SetMods) rather than the X11 Cut/Copy/Paste keysyms, since ordinary
+// apps (xterm etc.) only honour the former.
+
+default partial alphanumeric_keys modifier_keys
+xkb_symbols "basic" {
+    include "us(basic)"
+    name[Group1]= "Zaurus (corgi)";
+
+    // Fn key: redefine from F3 to the real Level3 (AltGr-style) shift.
+    key <FK03> { [ ISO_Level3_Shift ], type[Group1]="ONE_LEVEL" };
+
+    // Digit row: real Shift legends differ from stock us(basic).
+    // Fn row on digits is icon-only (zoom/brightness/IME) except Del.
+    //
+    // 3 and 4 carry the brightness-down/-up icons, confirmed against the
+    // physical keycaps 2026-07-31. They are bound to the standard
+    // XF86MonBrightness{Down,Up} keysyms here; what actually acts on them
+    // is matchbox-window-manager via /etc/matchbox/kbdconfig, which runs
+    // "bright down" / "bright up". Levels 3 and 4 are both set so the
+    // binding survives Fn+Shift, matching how Fn+0=Delete is done below.
+    key <AE01> { [        1,     exclam,  NoSymbol,  NoSymbol ] };
+    key <AE02> { [        2,   quotedbl,  NoSymbol,  NoSymbol ] };
+    key <AE03> { [        3, numbersign,  XF86MonBrightnessDown, XF86MonBrightnessDown ] };
+    key <AE04> { [        4,     dollar,  XF86MonBrightnessUp,   XF86MonBrightnessUp   ] };
+    // 5 and 6 are volume down/up, by this project's choice -- and unlike
+    // 3/4 above that is NOT what the keycaps say. The digit row's Fn
+    // legends are zoom/brightness/IME icons; there is no volume icon
+    // anywhere on this keyboard, and no dedicated volume key either, so
+    // the pair had to be picked rather than read off. 5/6 were taken
+    // because they sit immediately beside the brightness pair, which
+    // makes the two hardware ladders adjacent and consistent to reach.
+    //
+    // As with 3/4, the keysyms here are documentary rather than load
+    // bearing: the chord is consumed at the evdev layer in the X server
+    // fork (HotkeyChord(), hw/kdrive/linux/evdev.c) and never reaches an
+    // X client, for the modifier-mask reasons brightd's grab
+    // works through. They are set anyway so anything that does look at
+    // the layout sees something meaningful. Nothing grabs them, so there
+    // is no double-stepping. Retargeting the volume keys means changing
+    // the two KEY_n constants in HotkeyChord() and these two lines.
+    //
+    // Both levels 3 and 4 are set so the binding survives Fn+Shift, the
+    // same way Fn+0=Delete is done below.
+    key <AE05> { [        5,    percent,  XF86AudioLowerVolume, XF86AudioLowerVolume ] };
+    key <AE06> { [        6,  ampersand,  XF86AudioRaiseVolume, XF86AudioRaiseVolume ] };
+    key <AE07> { [        7,  apostrophe, NoSymbol,  NoSymbol ] };
+    key <AE08> { [        8,  parenleft,  NoSymbol,  NoSymbol ] };
+    key <AE09> { [        9, parenright,  NoSymbol,  NoSymbol ] };
+    key <AE10> { [        0, asciitilde,  Delete,    Delete   ] };
+
+    // QWERTYUIOP row -- Fn gives programming punctuation / JP brackets.
+    key <AD02> { [        w,          W, asciicircum, asciicircum ] };
+    key <AD03> { [        e,          E, equal,       equal       ] };
+    key <AD04> { [        r,          R, plus,        plus        ] };
+    key <AD05> { [        t,          T, bracketleft, bracketleft ] };
+    key <AD06> { [        y,          Y, bracketright,bracketright] };
+    key <AD07> { [        u,          U, U300C,       U300C       ] };
+    key <AD08> { [        i,          I, U300D,       U300D       ] };
+
+    // Tab + ASDFGHJKL row.
+    key <TAB>  { [   Tab, ISO_Left_Tab, Caps_Lock,   Caps_Lock ] };
+    key <AC03> { [        d,          D, period,      period      ] };
+    key <AC04> { [        f,          F, backslash,   backslash   ] };
+    key <AC05> { [        g,          G, semicolon,   semicolon   ] };
+    key <AC06> { [        h,          H, colon,       colon       ] };
+    key <AC07> { [        j,          J, asterisk,    asterisk    ] };
+    key <AC08> { [        k,          K, yen,         yen         ] };
+    key <AC09> { [        l,          L, bar,         bar         ] };
+
+    // ZXCVBNM row -- X/C/V are real Cut/Copy/Paste (Control+X/C/V).
+    key <AB02> {
+        type[Group1] = "FOUR_LEVEL",
+        symbols[Group1] = [ x, X, x, X ],
+        actions[Group1] = [ NoAction(), NoAction(), SetMods(modifiers=Control), SetMods(modifiers=Control) ]
+    };
+    key <AB03> {
+        type[Group1] = "FOUR_LEVEL",
+        symbols[Group1] = [ c, C, c, C ],
+        actions[Group1] = [ NoAction(), NoAction(), SetMods(modifiers=Control), SetMods(modifiers=Control) ]
+    };
+    key <AB04> {
+        type[Group1] = "FOUR_LEVEL",
+        symbols[Group1] = [ v, V, v, V ],
+        actions[Group1] = [ NoAction(), NoAction(), SetMods(modifiers=Control), SetMods(modifiers=Control) ]
+    };
+    key <AB05> { [        b,          B, underscore,  underscore  ] };
+
+    key <AB08> { [    comma,      less, less,        less        ] };
+    key <AB09> { [   period,   greater, greater,     greater     ] };
+
+    // On/off button (matrix-keypad row 7, col 0 -- CORGI_KEY_OFF in
+    // corgi.c, plain KEY_SUSPEND / evdev 205) is deliberately NOT
+    // bound to a keysym here.
+    // adding ANY previously-undefined key to this file -- any keycode, any
+    // keysym, tried both -- makes xkbcomp's live upload to the running
+    // Xfbdev fail with a reproducible XKEYBOARD BadValue at the same
+    // protocol serial every time. Existing remaps above all succeed
+    // because they REPLACE a keycode the server already allocated width
+    // for at its own startup (every ordinary keyboard position); this
+    // would have been the first ADDITION of a keycode with none.
+};

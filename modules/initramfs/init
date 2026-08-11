@@ -1,0 +1,76 @@
+#!/bin/sh
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+
+for bl in /sys/class/backlight/*/; do
+	if test -f "$bl/max_brightness"; then
+		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
+		echo 0 > "$bl/bl_power" 2>/dev/null
+	fi
+done
+
+/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
+SPLASH_RC=$?
+
+mount -t proc proc /proc
+
+BOOTLOG=/tmp/bootstrap.log
+exec > "$BOOTLOG" 2>&1
+
+console_fallback() {
+	exec > /dev/tty0 2>&1
+	cat "$BOOTLOG" 2>/dev/null
+}
+
+export TERM=linux
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+
+echo ""
+echo "=== zaurus-refresh bootstrap (kexec into stage 2) ==="
+echo ""
+
+mkdir -p /mnt/home
+LOG=/mnt/home/debug.log
+
+if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
+	echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG"
+
+	echo "fbsplash rc=$SPLASH_RC" >> "$LOG"
+	if test -s /tmp/fbsplash.err; then
+		echo "fbsplash stderr:" >> "$LOG"
+		cat /tmp/fbsplash.err >> "$LOG"
+	fi
+
+	while true; do
+		if test -f /mnt/home/boot/zImage-full && test -f /mnt/home/sbin/kexec; then
+			break
+		fi
+		sleep 1
+	done
+
+	echo "--- kexec -d -l output ---"
+	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
+		--atags \
+		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw quiet" \
+		> /tmp/kexec-l.out 2>&1
+	KEXEC_LOAD_RC=$?
+	cat /tmp/kexec-l.out
+	cat /tmp/kexec-l.out >> "$LOG"
+	echo "--- kexec -l exit code: $KEXEC_LOAD_RC ---"
+	echo "kexec -l exit code: $KEXEC_LOAD_RC" >> "$LOG"
+
+	if test "$KEXEC_LOAD_RC" -eq 0; then
+		echo "kexec -l ok, jumping to stage 2..."
+		sync
+		exec /mnt/home/sbin/kexec -e
+	fi
+	console_fallback
+	echo "kexec load failed -- dropping to bootstrap shell"
+	echo "kexec load failed" >> "$LOG"
+else
+	console_fallback
+	echo "home mount failed" >&2
+fi
+
+exec setsid cttyhack /bin/ash -l

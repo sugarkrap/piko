@@ -1,0 +1,15 @@
+#!/bin/sh
+CARDSWAP=/usr/sbin/cardswap
+
+{
+	[ -x "$CARDSWAP" ] && "$CARDSWAP" off >/dev/null 2>&1
+
+	umount -l /mnt/card 2>/dev/null
+
+	if [ "$ACTION" != "remove" ]; then
+		mount /mnt/card 2>/dev/null
+		[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1
+	fi
+} &
+
+exit 0

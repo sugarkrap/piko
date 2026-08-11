@@ -1,0 +1,6 @@
+#!/bin/sh
+echo "STAGE2-BUILD-G  (ash default + editable shell)"
+echo "kernel : $(uname -r)"
+echo "built  : $(uname -v)"
+echo "shadow : $(grep -o '^piko:[^:]*' /etc/shadow 2>/dev/null | cut -c1-12)...  (want piko:\$1\$ = MD5)"
+echo "authkey: $(test -s /home/piko/.ssh/authorized_keys && echo present || echo MISSING)"

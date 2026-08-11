@@ -1,0 +1,49 @@
+#!/bin/sh
+
+OPKG=/usr/bin/opkg
+CONF=/etc/opkg/opkg.conf
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT=/mnt/card
+
+if [ ! -x "$OPKG" ]; then
+    echo "pkglist: $OPKG is missing -- opkg is not installed on this device."
+    exit 1
+fi
+
+card_mounted() {
+    grep -q " $CARD_MNT " /proc/mounts 2>/dev/null
+}
+
+if card_mounted; then
+    DEST_OPTS="--add-dest card:$CARD_ROOT"
+else
+    DEST_OPTS=""
+fi
+
+if [ $# -gt 0 ]; then
+    "$OPKG" --conf "$CONF" $DEST_OPTS info "$1"
+    exit $?
+fi
+
+echo "=== installed on the NAND root ==="
+"$OPKG" --conf "$CONF" list-installed 2>/dev/null | sed 's/^/  /'
+
+echo
+if card_mounted; then
+    echo "=== installed on the SD card ($CARD_ROOT) ==="
+    if [ -f "$CARD_ROOT/var/lib/opkg/status" ]; then
+        grep '^Package:' "$CARD_ROOT/var/lib/opkg/status" 2>/dev/null \
+            | sed 's/^Package: /  /'
+        if ! grep -q '^Package:' "$CARD_ROOT/var/lib/opkg/status" 2>/dev/null; then
+            echo "  (none)"
+        fi
+    else
+        echo "  (none -- nothing has been installed to this card)"
+    fi
+else
+    echo "=== SD card ==="
+    echo "  (no card mounted)"
+fi
+
+echo
+echo "Install: pkgadd     Remove: pkgdel     Refresh desktop: deskscan"

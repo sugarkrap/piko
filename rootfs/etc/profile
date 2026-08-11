@@ -1,0 +1,15 @@
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export TERM=linux
+
+[ -r /etc/TZ ] && export TZ="$(cat /etc/TZ)"
+
+[ -r /etc/zaurus-card.sh ] && . /etc/zaurus-card.sh
+export TERMINFO=/usr/share/terminfo
+export PAGER=less
+export EDITOR=vi
+
+if [ -z "$ZSH_VERSION" ]; then
+	PS1='\u@\h:\w\$ '
+fi
+
+umask 022

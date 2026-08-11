@@ -1,0 +1,52 @@
+
+#ifndef PIKO_SYNC_ICON_XPM_H
+#define PIKO_SYNC_ICON_XPM_H
+
+static const char *piko_sync_icon_xpm[] = {
+"32 32 11 1 ",
+"  c None",
+". c black",
+"X c #336666",
+"o c #339966",
+"O c #FF66CC",
+"+ c #33FF99",
+"@ c gray60",
+"# c #A0A0A4",
+"$ c #FFCC99",
+"% c #DDDDDD",
+"& c white",
+"                                ",
+"  ..................... .....   ",
+" .+++.+++.%%%%%%%%%%%%..+++++.  ",
+" .+oo.ooo.%%%%%%%....%.++ooooX. ",
+" .+oo.ooo.%%%%%%%.oo.%.ooooooX.#",
+" .+oo.ooo.%%%%%%%.oo.%.ooooooX.#",
+" .+oo.ooo.%%%%%%%.oo.%.ooooooX.#",
+" .+oo.ooo.%%%%%%%.oo.%.ooooooX.#",
+" .+oo.ooo.%%%%%%%.oo.%.ooooooX.#",
+" .+oo.ooo.%%%%%%%....%.ooooooX.#",
+" .+oo.ooo.%%%%%%%%%%%%.ooooooX.#",
+" .+ooo................oooooooX.#",
+" .+ooooooooooooooooooooooooooX.#",
+" .+ooooooooooooooooooooooooooX.#",
+" .+ooo....................oooX.#",
+" .+oo.&&&&&&&&&&&&&&&&&&&&.ooX.#",
+" .+oo.&&&&&&&&&&&&&&&&&&&&.ooX.#",
+" .+oo.&&&&&..&&&&&&..&&&&&.ooX.#",
+" .+oo.&&&&.&&.&&&&.&&.&&&&.ooX.#",
+" .+oo.&&&&.&&.&&&&.&&.&&&&.ooX.#",
+" .+oo.&&&&.&&.&&&&.&&.&&&&.ooX.#",
+" .+oo.&&&&&&&&&&&&&&&&&&&&.ooX.#",
+" .+oo.&$$&&&&&&&&&&&&&&$$&.ooX.#",
+" .+oo.$$$$&..........&$$$$.ooX.#",
+" .+oo.$$$$&.OOOOOOOO.&$$$$.ooX.#",
+" .+oo.&$$&&.OOOOOOOO.&&$$&.ooX.#",
+" .+oo.&&&&&&.OOOOOO.&&&&&&.ooX.#",
+" .+oo.&&&&&&&......&&&&&&&.ooX.#",
+" .+oo.&&&&&&&&&&&&&&&&&&&&.ooX.#",
+" .XXX.@@@@@@@@@@@@@@@@@@@@.XXX.#",
+"  ............................##",
+"   ############################ "
+};
+
+#endif

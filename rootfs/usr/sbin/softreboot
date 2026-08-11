@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+KERNEL=/boot/zImage-full
+CMDLINE="$(cat /proc/cmdline)"
+
+kexec -l "$KERNEL" --atags --append="$CMDLINE"
+
+umount -l /mnt/card 2>/dev/null || true
+
+sync
+exec kexec -e

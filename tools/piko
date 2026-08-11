@@ -1,0 +1,94 @@
+#!/bin/bash
+set -euo pipefail
+
+REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+TOOLS="$REPO/tools"
+
+declare -A ROOT_COMMANDS=(
+    [deploy]="$TOOLS/build-and-deploy.sh"
+    [chunked-deploy]="$TOOLS/chunked-deploy.sh"
+    [mtd3-jffs2]="$TOOLS/build-mtd3-jffs2.sh"
+)
+
+CATEGORIES=(toolchain kernel userspace emulator scripts)
+
+declare -A COMMANDS
+declare -A CATEGORY_OF
+
+for name in "${!ROOT_COMMANDS[@]}"; do
+    COMMANDS["$name"]="${ROOT_COMMANDS[$name]}"
+    CATEGORY_OF["$name"]="root"
+done
+
+for category in "${CATEGORIES[@]}"; do
+    dir="$TOOLS/$category"
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' path; do
+        [ -x "$path" ] || continue
+        base="${path##*/}"
+        name="${base%.sh}"
+        name="${name%.js}"
+        name="${name#build-}"
+        name="${name#setup-}"
+        key="$name"
+        if [ -n "${COMMANDS[$key]:-}" ]; then
+            key="$category/$name"
+        fi
+        COMMANDS["$key"]="$path"
+        CATEGORY_OF["$key"]="$category"
+    done < <(find "$dir" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.js' \) -print0 | sort -z)
+done
+
+usage() {
+    cat <<'USAGE'
+piko - single entry point for this repo's build/deploy/flash tooling
+
+Usage:
+    tools/piko list [category]      list available commands
+    tools/piko <name> [args...]     run a command
+    tools/piko help                 show this message
+
+Categories: root, toolchain, kernel, userspace, emulator, scripts
+
+Examples:
+    tools/piko deploy                       # tools/build-and-deploy.sh
+    tools/piko alsa                         # tools/userspace/build-alsa.sh
+    tools/piko kernel-src --force           # tools/kernel/setup-kernel-src.sh --force
+    tools/piko make-splash --colors 16      # tools/scripts/make-splash.js --colors 16
+USAGE
+}
+
+list_commands() {
+    local filter="${1:-}"
+    for key in $(printf '%s\n' "${!COMMANDS[@]}" | sort); do
+        local category="${CATEGORY_OF[$key]}"
+        if [ -n "$filter" ] && [ "$category" != "$filter" ]; then
+            continue
+        fi
+        printf '%-10s %-24s %s\n' "$category" "$key" "${COMMANDS[$key]#"$REPO"/}"
+    done
+}
+
+main() {
+    if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+        usage
+        exit 0
+    fi
+
+    if [ "$1" = "list" ]; then
+        shift
+        list_commands "${1:-}"
+        exit 0
+    fi
+
+    local name="$1"
+    shift
+    local script="${COMMANDS[$name]:-}"
+    if [ -z "$script" ]; then
+        echo "piko: unknown command '$name' (try: tools/piko list)" >&2
+        exit 1
+    fi
+    exec "$script" "$@"
+}
+
+main "$@"

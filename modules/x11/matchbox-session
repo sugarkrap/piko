@@ -1,0 +1,18 @@
+#!/bin/sh
+
+APPLETS="mb-applet-clock -s 16"
+APPLETS="$APPLETS,mb-volume"
+APPLETS="$APPLETS,mb-applet-system-monitor"
+APPLETS="$APPLETS,mb-applet-battery"
+APPLETS="$APPLETS,mb-applet-wireless"
+APPLETS="$APPLETS,mb-applet-card"
+APPLETS="$APPLETS,mb-applet-pikaffeine"
+APPLETS="$APPLETS,mb-brightness"
+APPLETS="$APPLETS,mb-applet-menu-launcher"
+APPLETS="$APPLETS,mb-applet-tasks"
+
+matchbox-desktop &
+
+matchbox-panel --orientation south --no-flip --no-session --default-apps "$APPLETS" &
+
+exec /usr/bin/matchbox-window-manager -use_cursor no -theme Piko "$@"

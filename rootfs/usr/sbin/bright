@@ -1,0 +1,133 @@
+#!/bin/sh
+
+BL=/sys/class/backlight/corgi_bl
+STATE=/etc/brightness
+
+STOPS="2 5 10 16 24 33 47"
+
+if ! test -d "$BL"; then
+	echo "bright: no backlight device at $BL"
+	echo "bright: is corgi_lcd bound? check dmesg for corgi-lcd/spi1.1"
+	exit 1
+fi
+
+MAX="$(cat "$BL/max_brightness" 2>/dev/null)"
+test -n "$MAX" || MAX=47
+
+cur() {
+	cat "$BL/brightness" 2>/dev/null
+}
+
+blanked() {
+	p="$(cat "$BL/bl_power" 2>/dev/null)"
+	test "$p" != "0" -a -n "$p"
+}
+
+apply() {
+	v="$1"
+	if test "$v" -lt 0; then v=0; fi
+	if test "$v" -gt "$MAX"; then v="$MAX"; fi
+	echo 0 > "$BL/bl_power" 2>/dev/null
+	echo "$v" > "$BL/brightness" 2>/dev/null || {
+		echo "bright: cannot write $BL/brightness (are you root?)"
+		exit 1
+	}
+	echo "brightness $v of $MAX"
+}
+
+step_up() {
+	c="$(cur)"
+	for s in $STOPS; do
+		if test "$s" -gt "$c"; then
+			apply "$s"
+			return
+		fi
+	done
+	apply "$MAX"
+}
+
+step_down() {
+	c="$(cur)"
+	r=""
+	for s in $STOPS; do
+		if test "$s" -lt "$c"; then
+			r="$s"
+		fi
+	done
+	if test -z "$r"; then
+		for r in $STOPS; do break; done
+	fi
+	apply "$r"
+}
+
+show() {
+	c="$(cur)"
+	if blanked; then
+		echo "brightness $c of $MAX (blanked -- use: bright on)"
+	else
+		echo "brightness $c of $MAX"
+	fi
+}
+
+save() {
+	c="$(cur)"
+	old=""
+	if test -r "$STATE"; then
+		old="$(cat "$STATE" 2>/dev/null)"
+	fi
+	if test "$c" = "$old"; then
+		echo "brightness $c already saved"
+		return
+	fi
+	echo "$c" > "$STATE" 2>/dev/null || {
+		echo "bright: cannot write $STATE"
+		exit 1
+	}
+	echo "saved brightness $c"
+}
+
+restore() {
+	if ! test -r "$STATE"; then
+		echo "bright: nothing saved, leaving driver default $(cur)"
+		return
+	fi
+	v="$(cat "$STATE" 2>/dev/null)"
+	case "$v" in
+	''|*[!0-9]*)
+		echo "bright: $STATE is not a number, ignoring"
+		return
+		;;
+	esac
+	apply "$v"
+}
+
+case "${1:-show}" in
+show)		show ;;
+up)		step_up ;;
+down)		step_down ;;
+max)		apply "$MAX" ;;
+min)		for s in $STOPS; do apply "$s"; break; done ;;
+off)		echo 4 > "$BL/bl_power" 2>/dev/null; echo "backlight off (bright on to restore)" ;;
+on)		echo 0 > "$BL/bl_power" 2>/dev/null; show ;;
+save)		save ;;
+restore)	restore ;;
+help|-h|--help)
+	echo "bright                show level"
+	echo "bright up             brighter"
+	echo "bright down           dimmer"
+	echo "bright max            full"
+	echo "bright min            dimmest"
+	echo "bright off            blank"
+	echo "bright on             unblank"
+	echo "bright 20             set 0..$MAX"
+	echo "bright save           remember this level across reboots"
+	echo "bright restore        re-apply the remembered level"
+	;;
+*[!0-9]*)
+	echo "bright: unknown command '$1' -- try: bright help"
+	exit 1
+	;;
+*)
+	apply "$1"
+	;;
+esac

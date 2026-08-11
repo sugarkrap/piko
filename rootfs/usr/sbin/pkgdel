@@ -1,0 +1,33 @@
+#!/bin/sh
+
+OPKG=/usr/bin/opkg
+CONF=/etc/opkg/opkg.conf
+CARD_ROOT="${ZAURUS_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT=/mnt/card
+
+if [ ! -x "$OPKG" ]; then
+    echo "pkgdel: $OPKG is missing -- opkg is not installed on this device."
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    echo "usage: pkgdel NAME"
+    echo
+    echo "Run pkglist to see what is installed."
+    exit 1
+fi
+
+if grep -q " $CARD_MNT " /proc/mounts 2>/dev/null; then
+    DEST_OPTS="--add-dest card:$CARD_ROOT"
+else
+    DEST_OPTS=""
+fi
+
+"$OPKG" --conf "$CONF" $DEST_OPTS remove "$@"
+RC=$?
+
+if [ "$RC" -eq 0 ]; then
+    echo "Removed."
+fi
+
+exit "$RC"

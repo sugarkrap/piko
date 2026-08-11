@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Set Wallpaper
+Comment=Pick a wallpaper and how it is displayed
+Exec=mb-wallpaper-picker
+Icon=mb-wallpaper-picker
+Terminal=false
+Categories=Settings
+X-Piko-Settings-Group=Display
+X-Piko-Settings-Panel=wallpaper
+X-Piko-NoDesktop=true

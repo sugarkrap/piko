@@ -1,0 +1,41 @@
+#!/bin/sh
+
+SYS=/sys/devices/platform/w100fb/flip
+FIFO=/tmp/.pikalibrate-ctl
+XSOCK=/tmp/.X11-unix/X0
+
+if ! test -w "$SYS"; then
+	echo "flip: no $SYS"
+	echo "flip: is w100fb bound? check dmesg for w100fb"
+	exit 1
+fi
+
+cur=$(cat "$SYS")
+
+case "$1" in
+	"")            want=$((1 - cur)) ;;
+	on|1|yes)      want=1 ;;
+	off|0|no)      want=0 ;;
+	status|show)
+		if test "$cur" = "1"; then
+			echo "flip: upside down (tablet posture)"
+		else
+			echo "flip: normal (clamshell posture)"
+		fi
+		exit 0
+		;;
+	*)
+		echo "usage: flip [on|off|status]"
+		exit 2
+		;;
+esac
+
+if test "$want" = "$cur"; then
+	exit 0
+fi
+
+echo "$want" > "$SYS"
+
+if test -e "$XSOCK" && test -p "$FIFO"; then
+	echo ROTATE > "$FIFO"
+fi

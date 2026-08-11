@@ -1,0 +1,9 @@
+::sysinit:/etc/init.d/rcS
+
+tty1::respawn:/etc/init.d/xsession
+
+::ctrlaltdel:/usr/sbin/softreboot
+::shutdown:/usr/sbin/hwclock -w
+::shutdown:/bin/umount -l /mnt/card
+::shutdown:/bin/umount -a -r
+::restart:/sbin/init
