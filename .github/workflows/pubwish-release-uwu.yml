@@ -1,0 +1,349 @@
+name: pubwish release uwu
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+env:
+  KERNEL_VERSION: "7.1.4"
+
+jobs:
+  toolchain:
+    name: toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install crosstool-ng build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              build-essential git autoconf automake bison flex texinfo \
+              gperf help2man libtool-bin libncurses-dev unzip wget xz-utils \
+              patch gawk python3-dev rsync bc libssl-dev libelf-dev
+
+      - name: cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
+
+      - name: build eabi (uclibc) toolchain
+        run: tools/toolchain/build-uclibc-toolchain.sh
+
+      - name: verify oabi capability
+        run: tools/toolchain/build-oabi-toolchain.sh
+
+  zimage:
+    name: zimage
+    needs: toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install kernel + initramfs build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bison flex bc libssl-dev libelf-dev cpio
+
+      - name: restore toolchain
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
+
+      - name: cache busybox download
+        uses: actions/cache@v4
+        with:
+          path: initramfs/busybox-*.tar.bz2
+          key: busybox-src-${{ hashFiles('tools/kernel/build-initramfs.sh') }}
+
+      - name: cache bootstrap kernel-src
+        uses: actions/cache@v4
+        with:
+          path: kernel-src-bootstrap
+          key: kernel-src-bootstrap-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4-minimal', 'modules/**', 'drivers/**', 'tools/kernel/setup-kernel-src.sh') }}
+
+      - name: build zimage
+        run: tools/kernel/build-bootstrap.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zimage
+          path: |
+            flash/zImage
+            initramfs/initramfs-minimal-built.cpio.gz
+          if-no-files-found: error
+
+  mtd3-jffs2:
+    name: mtd3.jffs2
+    needs: toolchain
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: install kernel + x11 + kexec build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              bison flex bc libssl-dev libelf-dev cpio mtd-utils file \
+              build-essential autoconf automake libtool pkg-config \
+              python3 x11proto-dev
+
+      - name: restore toolchain
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
+
+      - name: cache stage-2 kernel-src
+        uses: actions/cache@v4
+        with:
+          path: kernel-src
+          key: kernel-src-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4', 'modules/**', 'drivers/**', 'tools/kernel/setup-kernel-src.sh') }}
+
+      - name: cache third-party x11 source downloads
+        uses: actions/cache@v4
+        with:
+          path: userspace/.thirdparty-cache
+          key: thirdparty-src-${{ hashFiles('tools/userspace/build-thirdparty-deps.sh') }}
+
+      - name: cache ssh source downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/src/dropbear-*.tar.bz2
+            userspace/src/openssh-*.tar.gz
+          key: ssh-src-${{ hashFiles('tools/userspace/build-ssh.sh') }}
+
+      - name: cache kexec source download
+        uses: actions/cache@v4
+        with:
+          path: userspace/src/kexec-tools-*.tar.xz
+          key: kexec-src-${{ hashFiles('tools/userspace/build-kexec.sh') }}
+
+      - name: reconstruct stage-2 kernel-src
+        run: tools/kernel/setup-kernel-src.sh
+
+      - name: build stage-2 kernel (zimage + modules)
+        run: |
+          make -C kernel-src/linux-$KERNEL_VERSION ARCH=arm \
+              CROSS_COMPILE="$GITHUB_WORKSPACE/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin/arm-unknown-linux-uclibcgnueabi-" \
+              -j"$(nproc)" zImage modules
+
+      - name: build kexec
+        run: tools/userspace/build-kexec.sh
+
+      - name: build ssh (scp + sftp-server + dropbear)
+        run: tools/userspace/build-ssh.sh
+
+      - name: build third-party x11 dependencies
+        run: tools/userspace/build-thirdparty-deps.sh
+
+      - name: build mtd3.jffs2
+        run: |
+          KERNEL_DIR="$GITHUB_WORKSPACE/kernel-src/linux-$KERNEL_VERSION" \
+              tools/build-mtd3-jffs2.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtd3-jffs2
+          path: flash/mtd3.jffs2
+          if-no-files-found: error
+
+  old-qemu:
+    name: old-qemu
+    needs: mtd3-jffs2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install qemu build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev \
+              libsdl2-dev libslirp-dev python3 python3-venv flex bison bc \
+              libssl-dev libelf-dev
+
+      - name: restore stage-2 kernel-src
+        uses: actions/cache@v4
+        with:
+          path: kernel-src
+          key: kernel-src-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4', 'modules/**', 'drivers/**', 'tools/kernel/setup-kernel-src.sh') }}
+
+      - name: restore toolchain
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
+
+      - name: cache qemu build
+        uses: actions/cache@v4
+        with:
+          path: qemu-spitz
+          key: qemu-spitz-${{ hashFiles('tools/emulator/qemu-corgi/**', 'tools/emulator/build-and-emulate.sh') }}
+
+      - name: build old-qemu
+        run: tools/emulator/build-and-emulate.sh --machine corgi --build-only
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: old-qemu
+          path: |
+            qemu-spitz/build/qemu-system-arm
+            zImage-qemu-testing
+          if-no-files-found: error
+
+  checking-check:
+    name: checking check
+    needs: [zimage, mtd3-jffs2, old-qemu]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install boot-test deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq e2fsprogs imagemagick
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zimage
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mtd3-jffs2
+          path: flash
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: old-qemu
+
+      - name: lay artifacts out where the emulator scripts expect them
+        run: |
+          if [ ! -f flash/mtd3.jffs2 ]; then
+              find flash -name mtd3.jffs2 -exec mv {} flash/mtd3.jffs2 \;
+          fi
+          test -f flash/mtd3.jffs2
+          test -f flash/zImage
+          test -f qemu-spitz/build/qemu-system-arm
+          test -f zImage-qemu-testing
+          chmod +x flash/zImage qemu-spitz/build/qemu-system-arm
+
+      - name: checking check -- boot the bootstrap
+        run: |
+          timeout 300 qemu-spitz/build/qemu-system-arm \
+              -M corgi -kernel flash/zImage \
+              -initrd initramfs/initramfs-minimal-built.cpio.gz \
+              -append "console=ttyS0 earlyprintk" \
+              -serial stdio -display none -monitor none \
+              -rtc base=2020-01-01T00:00:00 \
+              | tee bootstrap-boot.log || true
+
+          echo "### bootstrap boot" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -60 bootstrap-boot.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          grep -q "zaurus-refresh bootstrap (kexec into stage 2)" bootstrap-boot.log || {
+              echo "::error::bootstrap never reached its own kexec-attempt banner" >&2
+              exit 1
+          }
+          grep -q "home mount failed" bootstrap-boot.log || {
+              echo "::error::bootstrap didn't reach the expected NAND-less mount-failure path -- something changed" >&2
+              exit 1
+          }
+
+      - name: extract mtd3.jffs2 and repack as an sd card image
+        run: |
+          sudo tools/scripts/jffs2-mount-extract.sh flash/mtd3.jffs2 /tmp/stage2-root
+          truncate -s 256M stage2-sd.img
+          mkfs.ext2 -F -q -d /tmp/stage2-root stage2-sd.img
+
+      - name: checking check -- boot stage 2 to the desktop (text log)
+        run: |
+          timeout 300 qemu-spitz/build/qemu-system-arm \
+              -M corgi -kernel zImage-qemu-testing \
+              -drive if=sd,format=raw,file=stage2-sd.img,snapshot=on \
+              -append "console=ttyS0 earlyprintk root=/dev/mmcblk0 rw rootfstype=ext2 init=/sbin/init" \
+              -serial stdio -display none -monitor none \
+              -rtc base=2020-01-01T00:00:00 \
+              | tee stage2-boot.log || true
+
+          echo "### stage 2 boot" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -80 stage2-boot.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          grep -q "zaurus-refresh stage 2 ready" stage2-boot.log || {
+              echo "::error::stage 2 never reached its own rcS-ready banner" >&2
+              exit 1
+          }
+
+      - name: checking check -- boot stage 2 to the desktop (screenshot)
+        run: |
+          qemu-spitz/build/qemu-system-arm \
+              -M corgi -kernel zImage-qemu-testing \
+              -drive if=sd,format=raw,file=stage2-sd.img,snapshot=on \
+              -append "console=tty0 root=/dev/mmcblk0 rw rootfstype=ext2 init=/sbin/init" \
+              -display none -qmp "unix:/tmp/qmp.sock,server,nowait" \
+              -rtc base=2020-01-01T00:00:00 &
+          QEMU_PID=$!
+
+          python3 - /tmp/qmp.sock stage2-desktop.png 240 <<'PY'
+          import json, socket, sys, time
+          sock_path, out, delay = sys.argv[1], sys.argv[2], float(sys.argv[3])
+          for _ in range(200):
+              try:
+                  s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(sock_path); break
+              except OSError:
+                  time.sleep(0.2)
+          else:
+              sys.exit("could not reach the QEMU monitor")
+          f = s.makefile("rwb")
+          def reply():
+              while True:
+                  line = f.readline()
+                  if not line:
+                      return None
+                  msg = json.loads(line)
+                  if "event" not in msg:
+                      return msg
+          reply()
+          f.write(b'{"execute":"qmp_capabilities"}\n'); f.flush(); reply()
+          time.sleep(delay)
+          f.write(json.dumps({"execute": "screendump", "arguments": {
+              "filename": out, "device": "w100", "format": "png"}}).encode() + b"\n")
+          f.flush()
+          r = reply()
+          if r is None or "error" in (r or {}):
+              sys.exit("screendump failed: %s" % r)
+          f.write(b'{"execute":"quit"}\n'); f.flush()
+          PY
+          wait "$QEMU_PID" 2>/dev/null || true
+
+          STDDEV="$(convert stage2-desktop.png -colorspace Gray -format "%[fx:standard_deviation]" info:)"
+          echo "screenshot grayscale stddev: $STDDEV"
+          awk -v v="$STDDEV" 'BEGIN { exit !(v > 0.01) }' || {
+              echo "::error::stage 2 screenshot looks blank (stddev=$STDDEV)" >&2
+              exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checking-check-evidence
+          path: |
+            bootstrap-boot.log
+            stage2-boot.log
+            stage2-desktop.png
+          if-no-files-found: warn
