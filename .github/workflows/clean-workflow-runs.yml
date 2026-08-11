@@ -15,4 +15,5 @@ jobs:
     steps:
       - uses: dmvict/clean-workflow-runs@9b0fba98c68369add0884d6af67e6866578cbf98
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           repo: ${{ github.repository }}
