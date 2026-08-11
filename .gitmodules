@@ -108,7 +108,3 @@
 	path = userspace/src/mb-applet-pikaffeine
 	url = https://github.com/sugarkrap/mb-applet-pikaffeine
 	branch = main
-[submodule "zmenunx"]
-	path = userspace/src/zmenunx
-	url = https://github.com/sugarkrap/zmenunx.git
-	branch = master
