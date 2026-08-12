@@ -138,6 +138,14 @@ jobs:
           path: userspace/src/kexec-tools-*.tar.xz
           key: kexec-src-${{ hashFiles('tools/userspace/build-kexec.sh') }}
 
+      - name: cache alsa source downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/src/alsa-lib-*.tar.bz2
+            userspace/src/alsa-utils-*.tar.bz2
+          key: alsa-src-${{ hashFiles('tools/userspace/build-alsa.sh') }}
+
       - name: reconstruct stage-2 kernel-src
         run: tools/kernel/setup-kernel-src.sh
 
@@ -152,6 +160,9 @@ jobs:
 
       - name: build ssh (scp + sftp-server + dropbear)
         run: tools/userspace/build-ssh.sh
+
+      - name: build alsa (needed by mb-volume)
+        run: tools/userspace/build-alsa.sh
 
       - name: build third-party x11 dependencies
         run: tools/userspace/build-thirdparty-deps.sh
