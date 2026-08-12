@@ -34,6 +34,7 @@ flash/zImage
 flash/zImage-*
 flash/zImage.*
 flash/piko-install
+sd-card/
 flash/src/*.o
 flash/src/piko-install
 flash/bin/*
@@ -108,6 +109,8 @@ userspace/stage-kexec/
 userspace/src/MPlayer-*/
 userspace/stage-mplayer/
 userspace/src/SDL-*/
+userspace/src/SDL_image-*/
+userspace/src/SDL_ttf-*/
 userspace/stage-sdl/
 userspace/stage-sdl-runtime/
 userspace/stage-target/
