@@ -105,7 +105,7 @@ jobs:
               bison flex bc libssl-dev libelf-dev cpio mtd-utils file \
               build-essential autoconf automake libtool pkg-config \
               python3 python3-pip x11proto-dev gperf
-          pip3 install --break-system-packages --quiet jefferson
+          sudo pip3 install --break-system-packages --quiet jefferson
 
       - name: restore toolchain
         uses: actions/cache@v4
@@ -236,7 +236,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq e2fsprogs imagemagick python3-pip
-          pip3 install --break-system-packages --quiet jefferson
+          sudo pip3 install --break-system-packages --quiet jefferson
 
       - uses: actions/download-artifact@v4
         with:
