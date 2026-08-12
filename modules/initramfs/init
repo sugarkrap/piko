@@ -22,10 +22,6 @@ console_fallback() {
 	cat "$BOOTLOG" 2>/dev/null
 }
 
-# Also echoes to the serial UART, best-effort: there's no LCD console up
-# yet at this point in boot, and a serial cable is the only way to watch
-# the bootstrap stage live (this also lets an emulator's -serial stdio
-# observe it, since kernel console= alone doesn't affect what init writes).
 serial_echo() {
 	echo "$1"
 	echo "$1" > /dev/ttyS0 2>/dev/null
