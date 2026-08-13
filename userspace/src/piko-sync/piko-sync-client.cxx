@@ -187,6 +187,10 @@ public:
     virtual void after_transfer_complete() {}
     virtual std::string dest_for(const QueuedFile &qf) { (void)qf; return dest_dir(); }
 
+    bool queue_path(const std::string &path);
+    void choose_and_queue(const char *pattern, const char *title);
+    void refresh_queue_view() { sync_table(); }
+
     virtual void store_settings(Settings &cfg) const
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
@@ -198,6 +202,7 @@ public:
     QueuedFile &file(int i) { return files_[i]; }
     std::string address() const { return address_->value() ? address_->value() : ""; }
     std::string dest_dir() const { return dest_->value() ? dest_->value() : ""; }
+    const std::string &last_dir() const { return last_dir_; }
 
     void sync_table()
     {
@@ -748,10 +753,33 @@ TransferPane::~TransferPane()
     active_.clear();
 }
 
-void TransferPane::do_add_files()
+bool TransferPane::queue_path(const std::string &path)
 {
-    Fl_File_Chooser chooser(last_dir_.empty() ? "." : last_dir_.c_str(), "*",
-                             Fl_File_Chooser::MULTI, "Add files to send");
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+        return false;
+
+    QueuedFile qf;
+    qf.path = path;
+    qf.name = basename_of(path);
+    qf.total_size = static_cast<uint64_t>(st.st_size);
+    qf.crc32 = compute_file_crc32(path);
+    qf.machine = machine_for(path);
+    qf.row = queue_.add(qf.name, qf.total_size);
+
+    files_.push_back(qf);
+    spawn_attempt(static_cast<int>(files_.size()) - 1);
+
+    std::string::size_type slash = qf.path.rfind('/');
+    if (slash != std::string::npos)
+        last_dir_ = qf.path.substr(0, slash);
+    return true;
+}
+
+void TransferPane::choose_and_queue(const char *pattern, const char *title)
+{
+    Fl_File_Chooser chooser(last_dir_.empty() ? "." : last_dir_.c_str(), pattern,
+                             Fl_File_Chooser::MULTI, title);
     chooser.show();
     while (chooser.shown())
         Fl::wait();
@@ -761,29 +789,15 @@ void TransferPane::do_add_files()
 
     for (int i = 1; i <= chooser.count(); i++) {
         const char *path = chooser.value(i);
-        if (!path)
-            continue;
-
-        struct stat st;
-        if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
-            continue;
-
-        QueuedFile qf;
-        qf.path = path;
-        qf.name = basename_of(path);
-        qf.total_size = static_cast<uint64_t>(st.st_size);
-        qf.crc32 = compute_file_crc32(path);
-        qf.machine = machine_for(path);
-        qf.row = queue_.add(qf.name, qf.total_size);
-
-        files_.push_back(qf);
-        spawn_attempt(static_cast<int>(files_.size()) - 1);
-
-        std::string::size_type slash = qf.path.rfind('/');
-        if (slash != std::string::npos)
-            last_dir_ = qf.path.substr(0, slash);
+        if (path)
+            queue_path(path);
     }
     sync_table();
+}
+
+void TransferPane::do_add_files()
+{
+    choose_and_queue("*", "Add files to send");
 }
 
 void TransferPane::do_retry_failed()
@@ -1472,10 +1486,14 @@ public:
         backend_->add("pocketsnes");
         backend_->value(0);
 
-        refresh_btn_ = new Fl_Button(X + m + 220, y, 90, 24, "Refresh");
+        add_rom_btn_ = new Fl_Button(X + m + 220, y, 110, 24, "Add ROM...");
+        add_rom_btn_->callback(add_rom_cb, this);
+        add_rom_btn_->tooltip("Send a ROM to the device and register it as a game");
+
+        refresh_btn_ = new Fl_Button(X + m + 336, y, 90, 24, "Refresh");
         refresh_btn_->callback(refresh_cb, this);
 
-        delete_btn_ = new Fl_Button(X + m + 316, y, 110, 24, "Delete ROM");
+        delete_btn_ = new Fl_Button(X + m + 432, y, 110, 24, "Delete ROM");
         delete_btn_->callback(delete_cb, this);
 
         roms_ = new Fl_Hold_Browser(X + m, y + 30, W - 2 * m, ROM_PANEL_H - 64);
@@ -1507,7 +1525,40 @@ public:
     }
 
 private:
+    static void add_rom_cb(Fl_Widget *, void *v) { ((RomPane *)v)->add_rom(); }
     static void refresh_cb(Fl_Widget *, void *v) { ((RomPane *)v)->refresh(); }
+
+    void add_rom()
+    {
+        Fl_File_Chooser chooser(last_dir().empty() ? "." : last_dir().c_str(),
+                                 "ROM files (*.{smc,sfc,fig,swc})",
+                                 Fl_File_Chooser::MULTI, "Add ROMs to send");
+        chooser.show();
+        while (chooser.shown())
+            Fl::wait();
+        if (!chooser.value(1))
+            return;
+
+        int queued = 0;
+        std::string rejected;
+        for (int i = 1; i <= chooser.count(); i++) {
+            const char *path = chooser.value(i);
+            if (!path)
+                continue;
+            if (detect_machine(path).empty()) {
+                rejected += std::string("\n  ") + basename_of_path(path);
+                continue;
+            }
+            if (queue_path(path))
+                queued++;
+        }
+        refresh_queue_view();
+
+        if (!rejected.empty())
+            fl_alert("Not recognised as a ROM, so not sent:%s\n\n"
+                     "Use Add Files... to send them as ordinary files.",
+                     rejected.c_str());
+    }
     static void delete_cb(Fl_Widget *, void *v) { ((RomPane *)v)->remove_selected(); }
 
     void refresh()
@@ -1566,6 +1617,7 @@ private:
         refresh();
     }
 
+    Fl_Button *add_rom_btn_;
     Fl_Input *rom_dest_;
     Fl_Choice *backend_;
     Fl_Button *refresh_btn_;
