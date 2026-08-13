@@ -66,7 +66,10 @@ if [ "$BUILD_SERVER" = "1" ]; then
     fi
 
     echo "==> cross-building piko-sync-server against $STAGE"
-    make -C "$SRC" clean >/dev/null 2>&1 || true
+    # Force a rebuild, but only of the server: `make clean` also deletes
+    # piko-sync-client, so a --server-only run would silently leave you with
+    # no client binary at all.
+    rm -f "$SRC/piko-sync-server"
     make -C "$SRC" server \
         CXX="$TOOLCHAIN_BIN_DIR/$HOST-g++" \
         STAGE="$STAGE" \

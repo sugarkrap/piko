@@ -234,9 +234,16 @@ inline bool decode_hello(const std::string &p, HelloMsg &m)
     return get_u32(p, pos, m.version);
 }
 
+// `dest_dir` is an OPTIONAL trailing field: empty means "wherever the server
+// puts things by default". It is appended rather than inserted so the two
+// ends stay compatible in both directions -- an older server stops decoding
+// after total_size and simply uses its default directory, and a newer server
+// reading an older offer sees the field missing and does the same. Do not
+// reorder the fields above it.
 struct FileOfferMsg {
     std::string name;
     uint64_t total_size;
+    std::string dest_dir;
     FileOfferMsg() : total_size(0) {}
 };
 inline std::string encode(const FileOfferMsg &m)
@@ -244,12 +251,18 @@ inline std::string encode(const FileOfferMsg &m)
     std::string p;
     put_str16(p, m.name);
     put_u64(p, m.total_size);
+    if (!m.dest_dir.empty())
+        put_str16(p, m.dest_dir);
     return p;
 }
 inline bool decode_file_offer(const std::string &p, FileOfferMsg &m)
 {
     size_t pos = 0;
-    return get_str16(p, pos, m.name) && get_u64(p, pos, m.total_size);
+    if (!get_str16(p, pos, m.name) || !get_u64(p, pos, m.total_size))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.dest_dir))
+        return false;
+    return true;
 }
 
 struct FileOfferAckMsg {

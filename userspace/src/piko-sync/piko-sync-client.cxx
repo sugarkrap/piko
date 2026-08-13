@@ -46,6 +46,7 @@
 using namespace piko_sync;
 
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
+static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
 
 static std::string basename_of(const std::string &p)
 {
@@ -176,11 +177,13 @@ public:
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
+        cfg.set("transfer.dest_dir", dest_->value() ? dest_->value() : "");
     }
 
     TransferQueue &queue() { return queue_; }
     QueuedFile &file(int i) { return files_[i]; }
     std::string address() const { return address_->value() ? address_->value() : ""; }
+    std::string dest_dir() const { return dest_->value() ? dest_->value() : ""; }
 
     void sync_table()
     {
@@ -233,6 +236,7 @@ private:
     void do_retry_failed();
 
     Fl_Input *address_;
+    Fl_Input *dest_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
@@ -338,6 +342,7 @@ void FileSend::send_offer()
 {
     QueuedFile &qf = app_->file(file_index_);
     FileOfferMsg fo; fo.name = qf.name; fo.total_size = qf.total_size;
+    fo.dest_dir = app_->dest_dir();
     if (!send_frame_blocking(fd_, MSG_FILE_OFFER, encode(fo))) { terminate(XFER_RECONNECTING, "", true); return; }
     phase_ = WAIT_OFFER_ACK;
 }
@@ -699,7 +704,12 @@ ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &
     shot_btn_->callback(screenshot_cb, this);
     shot_btn_->tooltip("Grab the device's screen and save it as a PNG on this machine");
 
-    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 32, W - 2 * m, 20);
+    dest_ = new Fl_Input(X + m + 90, Y + m + 32, W - 2 * m - 90, 24, "Folder:");
+    dest_->align(FL_ALIGN_LEFT);
+    dest_->value(cfg.get("transfer.dest_dir", DEFAULT_DEST_DIR).c_str());
+    dest_->tooltip("Absolute path on the Zaurus where incoming files are written");
+
+    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 64, W - 2 * m, 20);
     aggregate_bar_->minimum(0);
     aggregate_bar_->maximum(100);
     aggregate_bar_->value(0);
@@ -707,7 +717,7 @@ ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
 
-    table_ = new TransferTable(X + m, Y + m + 60, W - 2 * m, H - m - 60 - m);
+    table_ = new TransferTable(X + m, Y + m + 92, W - 2 * m, H - m - 92 - m);
     table_->queue(&queue_);
 }
 

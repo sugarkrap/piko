@@ -144,6 +144,28 @@ static bool free_bytes_on(const std::string &path, uint64_t &out)
     return true;
 }
 
+static void names_in_dir(const std::string &dir, std::vector<std::string> &out)
+{
+    DIR *d = opendir(dir.c_str());
+    if (!d)
+        return;
+    std::string suffix(PART_SUFFIX);
+    struct dirent *e;
+    while ((e = readdir(d)) != 0) {
+        std::string name(e->d_name);
+        if (name == "." || name == "..")
+            continue;
+        if (name.size() >= suffix.size()
+            && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+            continue;
+        struct stat st;
+        if (stat((dir + "/" + name).c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+        out.push_back(name);
+    }
+    closedir(d);
+}
+
 static bool mkdir_p(const std::string &path)
 {
     if (path.empty() || path == "/")
@@ -253,6 +275,8 @@ private:
     void handle_free_space(const std::string &payload);
     void handle_deploy_begin(const std::string &payload);
     void handle_screenshot(const std::string &payload);
+
+    std::string dest_dir_;
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason);
@@ -498,6 +522,35 @@ void Connection::handle_offer(const std::string &payload)
         return;
     }
 
+    // Where this file lands. An empty dest_dir (or an older client that does
+    // not send one at all) keeps the historic behaviour.
+    dest_dir_ = TRANSFERS_DIR;
+    if (!fo.dest_dir.empty()) {
+        if (fo.dest_dir[0] != '/') {
+            FileOfferAckMsg ack;
+            ack.accepted = false;
+            ack.reason = "destination must be an absolute path";
+            send(MSG_FILE_OFFER_ACK, encode(ack));
+            close_connection();
+            return;
+        }
+        std::string want = fo.dest_dir;
+        while (want.size() > 1 && want[want.size() - 1] == '/')
+            want.erase(want.size() - 1);
+        if (!mkdir_p(want) || access(want.c_str(), W_OK) != 0) {
+            char msg[320];
+            snprintf(msg, sizeof(msg), "cannot write to %s: %s",
+                     want.c_str(), strerror(errno));
+            FileOfferAckMsg ack;
+            ack.accepted = false;
+            ack.reason = msg;
+            send(MSG_FILE_OFFER_ACK, encode(ack));
+            close_connection();
+            return;
+        }
+        dest_dir_ = want;
+    }
+
     original_name_ = fo.name;
     total_size_ = fo.total_size;
 
@@ -505,13 +558,24 @@ void Connection::handle_offer(const std::string &payload)
     TransferMap::const_iterator it = app_->transfer_map().find(key);
     already_fully_done_ = (it != app_->transfer_map().end() && it->second.complete);
 
+    // The cached name list was scanned from the default directory at startup,
+    // so it only describes collisions there. For any other destination, look
+    // at what is actually in that directory instead -- otherwise an unrelated
+    // file of the same name in Transfers/ would rename this one for no reason.
+    std::vector<std::string> other_names;
+    const std::vector<std::string> *names = &app_->complete_names();
+    if (dest_dir_ != TRANSFERS_DIR) {
+        names_in_dir(dest_dir_, other_names);
+        names = &other_names;
+    }
+
     OfferDecision d = decide_offer(app_->transfer_map(), fo.name, fo.total_size,
-                                    app_->complete_names());
+                                    *names);
     final_name_ = d.final_name;
     next_offset_ = d.resume_offset;
 
     if (next_offset_ < total_size_) {
-        std::string part_path = std::string(TRANSFERS_DIR) + "/" + final_name_ + PART_SUFFIX;
+        std::string part_path = dest_dir_ + "/" + final_name_ + PART_SUFFIX;
         part_fd_ = open(part_path.c_str(), O_CREAT | O_RDWR, 0644);
         if (part_fd_ < 0) {
             char msg[256];
@@ -630,8 +694,8 @@ void Connection::handle_complete(const std::string &payload)
         return;
     }
 
-    std::string part_path = std::string(TRANSFERS_DIR) + "/" + final_name_ + PART_SUFFIX;
-    std::string final_path = std::string(TRANSFERS_DIR) + "/" + final_name_;
+    std::string part_path = dest_dir_ + "/" + final_name_ + PART_SUFFIX;
+    std::string final_path = dest_dir_ + "/" + final_name_;
     close(part_fd_);
     part_fd_ = -1;
 

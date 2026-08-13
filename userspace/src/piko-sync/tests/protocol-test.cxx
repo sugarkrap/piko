@@ -507,6 +507,28 @@ static void test_screenshot_info_roundtrip()
     check(!decode_screenshot_info(std::string(3, '\0'), d), "truncated payload rejected");
 }
 
+static void test_file_offer_dest_dir_optional()
+{
+    printf("file offer: dest_dir round-trips, and stays compatible both ways\n");
+    FileOfferMsg m;
+    m.name = "shot.png"; m.total_size = 1234; m.dest_dir = "/mnt/card/Docs";
+    FileOfferMsg d;
+    check(decode_file_offer(encode(m), d), "with dest_dir decodes");
+    check(d.name == "shot.png" && d.total_size == 1234, "name/size survive");
+    check(d.dest_dir == "/mnt/card/Docs", "dest_dir survives");
+
+    // An offer with no destination must encode exactly as it always did, so
+    // an older server still parses it.
+    FileOfferMsg plain;
+    plain.name = "shot.png"; plain.total_size = 1234;
+    check(encode(plain).size() == 2 + 8 + 8, "no dest_dir means no extra bytes on the wire");
+    FileOfferMsg pd;
+    check(decode_file_offer(encode(plain), pd), "legacy-shaped offer decodes");
+    check(pd.dest_dir.empty(), "missing dest_dir decodes as empty, not garbage");
+
+    check(!decode_file_offer(std::string("\0\1", 2), d), "truncated offer still rejected");
+}
+
 int main()
 {
     test_message_roundtrips();
@@ -538,6 +560,7 @@ int main()
     test_deploy_session_noop_when_inactive();
 
     test_screenshot_info_roundtrip();
+    test_file_offer_dest_dir_optional();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {
