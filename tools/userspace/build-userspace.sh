@@ -68,6 +68,21 @@ else
     echo "==> skipping md5sum (no $MD5SUM_SRC)"
 fi
 
+UNTAR_SRC="$REPO/userspace/src/untar.c"
+UNTAR_BIN="$REPO/userspace/src/untar"
+if [ -f "$UNTAR_SRC" ]; then
+    if [ "$FORCE" -eq 1 ] || [ ! -f "$UNTAR_BIN" ] || [ "$UNTAR_SRC" -nt "$UNTAR_BIN" ]; then
+        echo "==> building userspace/src/untar"
+        "${CROSS_COMPILE}gcc" -march=armv5te -O2 -static -Wall -Wextra \
+            -o "$UNTAR_BIN" "$UNTAR_SRC"
+        "${CROSS_COMPILE}strip" "$UNTAR_BIN" 2>/dev/null || true
+    else
+        echo "==> userspace/src/untar already up to date"
+    fi
+else
+    echo "==> skipping untar (no $UNTAR_SRC)"
+fi
+
 BRIGHTD_SRC="$REPO/userspace/src/brightd.c"
 BRIGHTD_BIN="$REPO/userspace/src/brightd"
 if [ -f "$BRIGHTD_SRC" ]; then

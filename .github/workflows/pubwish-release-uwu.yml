@@ -86,17 +86,25 @@ jobs:
       - name: build the sd card payload
         run: ./build.sh
 
+      - name: package the sd card payload
+        run: |
+          TAG="sd-card-${{ github.run_number }}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "ARCHIVE=piko-$TAG.tar.gz" >> "$GITHUB_ENV"
+          mkdir -p "dist/piko-$TAG"
+          cp sd-card/zImage sd-card/mtd3.jffs2 sd-card/piko.cfg \
+             sd-card/piko-install sd-card/updater.sh "dist/piko-$TAG/"
+          tar -C dist -czf "piko-$TAG.tar.gz" "piko-$TAG"
+          echo "### sd card payload" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tar -tzvf "piko-$TAG.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="sd-card-${{ github.run_number }}"
-          gh release create "$TAG" \
-              sd-card/zImage \
-              sd-card/mtd3.jffs2 \
-              sd-card/piko.cfg \
-              sd-card/piko-install \
-              sd-card/updater.sh \
+          gh release create "$TAG" "$ARCHIVE" \
               --title "piko sd card $TAG" \
               --target "${{ github.sha }}" \
-              --notes "automated pubwish build via build.sh. copy these 5 files to the root of an sd card and boot into Cacko recovery to flash."
+              --notes "automated pubwish build via build.sh. extract $ARCHIVE and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash."

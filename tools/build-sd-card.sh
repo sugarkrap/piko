@@ -41,6 +41,9 @@ echo "==> [5/7] userspace payload + mtd3.jffs2 (mtd3, stage 2)"
 "$REPO/tools/userspace/build-ssh.sh"
 "$REPO/tools/userspace/build-alsa.sh"
 "$REPO/tools/userspace/build-thirdparty-deps.sh"
+"$REPO/tools/userspace/build-userspace.sh" \
+    --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
+    --skip-st --skip-fltk --skip-toasters
 KERNEL_DIR="$KERNEL_DIR" "$REPO/tools/build-mtd3-jffs2.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"
