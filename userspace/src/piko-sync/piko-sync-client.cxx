@@ -176,7 +176,6 @@ public:
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
-        cfg.set("transfer.screenshot_dir", shot_dir_);
     }
 
     TransferQueue &queue() { return queue_; }
@@ -237,7 +236,6 @@ private:
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
-    std::string shot_dir_;
     TransferQueue queue_;
     std::vector<QueuedFile> files_;
     std::vector<FileSend *> active_;
@@ -493,9 +491,60 @@ static bool shot_recv_frame(int fd, FrameReader &reader, uint32_t &type,
     }
 }
 
-// Returns the saved path on success.
-static bool take_screenshot(const std::string &address, const std::string &dir,
-                            std::string &saved_path, std::string &err)
+// FLTK 1.3 can only put *text* on the clipboard (Fl::copy); image clipboard
+// support arrived in 1.4. So hand the PNG to whichever clipboard tool the
+// session has, over a pipe -- the screenshot never touches the disk.
+static const char *find_clipboard_cmd()
+{
+    struct Candidate { const char *bin; const char *cmd; };
+    static const Candidate cands[] = {
+        { "wl-copy", "wl-copy --type image/png" },
+        { "xclip",   "xclip -selection clipboard -t image/png -i" },
+        { 0, 0 }
+    };
+    for (int i = 0; cands[i].bin; i++) {
+        std::string probe = std::string("command -v ") + cands[i].bin + " >/dev/null 2>&1";
+        if (system(probe.c_str()) == 0)
+            return cands[i].cmd;
+    }
+    return 0;
+}
+
+static bool copy_png_to_clipboard(const std::string &png, std::string &err)
+{
+    const char *cmd = find_clipboard_cmd();
+    if (!cmd) {
+        err = "no clipboard tool found -- install wl-clipboard (wl-copy) or xclip";
+        return false;
+    }
+
+    // wl-copy forks a server to own the selection; if it dies early we would
+    // get SIGPIPE mid-write and take the whole client down with it.
+    void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
+    FILE *p = popen(cmd, "w");
+    if (!p) {
+        signal(SIGPIPE, old_pipe);
+        err = std::string("cannot run: ") + cmd;
+        return false;
+    }
+    size_t wrote = fwrite(png.data(), 1, png.size(), p);
+    int rc = pclose(p);
+    signal(SIGPIPE, old_pipe);
+
+    if (wrote != png.size()) {
+        err = std::string("clipboard tool closed early: ") + cmd;
+        return false;
+    }
+    if (rc != 0) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%s exited with status %d", cmd, rc);
+        err = buf;
+        return false;
+    }
+    return true;
+}
+
+static bool take_screenshot(const std::string &address, std::string &err)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { err = std::string("socket: ") + strerror(errno); return false; }
@@ -595,24 +644,12 @@ static bool take_screenshot(const std::string &address, const std::string &dir,
         return false;
     }
 
-    if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
-        err = "cannot create " + dir + ": " + strerror(errno);
-        return false;
-    }
-
-    time_t now = time(0);
-    struct tm tmv;
-    localtime_r(&now, &tmv);
-    char stamp[32];
-    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
-    std::string path = dir + "/piko-screenshot-" + stamp + ".png";
-
     std::string rgb = rgb565_to_rgb888(pixels, info.width, info.height);
-    if (!png_write_rgb(path.c_str(), rgb, info.width, info.height, err))
+    std::string png;
+    if (!png_encode_rgb(rgb, info.width, info.height, png, err))
         return false;
 
-    saved_path = path;
-    return true;
+    return copy_png_to_clipboard(png, err);
 }
 
 void ClientApp::do_screenshot()
@@ -620,23 +657,18 @@ void ClientApp::do_screenshot()
     std::string address = address_->value() ? address_->value() : "";
     if (address.empty()) { fl_alert("Set the Zaurus address first."); return; }
 
-    const char *home = getenv("HOME");
-    std::string dir = shot_dir_.empty()
-        ? (std::string(home ? home : ".") + "/Pictures/piko")
-        : shot_dir_;
-
     shot_btn_->deactivate();
     shot_btn_->label("Grabbing...");
     Fl::check();
 
-    std::string path, err;
-    bool ok = take_screenshot(address, dir, path, err);
+    std::string err;
+    bool ok = take_screenshot(address, err);
 
     shot_btn_->label("Screenshot");
     shot_btn_->activate();
 
     if (ok)
-        fl_message("Saved %s", path.c_str());
+        fl_message("Screenshot copied to the clipboard.");
     else
         fl_alert("Screenshot failed:\n%s", err.c_str());
 }
@@ -666,7 +698,6 @@ ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &
     shot_btn_ = new Fl_Button(X + m + 482, Y + m, 110, 24, "Screenshot");
     shot_btn_->callback(screenshot_cb, this);
     shot_btn_->tooltip("Grab the device's screen and save it as a PNG on this machine");
-    shot_dir_ = cfg.get("transfer.screenshot_dir");
 
     aggregate_bar_ = new Fl_Progress(X + m, Y + m + 32, W - 2 * m, 20);
     aggregate_bar_->minimum(0);

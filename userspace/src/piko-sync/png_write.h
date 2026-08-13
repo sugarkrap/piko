@@ -31,9 +31,11 @@ inline void png_chunk(std::string &out, const char *type, const std::string &dat
     put_u32(out, c.final_value());
 }
 
-// `rgb` is width*height*3 bytes, 8-bit RGB, no padding.
-inline bool png_write_rgb(const char *path, const std::string &rgb,
-                          uint32_t width, uint32_t height, std::string &err)
+// `rgb` is width*height*3 bytes, 8-bit RGB, no padding. Produces the whole
+// PNG in memory so callers can hand it straight to a pipe without ever
+// touching the disk (the client copies to the clipboard, never saves).
+inline bool png_encode_rgb(const std::string &rgb, uint32_t width,
+                           uint32_t height, std::string &out, std::string &err)
 {
     if (rgb.size() != static_cast<size_t>(width) * height * 3) {
         err = "internal: RGB buffer size does not match the given geometry";
@@ -59,7 +61,7 @@ inline bool png_write_rgb(const char *path, const std::string &rgb,
         return false;
     }
 
-    std::string out;
+    out.clear();
     const unsigned char sig[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
     out.append(reinterpret_cast<const char *>(sig), 8);
 
@@ -75,14 +77,23 @@ inline bool png_write_rgb(const char *path, const std::string &rgb,
 
     png_chunk(out, "IDAT", std::string(reinterpret_cast<const char *>(&z[0]), zlen));
     png_chunk(out, "IEND", std::string());
+    return true;
+}
+
+inline bool png_write_rgb(const char *path, const std::string &rgb,
+                          uint32_t width, uint32_t height, std::string &err)
+{
+    std::string png;
+    if (!png_encode_rgb(rgb, width, height, png, err))
+        return false;
 
     FILE *f = fopen(path, "wb");
     if (!f) {
         err = std::string("cannot write ") + path;
         return false;
     }
-    size_t wrote = fwrite(out.data(), 1, out.size(), f);
-    bool ok = (wrote == out.size());
+    size_t wrote = fwrite(png.data(), 1, png.size(), f);
+    bool ok = (wrote == png.size());
     if (fclose(f) != 0)
         ok = false;
     if (!ok)
