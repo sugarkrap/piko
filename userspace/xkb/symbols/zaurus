@@ -69,6 +69,10 @@ xkb_symbols "basic" {
     key <AE08> { [        8,  parenleft,  NoSymbol,  NoSymbol ] };
     key <AE09> { [        9, parenright,  NoSymbol,  NoSymbol ] };
     key <AE10> { [        0, asciitilde,  Delete,    Delete   ] };
+    key <BKSP> {
+        type[Group1] = "FOUR_LEVEL",
+        symbols[Group1] = [ BackSpace, BackSpace, Delete, Delete ]
+    };
 
     // QWERTYUIOP row -- Fn gives programming punctuation / JP brackets.
     key <AD02> { [        w,          W, asciicircum, asciicircum ] };
