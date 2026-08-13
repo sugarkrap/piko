@@ -121,8 +121,8 @@ if [ "$BUILD_CLIENT" = "1" ]; then
         exit 1
     fi
 
-    CLIENT_CXXFLAGS="$("$FLTK_CONFIG" --cxxflags)"
-    CLIENT_LDFLAGS="$("$FLTK_CONFIG" --ldflags)"
+    CLIENT_CXXFLAGS="$("$FLTK_CONFIG" --use-images --cxxflags)"
+    CLIENT_LDFLAGS="$("$FLTK_CONFIG" --use-images --ldflags)"
     if [ "$FLTK_PREFIX_FIXUP" = "1" ]; then
         CLIENT_CXXFLAGS="$(printf '%s' "$CLIENT_CXXFLAGS" | sed "s|/usr/local|$HOST_FLTK_STAGE|g")"
         CLIENT_LDFLAGS="$(printf '%s' "$CLIENT_LDFLAGS" | sed "s|/usr/local|$HOST_FLTK_STAGE|g")"

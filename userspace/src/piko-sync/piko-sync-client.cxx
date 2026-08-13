@@ -9,6 +9,8 @@
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_PNG_Image.H>
+#include <FL/Fl_Shared_Image.H>
 #include <FL/Fl_Progress.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
@@ -52,6 +54,7 @@ static const char *DEFAULT_ADDRESS = "10.208.47.2";
 static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
 static const char *ROM_DEST_DIR = "/mnt/card/Emulation";
 static const int ROM_PANEL_H = 196;
+static const int ROM_CONNECT_SECS = 5;
 static int rom_columns_[] = { 190, 60, 90, 90, 0 };
 
 static std::string basename_of(const std::string &p)
@@ -1383,6 +1386,40 @@ void BuildRunner::finish(int rc)
     status_label_->redraw();
 }
 
+static bool connect_with_timeout(int fd, struct sockaddr_in *addr, int secs, std::string &err)
+{
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+
+    int rc = connect(fd, reinterpret_cast<struct sockaddr *>(addr), sizeof(*addr));
+    if (rc != 0 && errno != EINPROGRESS) {
+        err = strerror(errno);
+        return false;
+    }
+
+    if (rc != 0) {
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        struct timeval tv;
+        tv.tv_sec = secs;
+        tv.tv_usec = 0;
+        int n = select(fd + 1, 0, &wfds, 0, &tv);
+        if (n == 0) { err = "timed out reaching the device"; return false; }
+        if (n < 0) { err = strerror(errno); return false; }
+
+        int soerr = 0;
+        socklen_t len = sizeof(soerr);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len) != 0 || soerr != 0) {
+            err = strerror(soerr ? soerr : errno);
+            return false;
+        }
+    }
+
+    fcntl(fd, F_SETFL, fl);
+    return true;
+}
+
 static bool rom_request(const std::string &address, uint32_t type,
                         const std::string &payload, uint32_t want,
                         std::string &reply, std::string &err)
@@ -1405,8 +1442,8 @@ static bool rom_request(const std::string &address, uint32_t type,
         close(fd);
         return false;
     }
-    if (connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
-        err = std::string("cannot reach the device: ") + strerror(errno);
+    if (!connect_with_timeout(fd, &addr, ROM_CONNECT_SECS, err)) {
+        err = "cannot reach the device: " + err;
         close(fd);
         return false;
     }
@@ -1465,10 +1502,40 @@ static bool delete_rom(const std::string &address, const std::string &path, std:
     return true;
 }
 
+static bool set_rom_icon(const std::string &address, const std::string &rom_path,
+                         const std::string &png, std::string &err)
+{
+    RomIconMsg m;
+    m.rom_path = rom_path;
+    m.icon_name = "icon.png";
+    m.data = png;
+    std::string reply;
+    if (!rom_request(address, MSG_ROM_SET_ICON, encode(m), MSG_ROM_SET_ICON_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+static bool get_rom_icon(const std::string &address, const std::string &rom_path,
+                         std::string &png, std::string &err)
+{
+    PathMsg pm;
+    pm.path = rom_path;
+    std::string reply;
+    if (!rom_request(address, MSG_ROM_GET_ICON, encode(pm), MSG_ROM_GET_ICON_ACK, reply, err))
+        return false;
+    RomIconMsg m;
+    if (!decode_rom_icon(reply, m)) { err = "malformed icon reply"; return false; }
+    png = m.data;
+    return true;
+}
+
 class RomPane : public TransferPane {
 public:
     RomPane(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
-        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H)
+        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H), preview_image_(0)
     {
         int m = 10;
         int y = reserve_y();
@@ -1496,12 +1563,23 @@ public:
         delete_btn_ = new Fl_Button(X + m + 432, y, 110, 24, "Delete ROM");
         delete_btn_->callback(delete_cb, this);
 
-        roms_ = new Fl_Hold_Browser(X + m, y + 30, W - 2 * m, ROM_PANEL_H - 64);
+        icon_btn_ = new Fl_Button(X + m + 548, y, 100, 24, "Set Icon...");
+        icon_btn_->callback(icon_cb, this);
+        icon_btn_->tooltip("Choose the icon matchbox-desktop shows for this ROM");
+
+        preview_ = new Fl_Box(X + W - m - 48, y + 34, 48, 48);
+        preview_->box(FL_DOWN_BOX);
+        preview_->color(FL_BACKGROUND2_COLOR);
+
+        roms_ = new Fl_Hold_Browser(X + m, y + 30, W - 2 * m - 56, ROM_PANEL_H - 64);
+        roms_->callback(select_cb, this);
+        roms_->when(FL_WHEN_CHANGED);
         roms_->column_widths(rom_columns_);
         roms_->column_char('\t');
 
         tab->end();
-        refresh();
+        roms_->add("press Refresh to read the device's rom list");
+        Fl::add_timeout(0.4, first_refresh_cb, this);
     }
 
     std::string machine_for(const std::string &path)
@@ -1525,6 +1603,88 @@ public:
     }
 
 private:
+    static void first_refresh_cb(void *v) { ((RomPane *)v)->refresh(); }
+    static void select_cb(Fl_Widget *, void *v) { ((RomPane *)v)->show_icon(); }
+    static void icon_cb(Fl_Widget *, void *v) { ((RomPane *)v)->choose_icon(); }
+
+    const RomEntry *selected() const
+    {
+        int sel = roms_->value();
+        if (sel < 1 || (size_t)sel > entries_.size())
+            return 0;
+        return &entries_[sel - 1];
+    }
+
+    void show_icon()
+    {
+        const RomEntry *e = selected();
+        preview_->image(0);
+        delete preview_image_;
+        preview_image_ = 0;
+        if (!e) { preview_->redraw(); return; }
+
+        std::string png, err;
+        if (get_rom_icon(address(), e->path, png, err) && !png.empty()) {
+            const char *tmp = "/tmp/.piko-sync-icon-preview.png";
+            FILE *f = fopen(tmp, "wb");
+            if (f) {
+                bool wrote = fwrite(png.data(), 1, png.size(), f) == png.size();
+                fclose(f);
+                if (wrote) {
+                    preview_image_ = new Fl_PNG_Image(tmp);
+                    if (preview_image_->w() > 0)
+                        preview_->image(preview_image_);
+                }
+                remove(tmp);
+            }
+        }
+        preview_->redraw();
+    }
+
+    void choose_icon()
+    {
+        const RomEntry *e = selected();
+        if (!e) { fl_alert("Select a ROM first."); return; }
+
+        Fl_File_Chooser chooser(".", "PNG icons (*.png)",
+                                 Fl_File_Chooser::SINGLE, "Choose an icon");
+        chooser.show();
+        while (chooser.shown())
+            Fl::wait();
+        if (!chooser.value())
+            return;
+
+        FILE *f = fopen(chooser.value(), "rb");
+        if (!f) { fl_alert("Cannot read %s", chooser.value()); return; }
+        std::string png;
+        char buf[8192];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+            png.append(buf, n);
+        fclose(f);
+
+        if (png.size() < 8 || png.compare(1, 3, "PNG") != 0) {
+            fl_alert("%s is not a PNG image.", chooser.value());
+            return;
+        }
+        if (png.size() > MAX_CHUNK) {
+            fl_alert("That icon is %d KB; keep it under %d KB.",
+                     (int)(png.size() / 1024), (int)(MAX_CHUNK / 1024));
+            return;
+        }
+
+        std::string err;
+        std::string rom = e->path;
+        if (!set_rom_icon(address(), rom, png, err)) {
+            fl_alert("Could not set the icon:\n%s", err.c_str());
+            return;
+        }
+        refresh();
+        for (size_t i = 0; i < entries_.size(); i++) {
+            if (entries_[i].path == rom) { roms_->value((int)i + 1); break; }
+        }
+        show_icon();
+    }
     static void add_rom_cb(Fl_Widget *, void *v) { ((RomPane *)v)->add_rom(); }
     static void refresh_cb(Fl_Widget *, void *v) { ((RomPane *)v)->refresh(); }
 
@@ -1623,6 +1783,9 @@ private:
     Fl_Button *refresh_btn_;
     Fl_Button *delete_btn_;
     Fl_Hold_Browser *roms_;
+    Fl_Button *icon_btn_;
+    Fl_Box *preview_;
+    Fl_PNG_Image *preview_image_;
     std::vector<RomEntry> entries_;
 };
 

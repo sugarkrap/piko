@@ -50,7 +50,11 @@ enum MessageType {
     MSG_ROM_LIST           = 26,
     MSG_ROM_LIST_ACK       = 27,
     MSG_ROM_DELETE         = 28,
-    MSG_ROM_DELETE_ACK     = 29
+    MSG_ROM_DELETE_ACK     = 29,
+    MSG_ROM_SET_ICON       = 30,
+    MSG_ROM_SET_ICON_ACK   = 31,
+    MSG_ROM_GET_ICON       = 32,
+    MSG_ROM_GET_ICON_ACK   = 33
 };
 
 enum PutPolicy {
@@ -573,6 +577,34 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
 {
     size_t pos = 0;
     return get_u64(p, pos, m.free_bytes);
+}
+
+struct RomIconMsg {
+    std::string rom_path;
+    std::string icon_name;
+    std::string data;
+};
+inline std::string encode(const RomIconMsg &m)
+{
+    std::string p;
+    put_str16(p, m.rom_path);
+    put_str16(p, m.icon_name);
+    put_u32(p, static_cast<uint32_t>(m.data.size()));
+    p.append(m.data);
+    return p;
+}
+inline bool decode_rom_icon(const std::string &p, RomIconMsg &m)
+{
+    size_t pos = 0;
+    uint32_t len;
+    if (!get_str16(p, pos, m.rom_path) || !get_str16(p, pos, m.icon_name))
+        return false;
+    if (!get_u32(p, pos, len))
+        return false;
+    if (p.size() - pos < len)
+        return false;
+    m.data.assign(p, pos, len);
+    return true;
 }
 
 struct RomListAckMsg {

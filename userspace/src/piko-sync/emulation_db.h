@@ -13,6 +13,8 @@ namespace piko_sync {
 const char *const EMULATION_DIR = "/etc/zaurus";
 const char *const EMULATION_CFG = "/etc/zaurus/emulation.cfg";
 const char *const APPLICATIONS_DIR = "/usr/share/applications";
+const char *const PIXMAPS_DIR = "/usr/share/pixmaps";
+const char *const DEFAULT_ROM_ICON = "/usr/share/pixmaps/pocketsnes.png";
 const char FIELD_SEP = '|';
 
 struct RomEntry {
@@ -136,6 +138,12 @@ inline bool save_emulation_db(const std::vector<RomEntry> &db, const char *path 
     return true;
 }
 
+inline std::string icon_path_for(const std::string &machine, const std::string &rom_path)
+{
+    return std::string(PIXMAPS_DIR) + "/" + lowercase(machine) + "-"
+           + slugify(strip_extension(basename_of_path(rom_path))) + ".png";
+}
+
 inline std::string desktop_contents(const RomEntry &e)
 {
     std::string name = strip_extension(basename_of_path(e.path));
@@ -144,8 +152,10 @@ inline std::string desktop_contents(const RomEntry &e)
     out += "Type=Application\n";
     out += "Name=" + name + "\n";
     out += "Comment=" + e.machine + " game\n";
-    out += "Exec=/usr/sbin/matchbox-fbrun -y -n " + e.machine
-           + " -- /usr/local/bin/pocketsnes-run interp \"" + e.path + "\"\n";
+    out += "Exec=/usr/local/bin/pocketsnes-run interp \"" + e.path + "\"\n";
+    out += "X-Piko-Heavy=true\n";
+    out += "X-Piko-Heavy-Reason=" + e.machine
+           + " emulation needs the framebuffer and the input devices to itself.\n";
     out += "Icon=" + e.icon + "\n";
     out += "Terminal=false\n";
     out += "Categories=Game;Emulation;" + e.machine + ";\n";

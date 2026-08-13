@@ -113,6 +113,13 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     chmod 0755 "$OVERLAY/usr/local/bin/pocketsnes-run"
     cp "$PSNES_SRC/pocketsnes-interp.desktop" \
         "$OVERLAY/usr/share/applications/pocketsnes.desktop"
+    cp "$REPO/userspace/src/PocketSNES/data/pocketsnes.png" \
+        "$OVERLAY/usr/share/pixmaps/pocketsnes.png"
+    mkdir -p "$OVERLAY/usr/local/share/pocketsnes"
+    for png in "$REPO"/userspace/src/PocketSNES/data/*.png; do
+        [ -f "$png" ] || continue
+        cp "$png" "$OVERLAY/usr/local/share/pocketsnes/"
+    done
     echo "    pocketsnes: /usr/local/bin/PocketSNES (+ pocketsnes-run, launcher)"
 else
     echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"

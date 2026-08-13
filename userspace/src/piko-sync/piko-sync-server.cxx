@@ -280,6 +280,9 @@ private:
     void register_rom(const std::string &rom_path);
     void handle_rom_list(const std::string &payload);
     void handle_rom_delete(const std::string &payload);
+    void handle_rom_set_icon(const std::string &payload);
+    void handle_rom_get_icon(const std::string &payload);
+    bool write_desktop_for(const RomEntry &e, std::string &err);
 
     std::string dest_dir_;
     std::string rom_machine_;
@@ -482,6 +485,8 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_SCREENSHOT:       handle_screenshot(payload); return;
         case MSG_ROM_LIST:         handle_rom_list(payload); return;
         case MSG_ROM_DELETE:       handle_rom_delete(payload); return;
+        case MSG_ROM_SET_ICON:     handle_rom_set_icon(payload); return;
+        case MSG_ROM_GET_ICON:     handle_rom_get_icon(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -737,7 +742,7 @@ void Connection::register_rom(const std::string &rom_path)
     if (e.backend.empty())
         e.backend = "pocketsnes";
     e.desktop = desktop_name_for(e.machine, rom_path);
-    e.icon = e.backend;
+    e.icon = DEFAULT_ROM_ICON;
 
     std::vector<RomEntry> db = load_emulation_db();
     for (size_t i = 0; i < db.size(); i++) {
@@ -826,6 +831,101 @@ void Connection::handle_rom_delete(const std::string &payload)
 
     ack.ok = true;
     send(MSG_ROM_DELETE_ACK, encode(ack));
+    close_connection();
+}
+
+bool Connection::write_desktop_for(const RomEntry &e, std::string &err)
+{
+    mkdir_p(APPLICATIONS_DIR);
+    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
+    std::string contents = desktop_contents(e);
+    int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) { err = "cannot write " + dpath; return false; }
+    bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
+    close(fd);
+    if (!ok) { err = dpath + " is truncated"; return false; }
+    return true;
+}
+
+void Connection::handle_rom_set_icon(const std::string &payload)
+{
+    RomIconMsg m;
+    OkReasonMsg ack;
+    if (!decode_rom_icon(payload, m)) { fail("malformed ROM_SET_ICON"); return; }
+
+    std::vector<RomEntry> db = load_emulation_db();
+    int idx = -1;
+    for (size_t i = 0; i < db.size(); i++)
+        if (db[i].path == m.rom_path) { idx = (int)i; break; }
+    if (idx < 0) {
+        ack.ok = false;
+        ack.reason = "no such rom in " + std::string(EMULATION_CFG);
+        send(MSG_ROM_SET_ICON_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    std::string ipath = icon_path_for(db[idx].machine, db[idx].path);
+    mkdir_p(PIXMAPS_DIR);
+    int fd = open_retry(ipath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        ack.ok = false;
+        ack.reason = "cannot write " + ipath + ": " + strerror(errno);
+        send(MSG_ROM_SET_ICON_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+    bool ok = write_retry(fd, m.data.data(), m.data.size()) == (ssize_t)m.data.size();
+    close(fd);
+    if (!ok) {
+        ack.ok = false;
+        ack.reason = ipath + " is truncated";
+        send(MSG_ROM_SET_ICON_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    db[idx].icon = ipath;
+    std::string err;
+    if (!save_emulation_db(db) || !write_desktop_for(db[idx], err)) {
+        ack.ok = false;
+        ack.reason = err.empty() ? "cannot update " + std::string(EMULATION_CFG) : err;
+        send(MSG_ROM_SET_ICON_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    app_->set_status("icon set for " + basename_of_path(db[idx].path));
+    ack.ok = true;
+    send(MSG_ROM_SET_ICON_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_rom_get_icon(const std::string &payload)
+{
+    PathMsg m;
+    if (!decode_path(payload, m)) { fail("malformed ROM_GET_ICON"); return; }
+
+    std::vector<RomEntry> db = load_emulation_db();
+    std::string ipath;
+    for (size_t i = 0; i < db.size(); i++)
+        if (db[i].path == m.path) { ipath = db[i].icon; break; }
+
+    RomIconMsg out;
+    out.rom_path = m.path;
+    out.icon_name = ipath;
+    if (!ipath.empty()) {
+        FILE *f = fopen(ipath.c_str(), "rb");
+        if (f) {
+            char buf[8192];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+                out.data.append(buf, n);
+            fclose(f);
+        }
+    }
+    send(MSG_ROM_GET_ICON_ACK, encode(out));
     close_connection();
 }
 
