@@ -90,7 +90,9 @@ fi
 
 BIN_OUT="$OUT_DIR/usr/bin/mplayer"
 if [ "$FORCE" -eq 0 ] && [ -f "$BIN_OUT" ] && [ -f "$BUILD_DIR/mplayer" ] \
-   && [ "$BUILD_DIR/mplayer" -nt "$BUILD_DIR/configure" ] && [ "$BIN_OUT" -nt "$BUILD_DIR/mplayer" ]; then
+   && [ "$BUILD_DIR/mplayer" -nt "$BUILD_DIR/configure" ] \
+   && [ "$BUILD_DIR/mplayer" -nt "$REPO/tools/userspace/build-mplayer.sh" ] \
+   && [ "$BIN_OUT" -nt "$BUILD_DIR/mplayer" ]; then
     echo "==> $BIN_OUT already up to date (pass --force to rebuild)"
     exit 0
 fi
@@ -107,7 +109,7 @@ echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
   --strip="${CROSS_COMPILE}strip" \
   --nm="${CROSS_COMPILE}nm" \
   --enable-cross-compile \
-  --extra-cflags="-I${ALSA_STAGE_DIR}/usr/include -I${X11_STAGE_DIR}/usr/include" \
+  --extra-cflags="-mcpu=xscale -I${ALSA_STAGE_DIR}/usr/include -I${X11_STAGE_DIR}/usr/include" \
   --extra-ldflags="-L${ALSA_STAGE_DIR}/usr/lib -L${X11_STAGE_DIR}/usr/lib -Wl,-rpath-link,${X11_STAGE_DIR}/usr/lib" \
   --extra-libs="-lasound -lpthread -lrt" \
   --enable-armv5te --disable-armv6 --disable-armv6t2 \
@@ -117,7 +119,7 @@ echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
   \
   --disable-mencoder \
   --disable-gui \
-  --enable-x11 --disable-xv --disable-xvmc --disable-vdpau --disable-vda \
+  --disable-xv --disable-xvmc --disable-vdpau --disable-vda \
   --disable-gl --disable-matrixview --disable-direct3d --disable-directx \
   --disable-vm --disable-xinerama --disable-xss --disable-xshape \
   --disable-dga1 --disable-dga2 \
@@ -201,7 +203,8 @@ case " $needed " in
 esac
 for n in $needed; do
     case "$n" in
-        libX11.so.*|libXext.so.*|libxcb.so.*|libXau.so.*|libXdmcp.so.*|libc.so.*) : ;;
+        libX11.so.*|libXext.so.*|libxcb.so.*|libXau.so.*|libXdmcp.so.*) : ;;
+        libpng16.so.*|libz.so.*|libc.so.*) : ;;
         *)
             echo "tools/userspace/build-mplayer.sh: mplayer NEEDs $n, which the ROM does not ship." >&2
             echo "Add it to build-matchbox-payload.sh's LIBS, or find why it got linked." >&2

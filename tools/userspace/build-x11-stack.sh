@@ -60,6 +60,8 @@ export PKG_CONFIG_LIBDIR="$STAGE/usr/lib/pkgconfig:$STAGE/usr/share/pkgconfig:/u
 export PKG_CONFIG_PATH=
 export CPPFLAGS="-I$STAGE/usr/include"
 export LDFLAGS="-L$STAGE/usr/lib -Wl,-rpath-link=$STAGE/usr/lib"
+export CFLAGS="${CFLAGS:--O2} -mcpu=xscale"
+export CXXFLAGS="${CXXFLAGS:--O2} -mcpu=xscale"
 
 echo "==> applying local X11 patches (tools/userspace/setup-x11-src.sh)"
 if [ "$FORCE" -eq 1 ]; then
