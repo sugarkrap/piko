@@ -1,5 +1,6 @@
 
 #include "../protocol.h"
+#include "../rom_detect.h"
 #include "../transfer_state.h"
 #include "../transfer_queue.h"
 
@@ -529,6 +530,43 @@ static void test_file_offer_dest_dir_optional()
     check(!decode_file_offer(std::string("\0\1", 2), d), "truncated offer still rejected");
 }
 
+static void write_rom(const char *path, long size, long hdr, bool copier, unsigned chk)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    long total = size + (copier ? 512 : 0);
+    char *z = (char *)calloc(1, total);
+    if (hdr >= 0) {
+        long off = (copier ? 512 : 0) + hdr;
+        unsigned comp = chk ^ 0xffff;
+        z[off + 0x1c] = comp & 0xff;  z[off + 0x1d] = (comp >> 8) & 0xff;
+        z[off + 0x1e] = chk & 0xff;   z[off + 0x1f] = (chk >> 8) & 0xff;
+    }
+    fwrite(z, 1, total, f);
+    free(z);
+    fclose(f);
+}
+
+static void test_rom_detection()
+{
+    printf("rom detect: snes header checksum, both mappings and the copier header\n");
+    write_rom("/tmp/pst_lo.smc", 512 * 1024, 0x7fc0, false, 0x1234);
+    write_rom("/tmp/pst_hi.sfc", 1024 * 1024, 0xffc0, false, 0xabcd);
+    write_rom("/tmp/pst_cop.smc", 512 * 1024, 0x7fc0, true, 0x1234);
+    write_rom("/tmp/pst_zero.bin", 512 * 1024, -1, false, 0);
+
+    check(detect_machine("/tmp/pst_lo.smc") == "SNES", "LoROM header at 0x7fc0 detected");
+    check(detect_machine("/tmp/pst_hi.sfc") == "SNES", "HiROM header at 0xffc0 detected");
+    check(detect_machine("/tmp/pst_cop.smc") == "SNES", "512-byte copier header skipped");
+    check(detect_machine("/tmp/pst_zero.bin").empty(), "zeroed header is not a rom");
+    check(detect_machine("/tmp/pst_missing.smc").empty(), "missing file is not a rom");
+    check(machine_backend("SNES") == "pocketsnes", "SNES maps to pocketsnes");
+    check(machine_backend("MEGADRIVE").empty(), "unknown machine has no backend");
+
+    remove("/tmp/pst_lo.smc"); remove("/tmp/pst_hi.sfc");
+    remove("/tmp/pst_cop.smc"); remove("/tmp/pst_zero.bin");
+}
+
 int main()
 {
     test_message_roundtrips();
@@ -561,6 +599,7 @@ int main()
 
     test_screenshot_info_roundtrip();
     test_file_offer_dest_dir_optional();
+    test_rom_detection();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {
