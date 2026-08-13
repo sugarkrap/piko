@@ -74,6 +74,32 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     PAYLOAD_DIR="${PAYLOAD_DIR:-/tmp/mb-payload}"
     "$REPO/tools/userspace/build-matchbox-payload.sh"
     cp -a "$PAYLOAD_DIR/." "$OVERLAY/"
+
+    # piko-sync-server links against the staged target FLTK the X11 stack just
+    # built, so it has to come after it. Shipped here rather than from
+    # build-matchbox-payload.sh's LAUNCHERS list because that script is shared
+    # with the live-deploy path, which does not ship this binary -- adding it
+    # there would put a dead launcher on deployed boards.
+    echo "==> building piko-sync-server (tools/userspace/build-piko-sync.sh --server-only)"
+    PIKO_SYNC_IPK_OUT="$STAGE/ipk"
+    mkdir -p "$PIKO_SYNC_IPK_OUT"
+    STAGE="$REPO/userspace/stage-target" OUTDIR="$PIKO_SYNC_IPK_OUT" \
+        "$REPO/tools/userspace/build-piko-sync.sh" --server-only
+
+    PIKO_SYNC_BIN="$REPO/userspace/src/piko-sync/piko-sync-server"
+    if [ ! -f "$PIKO_SYNC_BIN" ]; then
+        echo "build-mtd3-jffs2: build-piko-sync.sh reported success but there is no" >&2
+        echo "  $PIKO_SYNC_BIN -- refusing to ship a launcher with no binary" >&2
+        exit 1
+    fi
+    mkdir -p "$OVERLAY/usr/bin" "$OVERLAY/usr/share/applications" "$OVERLAY/usr/share/pixmaps"
+    cp "$PIKO_SYNC_BIN" "$OVERLAY/usr/bin/piko-sync-server"
+    chmod 0755 "$OVERLAY/usr/bin/piko-sync-server"
+    cp "$REPO/userspace/desktop/piko-sync-server.desktop" \
+        "$OVERLAY/usr/share/applications/piko-sync-server.desktop"
+    cp "$REPO/userspace/desktop/piko-sync-server.png" \
+        "$OVERLAY/usr/share/pixmaps/piko-sync-server.png"
+    echo "    piko-sync: /usr/bin/piko-sync-server (+ launcher, icon)"
 else
     echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"
 fi

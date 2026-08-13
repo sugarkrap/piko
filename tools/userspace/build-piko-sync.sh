@@ -101,20 +101,50 @@ if [ "$BUILD_SERVER" = "1" ]; then
 fi
 
 if [ "$BUILD_CLIENT" = "1" ]; then
-    if ! command -v fltk-config >/dev/null 2>&1; then
-        echo "tools/userspace/build-piko-sync.sh: no host fltk-config -- skipping piko-sync-client" >&2
-        echo "  install FLTK 1.3 development files, or build FLTK for the host from" >&2
-        echo "  userspace/src/fltk, then re-run with --client-only." >&2
-    else
-        echo "==> building piko-sync-client against the host's FLTK"
-        make -C "$SRC" client \
-            HOSTCXX="${HOSTCXX:-g++}" \
-            HOST_FLTK_CXXFLAGS="$(fltk-config --cxxflags)" \
-            HOST_FLTK_LDFLAGS="$(fltk-config --ldflags)"
-        echo "    built: $SRC/piko-sync-client"
-        echo "    run it from the piko repo root (or set PIKO_SYNC_REPO_ROOT) so"
-        echo "    the Build && Deploy tab can find tools/build-and-deploy.sh"
+    # The host FLTK is usually not installed system-wide here -- build-fltk.sh
+    # stages it under userspace/stage-host with a configured prefix of
+    # /usr/local, so that stage copy's fltk-config reports /usr/local paths
+    # that do not exist. Rewrite the prefix when we fall back to it.
+    HOST_FLTK_STAGE="$REPO/userspace/stage-host/usr/local"
+    FLTK_CONFIG="${FLTK_CONFIG:-}"
+    FLTK_PREFIX_FIXUP=0
+    if [ -n "$FLTK_CONFIG" ]; then
+        :
+    elif command -v fltk-config >/dev/null 2>&1; then
+        FLTK_CONFIG="fltk-config"
+    elif [ -x "$HOST_FLTK_STAGE/bin/fltk-config" ]; then
+        FLTK_CONFIG="$HOST_FLTK_STAGE/bin/fltk-config"
+        FLTK_PREFIX_FIXUP=1
     fi
+    if [ -z "$FLTK_CONFIG" ]; then
+        echo "tools/userspace/build-piko-sync.sh: no host fltk-config found." >&2
+        echo "  Looked on PATH and at $HOST_FLTK_STAGE/bin/fltk-config." >&2
+        echo "  Build FLTK for the host (tools/userspace/build-fltk.sh), install FLTK 1.3" >&2
+        echo "  development files, or set FLTK_CONFIG to one explicitly." >&2
+        echo "  Pass --server-only if you genuinely do not want the client." >&2
+        exit 1
+    fi
+
+    CLIENT_CXXFLAGS="$("$FLTK_CONFIG" --cxxflags)"
+    CLIENT_LDFLAGS="$("$FLTK_CONFIG" --ldflags)"
+    if [ "$FLTK_PREFIX_FIXUP" = "1" ]; then
+        CLIENT_CXXFLAGS="$(printf '%s' "$CLIENT_CXXFLAGS" | sed "s|/usr/local|$HOST_FLTK_STAGE|g")"
+        CLIENT_LDFLAGS="$(printf '%s' "$CLIENT_LDFLAGS" | sed "s|/usr/local|$HOST_FLTK_STAGE|g")"
+    fi
+
+    echo "==> building piko-sync-client against $FLTK_CONFIG"
+    make -C "$SRC" client \
+        HOSTCXX="${HOSTCXX:-g++}" \
+        HOST_FLTK_CXXFLAGS="$CLIENT_CXXFLAGS" \
+        HOST_FLTK_LDFLAGS="$CLIENT_LDFLAGS"
+    if [ ! -x "$SRC/piko-sync-client" ]; then
+        echo "tools/userspace/build-piko-sync.sh: make reported success but there is no" >&2
+        echo "  $SRC/piko-sync-client -- refusing to claim the client was built" >&2
+        exit 1
+    fi
+    echo "    built: $SRC/piko-sync-client"
+    echo "    run it from the piko repo root (or set PIKO_SYNC_REPO_ROOT) so"
+    echo "    the Build && Deploy tab can find tools/build-and-deploy.sh"
 fi
 
 if [ -n "$DEPLOY_TARGET" ]; then
