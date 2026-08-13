@@ -8,7 +8,7 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
-#include <FL/Fl_Select_Browser.H>
+#include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Progress.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
@@ -51,7 +51,7 @@ using namespace piko_sync;
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
 static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
 static const char *ROM_DEST_DIR = "/mnt/card/Emulation";
-static const int ROM_PANEL_H = 150;
+static const int ROM_PANEL_H = 196;
 static int rom_columns_[] = { 190, 60, 90, 90, 0 };
 
 static std::string basename_of(const std::string &p)
@@ -185,8 +185,9 @@ public:
 
     virtual std::string machine_for(const std::string &path) { (void)path; return std::string(); }
     virtual void after_transfer_complete() {}
+    virtual std::string dest_for(const QueuedFile &qf) { (void)qf; return dest_dir(); }
 
-    void store_settings(Settings &cfg) const
+    virtual void store_settings(Settings &cfg) const
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
@@ -362,7 +363,7 @@ void FileSend::send_offer()
 {
     QueuedFile &qf = app_->file(file_index_);
     FileOfferMsg fo; fo.name = qf.name; fo.total_size = qf.total_size;
-    fo.dest_dir = app_->dest_dir();
+    fo.dest_dir = app_->dest_for(qf);
     fo.rom_machine = qf.machine;
     if (!send_frame_blocking(fd_, MSG_FILE_OFFER, encode(fo))) { terminate(XFER_RECONNECTING, "", true); return; }
     phase_ = WAIT_OFFER_ACK;
@@ -1453,11 +1454,18 @@ static bool delete_rom(const std::string &address, const std::string &path, std:
 class RomPane : public TransferPane {
 public:
     RomPane(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
-        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H, "rom.dest_dir", ROM_DEST_DIR)
+        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H)
     {
         int m = 10;
         int y = reserve_y();
         tab->begin();
+
+        rom_dest_ = new Fl_Input(X + m + 90, y, 200, 24, "ROM folder:");
+        rom_dest_->align(FL_ALIGN_LEFT);
+        rom_dest_->value(cfg.get("rom.dest_dir", ROM_DEST_DIR).c_str());
+        rom_dest_->tooltip("Where files detected as ROMs are sent");
+
+        y += 30;
 
         backend_ = new Fl_Choice(X + m + 70, y, 140, 24, "Backend:");
         backend_->align(FL_ALIGN_LEFT);
@@ -1470,7 +1478,7 @@ public:
         delete_btn_ = new Fl_Button(X + m + 316, y, 110, 24, "Delete ROM");
         delete_btn_->callback(delete_cb, this);
 
-        roms_ = new Fl_Select_Browser(X + m, y + 30, W - 2 * m, ROM_PANEL_H - 34);
+        roms_ = new Fl_Hold_Browser(X + m, y + 30, W - 2 * m, ROM_PANEL_H - 64);
         roms_->column_widths(rom_columns_);
         roms_->column_char('\t');
 
@@ -1484,6 +1492,19 @@ public:
     }
 
     void after_transfer_complete() { refresh(); }
+
+    std::string dest_for(const QueuedFile &qf)
+    {
+        if (!qf.machine.empty() && rom_dest_->value() && *rom_dest_->value())
+            return rom_dest_->value();
+        return dest_dir();
+    }
+
+    void store_settings(Settings &cfg) const
+    {
+        TransferPane::store_settings(cfg);
+        cfg.set("rom.dest_dir", rom_dest_->value() ? rom_dest_->value() : "");
+    }
 
 private:
     static void refresh_cb(Fl_Widget *, void *v) { ((RomPane *)v)->refresh(); }
@@ -1545,10 +1566,11 @@ private:
         refresh();
     }
 
+    Fl_Input *rom_dest_;
     Fl_Choice *backend_;
     Fl_Button *refresh_btn_;
     Fl_Button *delete_btn_;
-    Fl_Select_Browser *roms_;
+    Fl_Hold_Browser *roms_;
     std::vector<RomEntry> entries_;
 };
 
@@ -1564,19 +1586,15 @@ int main(int argc, char **argv)
     Fl_Tabs tabs(0, 0, 720, 520);
     tabs.begin();
 
-    Fl_Group transfer_tab(0, 24, 720, 496, "Transfer");
-    TransferPane client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
+    Fl_Group transfer_tab(0, 24, 720, 496, "Transfer && Manage");
+    RomPane client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
     transfer_tab.end();
-
-    Fl_Group rom_tab(0, 24, 720, 496, "ROMs");
-    RomPane roms(&rom_tab, 0, 24, 720, 496, settings.cfg());
-    rom_tab.end();
 
     Fl_Group deploy_tab(0, 24, 720, 496, "Build && Deploy");
     BuildRunner runner(&deploy_tab, 0, 24, 720, 496, settings.cfg(), &settings);
     deploy_tab.end();
 
-    settings.bind(&client, &roms, &runner);
+    settings.bind(&client, 0, &runner);
 
     tabs.end();
     tabs.resizable(transfer_tab);
