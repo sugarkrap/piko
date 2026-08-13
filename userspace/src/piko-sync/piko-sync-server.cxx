@@ -33,6 +33,8 @@
 #include "transfer_table.h"
 #include "net_io.h"
 #include "icon_xpm.h"
+#include "rom_detect.h"
+#include "emulation_db.h"
 
 using namespace piko_sync;
 
@@ -275,8 +277,10 @@ private:
     void handle_free_space(const std::string &payload);
     void handle_deploy_begin(const std::string &payload);
     void handle_screenshot(const std::string &payload);
+    void register_rom(const std::string &rom_path);
 
     std::string dest_dir_;
+    std::string rom_machine_;
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason);
@@ -551,6 +555,7 @@ void Connection::handle_offer(const std::string &payload)
 
     original_name_ = fo.name;
     total_size_ = fo.total_size;
+    rom_machine_ = fo.rom_machine;
 
     TransferKey key(fo.name, fo.total_size);
     TransferMap::const_iterator it = app_->transfer_map().find(key);
@@ -709,11 +714,56 @@ void Connection::handle_complete(const std::string &payload)
     app_->transfer_map()[key].complete = true;
     app_->note_complete_name(final_name_);
 
+    if (!rom_machine_.empty())
+        register_rom(final_path);
+
     FileCompleteAckMsg ack; ack.ok = true;
     send(MSG_FILE_COMPLETE_ACK, encode(ack));
     app_->queue().set_status(row_, XFER_DONE);
     app_->sync_table();
     close_connection();
+}
+
+void Connection::register_rom(const std::string &rom_path)
+{
+    RomEntry e;
+    e.path = rom_path;
+    e.machine = rom_machine_;
+    e.backend = machine_backend(rom_machine_);
+    if (e.backend.empty())
+        e.backend = "pocketsnes";
+    e.desktop = desktop_name_for(e.machine, rom_path);
+    e.icon = e.backend;
+
+    std::vector<RomEntry> db = load_emulation_db();
+    for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path == e.path) { db.erase(db.begin() + i); break; }
+    }
+    db.push_back(e);
+
+    mkdir_p(EMULATION_DIR);
+    if (!save_emulation_db(db)) {
+        app_->set_status("rom registered but " + std::string(EMULATION_CFG) + " is not writable");
+        return;
+    }
+
+    mkdir_p(APPLICATIONS_DIR);
+    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
+    std::string contents = desktop_contents(e);
+    int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        app_->set_status("rom registered but cannot write " + dpath);
+        return;
+    }
+    bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
+    close(fd);
+    if (!ok) {
+        app_->set_status("rom registered but " + dpath + " is truncated");
+        return;
+    }
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    app_->set_status(e.machine + " rom registered: " + e.desktop);
 }
 
 void Connection::handle_put_offer(const std::string &payload)
