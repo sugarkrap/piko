@@ -50,6 +50,7 @@ using namespace piko_sync;
 
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
 static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
+static const char *ROM_DEST_DIR = "/mnt/card/Emulation";
 static const int ROM_PANEL_H = 150;
 static int rom_columns_[] = { 190, 60, 90, 90, 0 };
 
@@ -177,7 +178,9 @@ class BuildRunner;
 class TransferPane {
 public:
     TransferPane(Fl_Group *transfer_tab, int X, int Y, int W, int H,
-                 const Settings &cfg, int reserve_h = 0);
+                 const Settings &cfg, int reserve_h = 0,
+                 const char *dest_key = "transfer.dest_dir",
+                 const char *dest_default = DEFAULT_DEST_DIR);
     virtual ~TransferPane();
 
     virtual std::string machine_for(const std::string &path) { (void)path; return std::string(); }
@@ -187,7 +190,7 @@ public:
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
-        cfg.set("transfer.dest_dir", dest_->value() ? dest_->value() : "");
+        cfg.set(dest_key_, dest_->value() ? dest_->value() : "");
     }
 
     TransferQueue &queue() { return queue_; }
@@ -250,6 +253,7 @@ private:
 
     Fl_Input *address_;
     Fl_Input *dest_;
+    std::string dest_key_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
@@ -687,7 +691,8 @@ void TransferPane::do_screenshot()
 }
 
 TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
-                           const Settings &cfg, int reserve_h)
+                           const Settings &cfg, int reserve_h,
+                           const char *dest_key, const char *dest_default)
 {
     (void)tab;
     int m = 10;
@@ -715,7 +720,8 @@ TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
 
     dest_ = new Fl_Input(X + m + 90, Y + m + 32, W - 2 * m - 90, 24, "Folder:");
     dest_->align(FL_ALIGN_LEFT);
-    dest_->value(cfg.get("transfer.dest_dir", DEFAULT_DEST_DIR).c_str());
+    dest_key_ = dest_key;
+    dest_->value(cfg.get(dest_key_, dest_default).c_str());
     dest_->tooltip("Absolute path on the Zaurus where incoming files are written");
 
     aggregate_bar_ = new Fl_Progress(X + m, Y + m + 64, W - 2 * m, 20);
@@ -866,13 +872,14 @@ private:
 
 class SettingsStore {
 public:
-    SettingsStore() : client_(0), runner_(0) { cfg_.load(); }
+    SettingsStore() : client_(0), roms_(0), runner_(0) { cfg_.load(); }
 
     const Settings &cfg() const { return cfg_; }
 
-    void bind(TransferPane *client, BuildRunner *runner)
+    void bind(TransferPane *client, TransferPane *roms, BuildRunner *runner)
     {
         client_ = client;
+        roms_ = roms;
         runner_ = runner;
     }
 
@@ -881,6 +888,7 @@ public:
 private:
     Settings cfg_;
     TransferPane *client_;
+    TransferPane *roms_;
     BuildRunner *runner_;
 };
 
@@ -1007,6 +1015,8 @@ void SettingsStore::save_now()
 {
     if (client_)
         client_->store_settings(cfg_);
+    if (roms_)
+        roms_->store_settings(cfg_);
     if (runner_)
         runner_->store_settings(cfg_);
     cfg_.save();
@@ -1443,7 +1453,7 @@ static bool delete_rom(const std::string &address, const std::string &path, std:
 class RomPane : public TransferPane {
 public:
     RomPane(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
-        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H)
+        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H, "rom.dest_dir", ROM_DEST_DIR)
     {
         int m = 10;
         int y = reserve_y();
@@ -1566,7 +1576,7 @@ int main(int argc, char **argv)
     BuildRunner runner(&deploy_tab, 0, 24, 720, 496, settings.cfg(), &settings);
     deploy_tab.end();
 
-    settings.bind(&client, &runner);
+    settings.bind(&client, &roms, &runner);
 
     tabs.end();
     tabs.resizable(transfer_tab);
