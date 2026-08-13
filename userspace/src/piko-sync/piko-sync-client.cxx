@@ -466,10 +466,6 @@ void FileSend::handle_frame(uint32_t type, const std::string &payload)
     }
 }
 
-// Screenshots are a short, self-contained request/response, so unlike the
-// file queue (which is fully async, see FileSend) this runs inline with a
-// socket timeout. ~600KB over the board's flaky WiFi is a second or two; the
-// timeout is what keeps a dropped association from wedging the UI forever.
 static const int SHOT_TIMEOUT_SECS = 20;
 
 static bool shot_recv_frame(int fd, FrameReader &reader, uint32_t &type,
@@ -496,9 +492,6 @@ static bool shot_recv_frame(int fd, FrameReader &reader, uint32_t &type,
     }
 }
 
-// FLTK 1.3 can only put *text* on the clipboard (Fl::copy); image clipboard
-// support arrived in 1.4. So hand the PNG to whichever clipboard tool the
-// session has, over a pipe -- the screenshot never touches the disk.
 static const char *find_clipboard_cmd()
 {
     struct Candidate { const char *bin; const char *cmd; };
@@ -523,8 +516,6 @@ static bool copy_png_to_clipboard(const std::string &png, std::string &err)
         return false;
     }
 
-    // wl-copy forks a server to own the selection; if it dies early we would
-    // get SIGPIPE mid-write and take the whole client down with it.
     void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
     FILE *p = popen(cmd, "w");
     if (!p) {

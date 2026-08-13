@@ -75,11 +75,6 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     "$REPO/tools/userspace/build-matchbox-payload.sh"
     cp -a "$PAYLOAD_DIR/." "$OVERLAY/"
 
-    # piko-sync-server links against the staged target FLTK the X11 stack just
-    # built, so it has to come after it. Shipped here rather than from
-    # build-matchbox-payload.sh's LAUNCHERS list because that script is shared
-    # with the live-deploy path, which does not ship this binary -- adding it
-    # there would put a dead launcher on deployed boards.
     echo "==> building piko-sync-server (tools/userspace/build-piko-sync.sh --server-only)"
     PIKO_SYNC_IPK_OUT="$STAGE/ipk"
     mkdir -p "$PIKO_SYNC_IPK_OUT"

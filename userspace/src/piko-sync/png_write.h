@@ -2,13 +2,6 @@
 #ifndef PIKO_SYNC_PNG_WRITE_H
 #define PIKO_SYNC_PNG_WRITE_H
 
-// Minimal PNG writer, host side only (the client links -lz; the device never
-// encodes anything -- see MSG_SCREENSHOT in protocol.h for why).
-//
-// It leans on two things protocol.h already has and PNG happens to want
-// byte-for-byte: put_u32() emits big-endian, and Crc32 is the same CRC-32
-// (poly 0xedb88320, pre/post-inverted) that PNG specifies for chunk CRCs.
-
 #include <stdio.h>
 #include <stdint.h>
 #include <zlib.h>
@@ -31,9 +24,6 @@ inline void png_chunk(std::string &out, const char *type, const std::string &dat
     put_u32(out, c.final_value());
 }
 
-// `rgb` is width*height*3 bytes, 8-bit RGB, no padding. Produces the whole
-// PNG in memory so callers can hand it straight to a pipe without ever
-// touching the disk (the client copies to the clipboard, never saves).
 inline bool png_encode_rgb(const std::string &rgb, uint32_t width,
                            uint32_t height, std::string &out, std::string &err)
 {
@@ -42,9 +32,6 @@ inline bool png_encode_rgb(const std::string &rgb, uint32_t width,
         return false;
     }
 
-    // Raw scanlines, each prefixed with filter type 0 (None). Filtering would
-    // shrink the file, but these are 640x480 debug captures -- not worth the
-    // code.
     std::string raw;
     raw.reserve(static_cast<size_t>(height) * (1 + width * 3));
     for (uint32_t y = 0; y < height; y++) {
@@ -68,11 +55,11 @@ inline bool png_encode_rgb(const std::string &rgb, uint32_t width,
     std::string ihdr;
     put_u32(ihdr, width);
     put_u32(ihdr, height);
-    ihdr.append(1, 8);    // bit depth
-    ihdr.append(1, 2);    // colour type: truecolour RGB
-    ihdr.append(1, '\0'); // compression
-    ihdr.append(1, '\0'); // filter
-    ihdr.append(1, '\0'); // interlace
+    ihdr.append(1, 8);
+    ihdr.append(1, 2);
+    ihdr.append(1, '\0');
+    ihdr.append(1, '\0');
+    ihdr.append(1, '\0');
     png_chunk(out, "IHDR", ihdr);
 
     png_chunk(out, "IDAT", std::string(reinterpret_cast<const char *>(&z[0]), zlen));
@@ -101,8 +88,6 @@ inline bool png_write_rgb(const char *path, const std::string &rgb,
     return ok;
 }
 
-// The device's panel is RGB565 little-endian; expand to 8-bit per channel by
-// bit-replication (r5<<3 | r5>>2), which maps 0->0 and 31->255 exactly.
 inline std::string rgb565_to_rgb888(const std::string &raw, uint32_t width, uint32_t height)
 {
     std::string out;

@@ -66,9 +66,6 @@ if [ "$BUILD_SERVER" = "1" ]; then
     fi
 
     echo "==> cross-building piko-sync-server against $STAGE"
-    # Force a rebuild, but only of the server: `make clean` also deletes
-    # piko-sync-client, so a --server-only run would silently leave you with
-    # no client binary at all.
     rm -f "$SRC/piko-sync-server"
     make -C "$SRC" server \
         CXX="$TOOLCHAIN_BIN_DIR/$HOST-g++" \
@@ -104,10 +101,6 @@ if [ "$BUILD_SERVER" = "1" ]; then
 fi
 
 if [ "$BUILD_CLIENT" = "1" ]; then
-    # The host FLTK is usually not installed system-wide here -- build-fltk.sh
-    # stages it under userspace/stage-host with a configured prefix of
-    # /usr/local, so that stage copy's fltk-config reports /usr/local paths
-    # that do not exist. Rewrite the prefix when we fall back to it.
     HOST_FLTK_STAGE="$REPO/userspace/stage-host/usr/local"
     FLTK_CONFIG="${FLTK_CONFIG:-}"
     FLTK_PREFIX_FIXUP=0

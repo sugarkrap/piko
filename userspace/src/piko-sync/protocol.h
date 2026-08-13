@@ -44,11 +44,6 @@ enum MessageType {
     MSG_DEPLOY_BEGIN       = 22,
     MSG_DEPLOY_BEGIN_ACK   = 23,
 
-    // Screenshot: client asks, server answers with MSG_SCREENSHOT_INFO and
-    // then -- if ok -- streams the raw visible framebuffer back using the
-    // ordinary MSG_DATA_CHUNK/MSG_FILE_COMPLETE pair, just in the other
-    // direction. Pixel conversion and image encoding happen on the host;
-    // a 400MHz board should only have to memcpy.
     MSG_SCREENSHOT         = 24,
     MSG_SCREENSHOT_INFO    = 25
 };
@@ -234,12 +229,6 @@ inline bool decode_hello(const std::string &p, HelloMsg &m)
     return get_u32(p, pos, m.version);
 }
 
-// `dest_dir` is an OPTIONAL trailing field: empty means "wherever the server
-// puts things by default". It is appended rather than inserted so the two
-// ends stay compatible in both directions -- an older server stops decoding
-// after total_size and simply uses its default directory, and a newer server
-// reading an older offer sees the field missing and does the same. Do not
-// reorder the fields above it.
 struct FileOfferMsg {
     std::string name;
     uint64_t total_size;
@@ -576,11 +565,6 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
     return get_u64(p, pos, m.free_bytes);
 }
 
-// Answer to MSG_SCREENSHOT. On ok, `byte_count` bytes of raw pixel data
-// follow as MSG_DATA_CHUNK frames (rows already packed to width*bpp/8, i.e.
-// the device's line_length padding is stripped), terminated by
-// MSG_FILE_COMPLETE carrying the CRC32 of the whole thing. On !ok, `reason`
-// says why and nothing follows.
 struct ScreenshotInfoMsg {
     bool ok;
     std::string reason;

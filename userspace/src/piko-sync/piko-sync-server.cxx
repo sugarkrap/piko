@@ -522,8 +522,6 @@ void Connection::handle_offer(const std::string &payload)
         return;
     }
 
-    // Where this file lands. An empty dest_dir (or an older client that does
-    // not send one at all) keeps the historic behaviour.
     dest_dir_ = TRANSFERS_DIR;
     if (!fo.dest_dir.empty()) {
         if (fo.dest_dir[0] != '/') {
@@ -558,10 +556,6 @@ void Connection::handle_offer(const std::string &payload)
     TransferMap::const_iterator it = app_->transfer_map().find(key);
     already_fully_done_ = (it != app_->transfer_map().end() && it->second.complete);
 
-    // The cached name list was scanned from the default directory at startup,
-    // so it only describes collisions there. For any other destination, look
-    // at what is actually in that directory instead -- otherwise an unrelated
-    // file of the same name in Transfers/ would rename this one for no reason.
     std::vector<std::string> other_names;
     const std::vector<std::string> *names = &app_->complete_names();
     if (dest_dir_ != TRANSFERS_DIR) {
@@ -1033,11 +1027,6 @@ void Connection::handle_free_space(const std::string &payload)
     close_connection();
 }
 
-// Capture the visible framebuffer into `out`, packed to width*bpp/8 per row
-// (line_length padding stripped). Same approach as userspace/src/fbgrab.c:
-// pxafb's /dev/fb0 does not support read(2), so it has to be mmap'd, and the
-// panel is double-buffered -- var.yoffset says which half is on screen right
-// now, so ignoring it gets you the *other* (undisplayed) frame.
 static bool capture_framebuffer(std::string &out, uint32_t &width,
                                 uint32_t &height, uint32_t &bpp,
                                 std::string &err)
