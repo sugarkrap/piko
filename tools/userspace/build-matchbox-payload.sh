@@ -77,6 +77,22 @@ done
 cp "$SYSROOT/lib/libgcc_s.so.1" "$PAYLOAD/lib/"
 cp -L "$SYSROOT/lib/libstdc++.so.6" "$PAYLOAD/lib/libstdc++.so.6"
 
+UCLIBC_LD_REAL="$(basename "$(readlink -f "$SYSROOT/lib/ld-uClibc.so.0")")"
+UCLIBC_C_REAL="$(basename "$(readlink -f "$SYSROOT/lib/libc.so.0")")"
+for real in "$UCLIBC_LD_REAL" "$UCLIBC_C_REAL"; do
+    if [ ! -f "$SYSROOT/lib/$real" ]; then
+        echo "FAILED: uClibc runtime $real not in $SYSROOT/lib" >&2
+        exit 1
+    fi
+    cp "$SYSROOT/lib/$real" "$PAYLOAD/lib/$real"
+    chmod 0755 "$PAYLOAD/lib/$real"
+    echo "    lib: $real"
+done
+ln -sf "$UCLIBC_LD_REAL" "$PAYLOAD/lib/ld-uClibc.so.1"
+ln -sf ld-uClibc.so.1   "$PAYLOAD/lib/ld-uClibc.so.0"
+ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.0"
+ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.1"
+
 for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
          "$D_BRIGHT" "$D_PIKAFFEINE"; do
     if [ ! -d "$d" ]; then
@@ -185,7 +201,6 @@ if find "$PAYLOAD" -type f -exec file {} \; | grep "ELF" | grep -qv "ARM"; then
     find "$PAYLOAD" -type f -exec file {} \; | grep "ELF" | grep -v "ARM" >&2
     exit 1
 fi
-ON_DEVICE="libc.so.0"
 NEEDED="$(find "$PAYLOAD" -type f | while read -r f; do
     case "$(file -b "$f")" in
         ELF*) "$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-readelf" -d "$f" 2>/dev/null \
@@ -195,12 +210,25 @@ done | sort -u)"
 missing=0
 for n in $NEEDED; do
     [ -e "$PAYLOAD/lib/$n" ] && continue
-    case " $ON_DEVICE " in *" $n "*) continue ;; esac
     echo "FAILED: nothing provides $n" >&2
     missing=1
 done
+
+INTERPS="$(find "$PAYLOAD" -type f | while read -r f; do
+    case "$(file -b "$f")" in
+        ELF*) LC_ALL=C "$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-readelf" -l "$f" 2>/dev/null \
+                | sed -nE 's/.*interpreter: (\/[^]]+)\]/\1/p' ;;
+    esac
+done | sort -u)"
+for i in $INTERPS; do
+    [ -e "$PAYLOAD$i" ] && continue
+    echo "FAILED: nothing provides the ELF interpreter $i" >&2
+    echo "  a flashed image has no uClibc runtime unless this payload ships it" >&2
+    missing=1
+done
+
 [ "$missing" -eq 0 ] || exit 1
-echo "    all DT_NEEDED satisfied; all ELF are ARM"
+echo "    all DT_NEEDED + ELF interpreters satisfied; all ELF are ARM"
 
 tar --format=ustar -cf "$TARBALL" -C "$PAYLOAD" .
 echo "==> $TARBALL ($(wc -c < "$TARBALL") bytes, $(find "$PAYLOAD" -type f | wc -l) files)"

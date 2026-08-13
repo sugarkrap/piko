@@ -22,13 +22,18 @@ console_fallback() {
 	cat "$BOOTLOG" 2>/dev/null
 }
 
+serial_echo() {
+	echo "$1"
+	echo "$1" > /dev/ttyS0 2>/dev/null
+}
+
 export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/root
 
-echo ""
-echo "=== zaurus-refresh bootstrap (kexec into stage 2) ==="
-echo ""
+serial_echo ""
+serial_echo "=== zaurus-refresh bootstrap (kexec into stage 2) ==="
+serial_echo ""
 
 mkdir -p /mnt/home
 LOG=/mnt/home/debug.log
@@ -71,6 +76,7 @@ if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
 else
 	console_fallback
 	echo "home mount failed" >&2
+	echo "home mount failed" > /dev/ttyS0 2>/dev/null
 fi
 
 exec setsid cttyhack /bin/ash -l

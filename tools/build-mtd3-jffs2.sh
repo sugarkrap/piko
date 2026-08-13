@@ -123,12 +123,128 @@ cp "$KEXEC_STAGE/sbin/kexec" "$OVERLAY/sbin/kexec"
 chmod 0755 "$OVERLAY/sbin/kexec"
 echo "    kexec: /sbin/kexec"
 
+SRC_TOOLS="brightd:usr/sbin/brightd
+cardswap:usr/sbin/cardswap
+flipd:usr/sbin/flipd
+hwclock:usr/sbin/hwclock
+mhz:usr/sbin/mhz
+ntpsync:usr/sbin/ntpsync
+piko-splash:usr/sbin/piko-splash
+pkillx:usr/sbin/pkillx
+vol:usr/sbin/vol
+zramswap:usr/sbin/zramswap
+kill:usr/local/bin/kill
+md5sum:usr/bin/md5sum
+untar:usr/local/bin/untar"
+for entry in $SRC_TOOLS; do
+    src="$REPO/userspace/src/${entry%%:*}"
+    rel="${entry#*:}"
+    if [ ! -f "$src" ]; then
+        echo "build-mtd3-jffs2: missing $src -- run tools/userspace/build-userspace.sh first" >&2
+        echo "  rootfs/etc/init.d/rcS and rootfs/etc/mdev.conf silently skip these when absent," >&2
+        echo "  which ships a board with no swap/backlight/rotation/clock; refusing" >&2
+        exit 1
+    fi
+    dst="$OVERLAY/$rel"
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    chmod 0755 "$dst"
+    echo "    tool: /$rel"
+done
+
+SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
+if [ -d "$SDL_STAGE" ]; then
+    SDL_SONAME="libSDL-1.2.so.0"
+    if [ ! -e "$SDL_STAGE/usr/lib/$SDL_SONAME" ]; then
+        echo "build-mtd3-jffs2: $SDL_STAGE exists but has no $SDL_SONAME -- rerun tools/userspace/build-sdl.sh" >&2
+        exit 1
+    fi
+    SDL_LIB="$(basename "$(readlink -f "$SDL_STAGE/usr/lib/$SDL_SONAME")")"
+    mkdir -p "$OVERLAY/lib" "$OVERLAY/usr/bin"
+    cp "$SDL_STAGE/usr/lib/$SDL_LIB" "$OVERLAY/lib/$SDL_LIB"
+    chmod 0755 "$OVERLAY/lib/$SDL_LIB"
+    [ "$SDL_LIB" = "$SDL_SONAME" ] || ln -sf "$SDL_LIB" "$OVERLAY/lib/$SDL_SONAME"
+    echo "    sdl: /lib/$SDL_LIB (soname $SDL_SONAME)"
+    for b in pikalibrate sdltest; do
+        if [ ! -f "$SDL_STAGE/usr/bin/$b" ]; then
+            echo "build-mtd3-jffs2: $SDL_STAGE exists but $b is missing -- rerun tools/userspace/build-sdl.sh" >&2
+            exit 1
+        fi
+        cp "$SDL_STAGE/usr/bin/$b" "$OVERLAY/usr/bin/$b"
+        chmod 0755 "$OVERLAY/usr/bin/$b"
+        echo "    sdl: /usr/bin/$b"
+    done
+else
+    echo "build-mtd3-jffs2: WARNING -- no $SDL_STAGE, pikalibrate will be a dead launcher" >&2
+fi
+
+ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/userspace/stage-alsa-runtime}"
+if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
+    mkdir -p "$OVERLAY/usr/share" "$OVERLAY/var/lib/alsa"
+    cp -a "$ALSA_RUNTIME/usr/share/alsa" "$OVERLAY/usr/share/"
+    echo "    alsa: /usr/share/alsa (config data)"
+    for b in aplay amixer alsactl; do
+        if [ -f "$ALSA_RUNTIME/usr/bin/$b" ]; then
+            cp "$ALSA_RUNTIME/usr/bin/$b" "$OVERLAY/usr/bin/$b"
+            chmod 0755 "$OVERLAY/usr/bin/$b"
+            echo "    alsa: /usr/bin/$b"
+        fi
+    done
+else
+    echo "build-mtd3-jffs2: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume will fail to" >&2
+    echo "  open the mixer (statically linked libasound still reads /usr/share/alsa/alsa.conf)" >&2
+fi
+
+OPKG_BIN="${OPKG_BIN:-$REPO/userspace/stage-target/usr/bin/opkg}"
+if [ -f "$OPKG_BIN" ]; then
+    mkdir -p "$OVERLAY/usr/bin"
+    cp "$OPKG_BIN" "$OVERLAY/usr/bin/opkg"
+    chmod 0755 "$OVERLAY/usr/bin/opkg"
+    echo "    opkg: /usr/bin/opkg"
+else
+    echo "build-mtd3-jffs2: WARNING -- no $OPKG_BIN, the pkg* wrappers will be non-functional" >&2
+fi
+
 echo "==> unpacking base image $BASE_JFFS2 (via the real kernel jffs2 driver -- needs sudo)"
 MERGED="$STAGE/merged"
 sudo "$REPO/tools/scripts/jffs2-mount-extract.sh" "$BASE_JFFS2" "$MERGED"
 
 echo "==> overlaying kernel + modules + rootfs/ on top of the unpacked base"
 cp -a "$OVERLAY/." "$MERGED/"
+
+echo "==> verifying the merged tree provides what its own boot scripts call"
+REFS="$(cat "$REPO/rootfs/etc/init.d/rcS" "$REPO/rootfs/etc/init.d/xsession" \
+             "$REPO/rootfs/etc/mdev.conf" "$REPO/rootfs/etc/inittab" \
+             "$REPO/rootfs"/usr/sbin/* 2>/dev/null \
+    | grep -aoE '(^|[^-[:alnum:]_./])/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
+    | grep -aoE '/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
+    | sort -u)"
+refmissing=0
+for r in $REFS; do
+    [ -e "$MERGED$r" ] && continue
+    [ -L "$MERGED$r" ] && continue
+    echo "build-mtd3-jffs2: boot scripts reference $r but the image does not provide it" >&2
+    refmissing=1
+done
+if [ "$refmissing" -ne 0 ]; then
+    echo "  these are all test -x / [ -x ] guarded, so the board would boot and silently" >&2
+    echo "  skip the feature instead of failing -- refusing to ship that" >&2
+    exit 1
+fi
+echo "    every binary referenced by rcS/xsession/mdev.conf/inittab is present"
+
+badlink=0
+for l in $(find "$MERGED/lib" "$MERGED/usr/lib" -type l -name '*.so*' 2>/dev/null); do
+    [ -e "$l" ] && continue
+    echo "build-mtd3-jffs2: dangling library symlink ${l#$MERGED} -> $(readlink "$l")" >&2
+    badlink=1
+done
+if [ "$badlink" -ne 0 ]; then
+    echo "  a self-referential or broken soname link makes every dependent binary fail" >&2
+    echo "  with a misleading \"not found\" -- refusing to ship that" >&2
+    exit 1
+fi
+echo "    no dangling library symlinks"
 
 echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
 mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
