@@ -483,6 +483,30 @@ static void test_deploy_session_noop_when_inactive()
     check(d.percent() == 0.0, "no session means no bogus progress");
 }
 
+static void test_screenshot_info_roundtrip()
+{
+    printf("screenshot: info message round-trips, both ok and failure forms\n");
+    ScreenshotInfoMsg m;
+    m.ok = true;
+    m.width = 640; m.height = 480; m.bpp = 16;
+    m.byte_count = 640 * 480 * 2;
+    std::string e = encode(m);
+    ScreenshotInfoMsg d;
+    check(decode_screenshot_info(e, d), "ok form decodes");
+    check(d.ok && d.width == 640 && d.height == 480 && d.bpp == 16, "geometry survives");
+    check(d.byte_count == 640u * 480u * 2u, "byte_count survives");
+
+    ScreenshotInfoMsg bad;
+    bad.ok = false;
+    bad.reason = "cannot open /dev/fb0";
+    ScreenshotInfoMsg bd;
+    check(decode_screenshot_info(encode(bad), bd), "failure form decodes");
+    check(!bd.ok && bd.reason == "cannot open /dev/fb0", "reason survives");
+
+    check(!decode_screenshot_info(std::string(), d), "empty payload rejected");
+    check(!decode_screenshot_info(std::string(3, '\0'), d), "truncated payload rejected");
+}
+
 int main()
 {
     test_message_roundtrips();
@@ -512,6 +536,8 @@ int main()
 
     test_deploy_session_tracks_whole_run();
     test_deploy_session_noop_when_inactive();
+
+    test_screenshot_info_roundtrip();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {

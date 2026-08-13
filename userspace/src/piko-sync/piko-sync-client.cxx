@@ -29,6 +29,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <string>
@@ -40,6 +41,7 @@
 #include "net_io.h"
 #include "icon_xpm.h"
 #include "settings.h"
+#include "png_write.h"
 
 using namespace piko_sync;
 
@@ -174,6 +176,7 @@ public:
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
+        cfg.set("transfer.screenshot_dir", shot_dir_);
     }
 
     TransferQueue &queue() { return queue_; }
@@ -224,12 +227,17 @@ private:
     static void add_files_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_add_files(); }
     void do_add_files();
 
+    static void screenshot_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_screenshot(); }
+    void do_screenshot();
+
     static void retry_failed_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_retry_failed(); }
     void do_retry_failed();
 
     Fl_Input *address_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
+    Fl_Button *shot_btn_;
+    std::string shot_dir_;
     TransferQueue queue_;
     std::vector<QueuedFile> files_;
     std::vector<FileSend *> active_;
@@ -455,6 +463,184 @@ void FileSend::handle_frame(uint32_t type, const std::string &payload)
     }
 }
 
+// Screenshots are a short, self-contained request/response, so unlike the
+// file queue (which is fully async, see FileSend) this runs inline with a
+// socket timeout. ~600KB over the board's flaky WiFi is a second or two; the
+// timeout is what keeps a dropped association from wedging the UI forever.
+static const int SHOT_TIMEOUT_SECS = 20;
+
+static bool shot_recv_frame(int fd, FrameReader &reader, uint32_t &type,
+                            std::string &payload, std::string &err)
+{
+    for (;;) {
+        FrameReader::Result r = reader.next(type, payload);
+        if (r == FrameReader::GOT_FRAME)
+            return true;
+        if (r == FrameReader::DESYNC) { err = "protocol desync"; return false; }
+
+        char buf[16384];
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n > 0) { reader.feed(buf, static_cast<size_t>(n)); continue; }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            err = "timed out waiting for the device";
+        else if (n == 0)
+            err = "device closed the connection";
+        else
+            err = std::string("read: ") + strerror(errno);
+        return false;
+    }
+}
+
+// Returns the saved path on success.
+static bool take_screenshot(const std::string &address, const std::string &dir,
+                            std::string &saved_path, std::string &err)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { err = std::string("socket: ") + strerror(errno); return false; }
+
+    struct timeval tv;
+    tv.tv_sec = SHOT_TIMEOUT_SECS;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(DEFAULT_PORT);
+    if (inet_pton(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
+        err = "not a valid IPv4 address: " + address;
+        close(fd);
+        return false;
+    }
+    if (connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
+        err = std::string("cannot reach piko-sync-server on ") + address + ": " + strerror(errno);
+        close(fd);
+        return false;
+    }
+
+    FrameReader reader;
+    uint32_t type;
+    std::string payload;
+
+    HelloMsg hello;
+    hello.version = PROTO_VERSION;
+    if (!send_frame_blocking(fd, MSG_HELLO, encode(hello))) {
+        err = "sending HELLO failed"; close(fd); return false;
+    }
+    if (!shot_recv_frame(fd, reader, type, payload, err)) { close(fd); return false; }
+    if (type != MSG_HELLO_ACK) {
+        err = "device did not answer HELLO (is this an older piko-sync-server?)";
+        close(fd); return false;
+    }
+
+    if (!send_frame_blocking(fd, MSG_SCREENSHOT, std::string())) {
+        err = "sending SCREENSHOT failed"; close(fd); return false;
+    }
+    if (!shot_recv_frame(fd, reader, type, payload, err)) { close(fd); return false; }
+    if (type == MSG_ERROR) {
+        ErrorMsg em;
+        err = decode_error(payload, em) ? em.message : "device reported an error";
+        close(fd); return false;
+    }
+    if (type != MSG_SCREENSHOT_INFO) {
+        err = "device does not support screenshots (update piko-sync-server)";
+        close(fd); return false;
+    }
+
+    ScreenshotInfoMsg info;
+    if (!decode_screenshot_info(payload, info)) {
+        err = "malformed SCREENSHOT_INFO"; close(fd); return false;
+    }
+    if (!info.ok) { err = info.reason; close(fd); return false; }
+    if (info.bpp != 16 || info.width == 0 || info.height == 0 ||
+        info.byte_count != info.width * info.height * 2) {
+        err = "device sent geometry this client cannot decode";
+        close(fd); return false;
+    }
+
+    std::string pixels;
+    pixels.reserve(info.byte_count);
+    Crc32 crc;
+    while (pixels.size() < info.byte_count) {
+        if (!shot_recv_frame(fd, reader, type, payload, err)) { close(fd); return false; }
+        if (type != MSG_DATA_CHUNK) {
+            err = "device interrupted the screenshot stream"; close(fd); return false;
+        }
+        DataChunkMsg chunk;
+        if (!decode_data_chunk(payload, chunk)) {
+            err = "malformed DATA_CHUNK"; close(fd); return false;
+        }
+        if (chunk.offset != pixels.size()) {
+            err = "device sent chunks out of order"; close(fd); return false;
+        }
+        crc.update(chunk.data.data(), chunk.data.size());
+        pixels.append(chunk.data);
+    }
+
+    if (!shot_recv_frame(fd, reader, type, payload, err)) { close(fd); return false; }
+    if (type != MSG_FILE_COMPLETE) {
+        err = "device did not finish the screenshot"; close(fd); return false;
+    }
+    FileCompleteMsg done;
+    if (!decode_file_complete(payload, done)) {
+        err = "malformed FILE_COMPLETE"; close(fd); return false;
+    }
+    close(fd);
+
+    if (done.crc32 != crc.final_value()) {
+        err = "screenshot arrived corrupt (CRC mismatch)";
+        return false;
+    }
+
+    if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+        err = "cannot create " + dir + ": " + strerror(errno);
+        return false;
+    }
+
+    time_t now = time(0);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char stamp[32];
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+    std::string path = dir + "/piko-screenshot-" + stamp + ".png";
+
+    std::string rgb = rgb565_to_rgb888(pixels, info.width, info.height);
+    if (!png_write_rgb(path.c_str(), rgb, info.width, info.height, err))
+        return false;
+
+    saved_path = path;
+    return true;
+}
+
+void ClientApp::do_screenshot()
+{
+    std::string address = address_->value() ? address_->value() : "";
+    if (address.empty()) { fl_alert("Set the Zaurus address first."); return; }
+
+    const char *home = getenv("HOME");
+    std::string dir = shot_dir_.empty()
+        ? (std::string(home ? home : ".") + "/Pictures/piko")
+        : shot_dir_;
+
+    shot_btn_->deactivate();
+    shot_btn_->label("Grabbing...");
+    Fl::check();
+
+    std::string path, err;
+    bool ok = take_screenshot(address, dir, path, err);
+
+    shot_btn_->label("Screenshot");
+    shot_btn_->activate();
+
+    if (ok)
+        fl_message("Saved %s", path.c_str());
+    else
+        fl_alert("Screenshot failed:\n%s", err.c_str());
+}
+
 ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
 {
     (void)tab;
@@ -476,6 +662,11 @@ ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &
 
     Fl_Button *retry_btn = new Fl_Button(X + m + 366, Y + m, 110, 24, "Retry failed");
     retry_btn->callback(retry_failed_cb, this);
+
+    shot_btn_ = new Fl_Button(X + m + 482, Y + m, 110, 24, "Screenshot");
+    shot_btn_->callback(screenshot_cb, this);
+    shot_btn_->tooltip("Grab the device's screen and save it as a PNG on this machine");
+    shot_dir_ = cfg.get("transfer.screenshot_dir");
 
     aggregate_bar_ = new Fl_Progress(X + m, Y + m + 32, W - 2 * m, 20);
     aggregate_bar_->minimum(0);

@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -249,6 +252,7 @@ private:
     void handle_query_existing(const std::string &payload);
     void handle_free_space(const std::string &payload);
     void handle_deploy_begin(const std::string &payload);
+    void handle_screenshot(const std::string &payload);
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason);
@@ -445,6 +449,7 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_QUERY_EXISTING:   handle_query_existing(payload); return;
         case MSG_FREE_SPACE:       handle_free_space(payload); return;
         case MSG_DEPLOY_BEGIN:     handle_deploy_begin(payload); return;
+        case MSG_SCREENSHOT:       handle_screenshot(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -961,6 +966,106 @@ void Connection::handle_free_space(const std::string &payload)
     FreeSpaceAckMsg ack;
     free_bytes_on(m.path, ack.free_bytes);
     send(MSG_FREE_SPACE_ACK, encode(ack));
+    close_connection();
+}
+
+// Capture the visible framebuffer into `out`, packed to width*bpp/8 per row
+// (line_length padding stripped). Same approach as userspace/src/fbgrab.c:
+// pxafb's /dev/fb0 does not support read(2), so it has to be mmap'd, and the
+// panel is double-buffered -- var.yoffset says which half is on screen right
+// now, so ignoring it gets you the *other* (undisplayed) frame.
+static bool capture_framebuffer(std::string &out, uint32_t &width,
+                                uint32_t &height, uint32_t &bpp,
+                                std::string &err)
+{
+    const char *dev = "/dev/fb0";
+    int fd = open(dev, O_RDONLY);
+    if (fd < 0) {
+        err = std::string("cannot open ") + dev + ": " + strerror(errno);
+        return false;
+    }
+
+    struct fb_var_screeninfo var;
+    struct fb_fix_screeninfo fix;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &var) < 0 ||
+        ioctl(fd, FBIOGET_FSCREENINFO, &fix) < 0) {
+        err = std::string("framebuffer ioctl: ") + strerror(errno);
+        close(fd);
+        return false;
+    }
+    if (var.bits_per_pixel != 16) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "unsupported depth: %u bpp (expected 16)",
+                 var.bits_per_pixel);
+        err = buf;
+        close(fd);
+        return false;
+    }
+
+    size_t rowbytes = static_cast<size_t>(var.xres) * var.bits_per_pixel / 8;
+    size_t maplen = static_cast<size_t>(fix.line_length) * (var.yres + var.yoffset);
+    unsigned char *fb = static_cast<unsigned char *>(
+        mmap(NULL, maplen, PROT_READ, MAP_SHARED, fd, 0));
+    if (fb == MAP_FAILED) {
+        err = std::string("mmap framebuffer: ") + strerror(errno);
+        close(fd);
+        return false;
+    }
+
+    out.clear();
+    out.reserve(rowbytes * var.yres);
+    for (unsigned int y = 0; y < var.yres; y++) {
+        const unsigned char *row = fb
+            + static_cast<size_t>(y + var.yoffset) * fix.line_length
+            + static_cast<size_t>(var.xoffset) * var.bits_per_pixel / 8;
+        out.append(reinterpret_cast<const char *>(row), rowbytes);
+    }
+
+    munmap(fb, maplen);
+    close(fd);
+
+    width = var.xres;
+    height = var.yres;
+    bpp = var.bits_per_pixel;
+    return true;
+}
+
+void Connection::handle_screenshot(const std::string &payload)
+{
+    (void)payload;
+
+    std::string pixels, err;
+    ScreenshotInfoMsg info;
+    if (!capture_framebuffer(pixels, info.width, info.height, info.bpp, err)) {
+        info.ok = false;
+        info.reason = err;
+        send(MSG_SCREENSHOT_INFO, encode(info));
+        close_connection();
+        return;
+    }
+
+    info.ok = true;
+    info.byte_count = static_cast<uint32_t>(pixels.size());
+    send(MSG_SCREENSHOT_INFO, encode(info));
+
+    Crc32 crc;
+    size_t off = 0;
+    while (off < pixels.size()) {
+        size_t n = pixels.size() - off;
+        if (n > MAX_CHUNK)
+            n = MAX_CHUNK;
+        DataChunkMsg chunk;
+        chunk.offset = off;
+        chunk.data.assign(pixels, off, n);
+        crc.update(pixels.data() + off, n);
+        if (!send_frame_blocking(fd_, MSG_DATA_CHUNK, encode(chunk)))
+            return;
+        off += n;
+    }
+
+    FileCompleteMsg done;
+    done.crc32 = crc.final_value();
+    send(MSG_FILE_COMPLETE, encode(done));
     close_connection();
 }
 

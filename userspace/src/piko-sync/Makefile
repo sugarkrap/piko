@@ -26,10 +26,10 @@ piko-sync-server: piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
 
 client: piko-sync-client
 
-piko-sync-client: piko-sync-client.cxx transfer_table.cxx $(COMMON_HDRS)
+piko-sync-client: piko-sync-client.cxx transfer_table.cxx $(COMMON_HDRS) png_write.h
 	$(HOSTCXX) $(HOSTCXXFLAGS) $(HOST_FLTK_CXXFLAGS) \
 	    -o $@ piko-sync-client.cxx transfer_table.cxx \
-	    $(HOST_FLTK_LDFLAGS)
+	    $(HOST_FLTK_LDFLAGS) -lz
 
 clean:
 	rm -f piko-sync-server piko-sync-client

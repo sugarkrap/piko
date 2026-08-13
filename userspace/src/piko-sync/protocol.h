@@ -42,7 +42,15 @@ enum MessageType {
     MSG_FREE_SPACE_ACK     = 21,
 
     MSG_DEPLOY_BEGIN       = 22,
-    MSG_DEPLOY_BEGIN_ACK   = 23
+    MSG_DEPLOY_BEGIN_ACK   = 23,
+
+    // Screenshot: client asks, server answers with MSG_SCREENSHOT_INFO and
+    // then -- if ok -- streams the raw visible framebuffer back using the
+    // ordinary MSG_DATA_CHUNK/MSG_FILE_COMPLETE pair, just in the other
+    // direction. Pixel conversion and image encoding happen on the host;
+    // a 400MHz board should only have to memcpy.
+    MSG_SCREENSHOT         = 24,
+    MSG_SCREENSHOT_INFO    = 25
 };
 
 enum PutPolicy {
@@ -553,6 +561,43 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
 {
     size_t pos = 0;
     return get_u64(p, pos, m.free_bytes);
+}
+
+// Answer to MSG_SCREENSHOT. On ok, `byte_count` bytes of raw pixel data
+// follow as MSG_DATA_CHUNK frames (rows already packed to width*bpp/8, i.e.
+// the device's line_length padding is stripped), terminated by
+// MSG_FILE_COMPLETE carrying the CRC32 of the whole thing. On !ok, `reason`
+// says why and nothing follows.
+struct ScreenshotInfoMsg {
+    bool ok;
+    std::string reason;
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t byte_count;
+    ScreenshotInfoMsg() : ok(false), width(0), height(0), bpp(0), byte_count(0) {}
+};
+inline std::string encode(const ScreenshotInfoMsg &m)
+{
+    std::string p;
+    p.append(1, m.ok ? 1 : 0);
+    put_u32(p, m.width);
+    put_u32(p, m.height);
+    put_u32(p, m.bpp);
+    put_u32(p, m.byte_count);
+    put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_screenshot_info(const std::string &p, ScreenshotInfoMsg &m)
+{
+    if (p.empty())
+        return false;
+    m.ok = p[0] != 0;
+    size_t pos = 1;
+    if (!get_u32(p, pos, m.width) || !get_u32(p, pos, m.height) ||
+        !get_u32(p, pos, m.bpp) || !get_u32(p, pos, m.byte_count))
+        return false;
+    return get_str16(p, pos, m.reason);
 }
 
 }
