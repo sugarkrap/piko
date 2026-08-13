@@ -108,3 +108,11 @@
 	path = userspace/src/mb-applet-pikaffeine
 	url = https://github.com/sugarkrap/mb-applet-pikaffeine
 	branch = main
+[submodule "userspace/src/PocketSNES"]
+	path = userspace/src/PocketSNES
+	url = https://github.com/sugarkrap/PocketSNES.git
+	branch = main
+[submodule "PocketSNES"]
+	path = userspace/src/PocketSNES
+	url = https://github.com/sugarkrap/PocketSNES.git
+	branch = main

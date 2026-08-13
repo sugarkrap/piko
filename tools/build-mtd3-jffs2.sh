@@ -95,6 +95,25 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     cp "$REPO/userspace/desktop/piko-sync-server.png" \
         "$OVERLAY/usr/share/pixmaps/piko-sync-server.png"
     echo "    piko-sync: /usr/bin/piko-sync-server (+ launcher, icon)"
+
+    echo "==> building PocketSNES (tools/userspace/build-pocketsnes.sh)"
+    "$REPO/tools/userspace/build-pocketsnes.sh"
+
+    PSNES_BIN="$REPO/userspace/stage-target/usr/bin/PocketSNES"
+    PSNES_SRC="$REPO/userspace/src/PocketSNES/zaurus"
+    if [ ! -f "$PSNES_BIN" ]; then
+        echo "build-mtd3-jffs2: build-pocketsnes.sh reported success but there is no" >&2
+        echo "  $PSNES_BIN -- refusing to ship a launcher with no emulator" >&2
+        exit 1
+    fi
+    mkdir -p "$OVERLAY/usr/local/bin" "$OVERLAY/usr/share/applications"
+    cp "$PSNES_BIN" "$OVERLAY/usr/local/bin/PocketSNES"
+    chmod 0755 "$OVERLAY/usr/local/bin/PocketSNES"
+    cp "$PSNES_SRC/pocketsnes-run" "$OVERLAY/usr/local/bin/pocketsnes-run"
+    chmod 0755 "$OVERLAY/usr/local/bin/pocketsnes-run"
+    cp "$PSNES_SRC/pocketsnes-interp.desktop" \
+        "$OVERLAY/usr/share/applications/pocketsnes.desktop"
+    echo "    pocketsnes: /usr/local/bin/PocketSNES (+ pocketsnes-run, launcher)"
 else
     echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"
 fi
@@ -240,8 +259,12 @@ REFS="$(cat "$REPO/rootfs/etc/init.d/rcS" "$REPO/rootfs/etc/init.d/xsession" \
     | grep -aoE '(^|[^-[:alnum:]_./])/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | grep -aoE '/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | sort -u)"
+DESKTOP_REFS="$(cat "$MERGED"/usr/share/applications/*.desktop 2>/dev/null \
+    | sed -n 's/^Exec=//p' | tr ' ' '\n' \
+    | grep -aoE '^/(usr|bin|sbin|opt)/[A-Za-z0-9._/-]*[A-Za-z0-9]' | sort -u)"
+
 refmissing=0
-for r in $REFS; do
+for r in $REFS $DESKTOP_REFS; do
     [ -e "$MERGED$r" ] && continue
     [ -L "$MERGED$r" ] && continue
     echo "build-mtd3-jffs2: boot scripts reference $r but the image does not provide it" >&2
@@ -252,7 +275,7 @@ if [ "$refmissing" -ne 0 ]; then
     echo "  skip the feature instead of failing -- refusing to ship that" >&2
     exit 1
 fi
-echo "    every binary referenced by rcS/xsession/mdev.conf/inittab is present"
+echo "    every binary referenced by boot scripts and .desktop launchers is present"
 
 badlink=0
 for l in $(find "$MERGED/lib" "$MERGED/usr/lib" -type l -name '*.so*' 2>/dev/null); do
