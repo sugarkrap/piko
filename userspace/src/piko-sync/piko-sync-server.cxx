@@ -278,6 +278,8 @@ private:
     void handle_deploy_begin(const std::string &payload);
     void handle_screenshot(const std::string &payload);
     void register_rom(const std::string &rom_path);
+    void handle_rom_list(const std::string &payload);
+    void handle_rom_delete(const std::string &payload);
 
     std::string dest_dir_;
     std::string rom_machine_;
@@ -478,6 +480,8 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_FREE_SPACE:       handle_free_space(payload); return;
         case MSG_DEPLOY_BEGIN:     handle_deploy_begin(payload); return;
         case MSG_SCREENSHOT:       handle_screenshot(payload); return;
+        case MSG_ROM_LIST:         handle_rom_list(payload); return;
+        case MSG_ROM_DELETE:       handle_rom_delete(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -764,6 +768,65 @@ void Connection::register_rom(const std::string &rom_path)
 
     system("/usr/sbin/deskscan >/dev/null 2>&1");
     app_->set_status(e.machine + " rom registered: " + e.desktop);
+}
+
+void Connection::handle_rom_list(const std::string &payload)
+{
+    (void)payload;
+    std::vector<RomEntry> db = load_emulation_db();
+    RomListAckMsg ack;
+    for (size_t i = 0; i < db.size(); i++)
+        ack.records += encode_entry(db[i]) + "\n";
+    send(MSG_ROM_LIST_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_rom_delete(const std::string &payload)
+{
+    PathMsg m;
+    if (!decode_path(payload, m)) { fail("malformed ROM_DELETE"); return; }
+
+    std::vector<RomEntry> db = load_emulation_db();
+    RomEntry found;
+    bool have = false;
+    for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path == m.path) { found = db[i]; have = true; db.erase(db.begin() + i); break; }
+    }
+
+    OkReasonMsg ack;
+    if (!have) {
+        ack.ok = false;
+        ack.reason = "no such rom in " + std::string(EMULATION_CFG);
+        send(MSG_ROM_DELETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    if (unlink(found.path.c_str()) != 0 && errno != ENOENT) {
+        ack.ok = false;
+        ack.reason = "cannot delete " + found.path + ": " + strerror(errno);
+        send(MSG_ROM_DELETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    if (!found.desktop.empty())
+        unlink((std::string(APPLICATIONS_DIR) + "/" + found.desktop).c_str());
+
+    if (!save_emulation_db(db)) {
+        ack.ok = false;
+        ack.reason = "rom deleted but " + std::string(EMULATION_CFG) + " is not writable";
+        send(MSG_ROM_DELETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    app_->set_status("rom deleted: " + basename_of_path(found.path));
+
+    ack.ok = true;
+    send(MSG_ROM_DELETE_ACK, encode(ack));
+    close_connection();
 }
 
 void Connection::handle_put_offer(const std::string &payload)

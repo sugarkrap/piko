@@ -45,7 +45,12 @@ enum MessageType {
     MSG_DEPLOY_BEGIN_ACK   = 23,
 
     MSG_SCREENSHOT         = 24,
-    MSG_SCREENSHOT_INFO    = 25
+    MSG_SCREENSHOT_INFO    = 25,
+
+    MSG_ROM_LIST           = 26,
+    MSG_ROM_LIST_ACK       = 27,
+    MSG_ROM_DELETE         = 28,
+    MSG_ROM_DELETE_ACK     = 29
 };
 
 enum PutPolicy {
@@ -568,6 +573,28 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
 {
     size_t pos = 0;
     return get_u64(p, pos, m.free_bytes);
+}
+
+struct RomListAckMsg {
+    std::string records;
+};
+inline std::string encode(const RomListAckMsg &m)
+{
+    std::string p;
+    put_u32(p, static_cast<uint32_t>(m.records.size()));
+    p.append(m.records);
+    return p;
+}
+inline bool decode_rom_list_ack(const std::string &p, RomListAckMsg &m)
+{
+    size_t pos = 0;
+    uint32_t len;
+    if (!get_u32(p, pos, len))
+        return false;
+    if (p.size() - pos < len)
+        return false;
+    m.records.assign(p, pos, len);
+    return true;
 }
 
 struct ScreenshotInfoMsg {

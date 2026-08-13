@@ -8,6 +8,7 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Select_Browser.H>
 #include <FL/Fl_Progress.H>
 #include <FL/Fl_Text_Display.H>
 #include <FL/Fl_Text_Buffer.H>
@@ -42,11 +43,15 @@
 #include "icon_xpm.h"
 #include "settings.h"
 #include "png_write.h"
+#include "rom_detect.h"
+#include "emulation_db.h"
 
 using namespace piko_sync;
 
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
 static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
+static const int ROM_PANEL_H = 150;
+static int rom_columns_[] = { 190, 60, 90, 90, 0 };
 
 static std::string basename_of(const std::string &p)
 {
@@ -109,11 +114,12 @@ static std::string choice_label(const Fl_Choice *choice)
     return t ? std::string(t) : std::string();
 }
 
-class ClientApp;
+class TransferPane;
 
 struct QueuedFile {
     std::string path;
     std::string name;
+    std::string machine;
     uint64_t total_size;
     uint32_t crc32;
     int row;
@@ -124,7 +130,7 @@ struct QueuedFile {
 
 class FileSend {
 public:
-    FileSend(ClientApp *app, int file_index);
+    FileSend(TransferPane *app, int file_index);
     ~FileSend();
 
     void abandon();
@@ -150,7 +156,7 @@ private:
     void close_fd_only();
     static void deferred_delete_cb(void *v) { delete static_cast<FileSend *>(v); }
 
-    ClientApp *app_;
+    TransferPane *app_;
     int file_index_;
     int fd_;
     FrameReader reader_;
@@ -162,16 +168,20 @@ private:
 };
 
 struct RetryContext {
-    ClientApp *app;
+    TransferPane *app;
     int file_index;
 };
 
 class BuildRunner;
 
-class ClientApp {
+class TransferPane {
 public:
-    ClientApp(Fl_Group *transfer_tab, int X, int Y, int W, int H, const Settings &cfg);
-    ~ClientApp();
+    TransferPane(Fl_Group *transfer_tab, int X, int Y, int W, int H,
+                 const Settings &cfg, int reserve_h = 0);
+    virtual ~TransferPane();
+
+    virtual std::string machine_for(const std::string &path) { (void)path; return std::string(); }
+    virtual void after_transfer_complete() {}
 
     void store_settings(Settings &cfg) const
     {
@@ -216,23 +226,26 @@ public:
         Fl::add_timeout(delay, retry_cb, ctx);
     }
 
+protected:
+    int reserve_y() const { return reserve_y_; }
+
 private:
     static void retry_cb(void *v)
     {
         RetryContext *ctx = static_cast<RetryContext *>(v);
-        ClientApp *app = ctx->app;
+        TransferPane *app = ctx->app;
         int idx = ctx->file_index;
         delete ctx;
         app->spawn_attempt(idx);
     }
 
-    static void add_files_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_add_files(); }
+    static void add_files_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_add_files(); }
     void do_add_files();
 
-    static void screenshot_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_screenshot(); }
+    static void screenshot_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_screenshot(); }
     void do_screenshot();
 
-    static void retry_failed_cb(Fl_Widget *, void *v) { static_cast<ClientApp *>(v)->do_retry_failed(); }
+    static void retry_failed_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_retry_failed(); }
     void do_retry_failed();
 
     Fl_Input *address_;
@@ -240,13 +253,14 @@ private:
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
+    int reserve_y_;
     TransferQueue queue_;
     std::vector<QueuedFile> files_;
     std::vector<FileSend *> active_;
     std::string last_dir_;
 };
 
-FileSend::FileSend(ClientApp *app, int file_index)
+FileSend::FileSend(TransferPane *app, int file_index)
     : app_(app), file_index_(file_index), fd_(-1), phase_(CONNECTING),
       local_file_(0), sent_offset_(0), total_size_(0)
 {
@@ -306,8 +320,10 @@ void FileSend::terminate(TransferStatus status, const std::string &detail, bool 
 
     QueuedFile &qf = app_->file(file_index_);
     app_->queue().set_status(qf.row, status, detail);
-    if (status == XFER_DONE)
+    if (status == XFER_DONE) {
         app_->queue().set_progress(qf.row, total_size_);
+        app_->after_transfer_complete();
+    }
     app_->sync_table();
 
     close_fd_only();
@@ -343,6 +359,7 @@ void FileSend::send_offer()
     QueuedFile &qf = app_->file(file_index_);
     FileOfferMsg fo; fo.name = qf.name; fo.total_size = qf.total_size;
     fo.dest_dir = app_->dest_dir();
+    fo.rom_machine = qf.machine;
     if (!send_frame_blocking(fd_, MSG_FILE_OFFER, encode(fo))) { terminate(XFER_RECONNECTING, "", true); return; }
     phase_ = WAIT_OFFER_ACK;
 }
@@ -648,7 +665,7 @@ static bool take_screenshot(const std::string &address, std::string &err)
     return copy_png_to_clipboard(png, err);
 }
 
-void ClientApp::do_screenshot()
+void TransferPane::do_screenshot()
 {
     std::string address = address_->value() ? address_->value() : "";
     if (address.empty()) { fl_alert("Set the Zaurus address first."); return; }
@@ -669,7 +686,8 @@ void ClientApp::do_screenshot()
         fl_alert("Screenshot failed:\n%s", err.c_str());
 }
 
-ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
+TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
+                           const Settings &cfg, int reserve_h)
 {
     (void)tab;
     int m = 10;
@@ -708,11 +726,13 @@ ClientApp::ClientApp(Fl_Group *tab, int X, int Y, int W, int H, const Settings &
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
 
-    table_ = new TransferTable(X + m, Y + m + 92, W - 2 * m, H - m - 92 - m);
+    table_ = new TransferTable(X + m, Y + m + 92, W - 2 * m,
+                               H - m - 92 - m - reserve_h);
+    reserve_y_ = Y + H - m - reserve_h;
     table_->queue(&queue_);
 }
 
-ClientApp::~ClientApp()
+TransferPane::~TransferPane()
 {
     for (size_t i = 0; i < active_.size(); i++) {
         active_[i]->abandon();
@@ -721,7 +741,7 @@ ClientApp::~ClientApp()
     active_.clear();
 }
 
-void ClientApp::do_add_files()
+void TransferPane::do_add_files()
 {
     Fl_File_Chooser chooser(last_dir_.empty() ? "." : last_dir_.c_str(), "*",
                              Fl_File_Chooser::MULTI, "Add files to send");
@@ -746,6 +766,7 @@ void ClientApp::do_add_files()
         qf.name = basename_of(path);
         qf.total_size = static_cast<uint64_t>(st.st_size);
         qf.crc32 = compute_file_crc32(path);
+        qf.machine = machine_for(path);
         qf.row = queue_.add(qf.name, qf.total_size);
 
         files_.push_back(qf);
@@ -758,7 +779,7 @@ void ClientApp::do_add_files()
     sync_table();
 }
 
-void ClientApp::do_retry_failed()
+void TransferPane::do_retry_failed()
 {
     for (size_t i = 0; i < files_.size(); i++) {
         if (queue_.row(files_[i].row).status == XFER_ERROR) {
@@ -849,7 +870,7 @@ public:
 
     const Settings &cfg() const { return cfg_; }
 
-    void bind(ClientApp *client, BuildRunner *runner)
+    void bind(TransferPane *client, BuildRunner *runner)
     {
         client_ = client;
         runner_ = runner;
@@ -859,7 +880,7 @@ public:
 
 private:
     Settings cfg_;
-    ClientApp *client_;
+    TransferPane *client_;
     BuildRunner *runner_;
 };
 
@@ -1337,6 +1358,190 @@ void BuildRunner::finish(int rc)
     status_label_->redraw();
 }
 
+static bool rom_request(const std::string &address, uint32_t type,
+                        const std::string &payload, uint32_t want,
+                        std::string &reply, std::string &err)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { err = strerror(errno); return false; }
+
+    struct timeval tv;
+    tv.tv_sec = SHOT_TIMEOUT_SECS;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(DEFAULT_PORT);
+    if (address.empty() || inet_pton(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
+        err = "not a valid IPv4 address: " + address;
+        close(fd);
+        return false;
+    }
+    if (connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
+        err = std::string("cannot reach the device: ") + strerror(errno);
+        close(fd);
+        return false;
+    }
+
+    FrameReader reader;
+    uint32_t t;
+    std::string p;
+
+    HelloMsg hello;
+    hello.version = PROTO_VERSION;
+    if (!send_frame_blocking(fd, MSG_HELLO, encode(hello))) {
+        err = "sending HELLO failed"; close(fd); return false;
+    }
+    if (!shot_recv_frame(fd, reader, t, p, err)) { close(fd); return false; }
+
+    if (!send_frame_blocking(fd, type, payload)) {
+        err = "sending request failed"; close(fd); return false;
+    }
+    if (!shot_recv_frame(fd, reader, t, p, err)) { close(fd); return false; }
+    close(fd);
+
+    if (t == MSG_ERROR) {
+        ErrorMsg em;
+        err = decode_error(p, em) ? em.message : "device reported an error";
+        return false;
+    }
+    if (t != want) {
+        err = "device does not support this request (update piko-sync-server)";
+        return false;
+    }
+    reply = p;
+    return true;
+}
+
+static bool fetch_rom_list(const std::string &address, std::string &records, std::string &err)
+{
+    std::string reply;
+    if (!rom_request(address, MSG_ROM_LIST, std::string(), MSG_ROM_LIST_ACK, reply, err))
+        return false;
+    RomListAckMsg ack;
+    if (!decode_rom_list_ack(reply, ack)) { err = "malformed rom list"; return false; }
+    records = ack.records;
+    return true;
+}
+
+static bool delete_rom(const std::string &address, const std::string &path, std::string &err)
+{
+    PathMsg pm;
+    pm.path = path;
+    std::string reply;
+    if (!rom_request(address, MSG_ROM_DELETE, encode(pm), MSG_ROM_DELETE_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed delete reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+class RomPane : public TransferPane {
+public:
+    RomPane(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
+        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H)
+    {
+        int m = 10;
+        int y = reserve_y();
+        tab->begin();
+
+        backend_ = new Fl_Choice(X + m + 70, y, 140, 24, "Backend:");
+        backend_->align(FL_ALIGN_LEFT);
+        backend_->add("pocketsnes");
+        backend_->value(0);
+
+        refresh_btn_ = new Fl_Button(X + m + 220, y, 90, 24, "Refresh");
+        refresh_btn_->callback(refresh_cb, this);
+
+        delete_btn_ = new Fl_Button(X + m + 316, y, 110, 24, "Delete ROM");
+        delete_btn_->callback(delete_cb, this);
+
+        roms_ = new Fl_Select_Browser(X + m, y + 30, W - 2 * m, ROM_PANEL_H - 34);
+        roms_->column_widths(rom_columns_);
+        roms_->column_char('\t');
+
+        tab->end();
+        refresh();
+    }
+
+    std::string machine_for(const std::string &path)
+    {
+        return detect_machine(path);
+    }
+
+    void after_transfer_complete() { refresh(); }
+
+private:
+    static void refresh_cb(Fl_Widget *, void *v) { ((RomPane *)v)->refresh(); }
+    static void delete_cb(Fl_Widget *, void *v) { ((RomPane *)v)->remove_selected(); }
+
+    void refresh()
+    {
+        entries_.clear();
+        roms_->clear();
+
+        std::string err;
+        std::string records;
+        if (!fetch_rom_list(address(), records, err)) {
+            roms_->add(("@C1cannot read the device's rom list: " + err).c_str());
+            return;
+        }
+
+        std::string line;
+        for (size_t i = 0; i <= records.size(); i++) {
+            if (i == records.size() || records[i] == '\n') {
+                if (!line.empty()) {
+                    RomEntry e;
+                    if (decode_entry(line, e))
+                        entries_.push_back(e);
+                }
+                line.clear();
+            } else {
+                line += records[i];
+            }
+        }
+
+        for (size_t i = 0; i < entries_.size(); i++) {
+            const RomEntry &e = entries_[i];
+            std::string row = strip_extension(basename_of_path(e.path)) + "\t"
+                            + e.machine + "\t" + e.backend + "\t"
+                            + e.icon + "\t" + e.path;
+            roms_->add(row.c_str());
+        }
+        if (entries_.empty())
+            roms_->add("no roms registered on the device yet");
+    }
+
+    void remove_selected()
+    {
+        int sel = roms_->value();
+        if (sel < 1 || (size_t)sel > entries_.size()) {
+            fl_alert("Select a ROM to delete first.");
+            return;
+        }
+        const RomEntry &e = entries_[sel - 1];
+        std::string name = strip_extension(basename_of_path(e.path));
+        if (fl_choice("Delete \"%s\" from the device?\n%s",
+                      "Cancel", "Delete", 0, name.c_str(), e.path.c_str()) != 1)
+            return;
+
+        std::string err;
+        if (!delete_rom(address(), e.path, err))
+            fl_alert("Could not delete %s:\n%s", name.c_str(), err.c_str());
+        refresh();
+    }
+
+    Fl_Choice *backend_;
+    Fl_Button *refresh_btn_;
+    Fl_Button *delete_btn_;
+    Fl_Select_Browser *roms_;
+    std::vector<RomEntry> entries_;
+};
+
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -1350,8 +1555,12 @@ int main(int argc, char **argv)
     tabs.begin();
 
     Fl_Group transfer_tab(0, 24, 720, 496, "Transfer");
-    ClientApp client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
+    TransferPane client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
     transfer_tab.end();
+
+    Fl_Group rom_tab(0, 24, 720, 496, "ROMs");
+    RomPane roms(&rom_tab, 0, 24, 720, 496, settings.cfg());
+    rom_tab.end();
 
     Fl_Group deploy_tab(0, 24, 720, 496, "Build && Deploy");
     BuildRunner runner(&deploy_tab, 0, 24, 720, 496, settings.cfg(), &settings);
