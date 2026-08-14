@@ -4,10 +4,12 @@ set -eu
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/pikostore"
 STAGE="${STAGE:-$REPO/userspace/stage-target}"
+OUTDIR="${OUTDIR:-$REPO}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 HOST="${HOST:-arm-unknown-linux-uclibcgnueabi}"
 FL_DSO_VERSION="${FL_DSO_VERSION:-1.3}"
+VERSION="${PIKOSTORE_VERSION:-$(cd "$SRC" 2>/dev/null && git describe --always --dirty 2>/dev/null || echo 0.0.0-unknown)}"
 
 if [ ! -f "$SRC/pikostore.cxx" ]; then
     echo "tools/userspace/build-pikostore.sh: $SRC is empty" >&2
@@ -70,7 +72,22 @@ esac
 
 "$TOOLCHAIN_BIN_DIR/$HOST-strip" "$STAGE/usr/bin/pikostore" 2>/dev/null || true
 
+echo "==> packaging pikostore as an .ipk"
+PKGROOT="$(mktemp -d)"
+trap 'rm -rf "$PKGROOT"' EXIT INT TERM
+mkdir -p "$PKGROOT/usr/local/bin" "$PKGROOT/usr/share/applications" "$PKGROOT/usr/share/pixmaps"
+cp "$STAGE/usr/bin/pikostore" "$PKGROOT/usr/local/bin/pikostore"
+cp "$REPO/userspace/desktop/pikostore.desktop" "$PKGROOT/usr/share/applications/pikostore.desktop"
+cp "$REPO/userspace/desktop/pikostore.png" "$PKGROOT/usr/share/pixmaps/pikostore.png"
+
+"$REPO/tools/userspace/make-ipk.sh" --name pikostore --version "$VERSION" \
+    --root "$PKGROOT" --desc "Software Center -- install updates and manage packages" \
+    --out "$OUTDIR"
+IPK_PATH="$OUTDIR/pikostore_${VERSION}_piko.ipk"
+
 echo ""
 echo "==> done: $STAGE/usr/bin/pikostore ($(du -h "$STAGE/usr/bin/pikostore" | cut -f1))"
-echo "    ship it with tools/userspace/build-matchbox-payload.sh"
+echo "    ipk:  $IPK_PATH"
+echo "    ship the baked-in binary with tools/userspace/build-matchbox-payload.sh"
+echo "    ship the ipk standalone with pkgadd on an already-flashed ROM"
 echo ""

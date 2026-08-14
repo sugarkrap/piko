@@ -86,6 +86,15 @@ jobs:
       - name: build the sd card payload
         run: ./build.sh
 
+      - name: locate the pikostore ipk
+        run: |
+          IPK="$(ls pikostore_*_piko.ipk 2>/dev/null | head -1)"
+          if [ -z "$IPK" ]; then
+              echo "::error::no pikostore_*_piko.ipk at the repo root -- tools/userspace/build-pikostore.sh (run by build-x11-stack.sh, run by build.sh) should have produced one" >&2
+              exit 1
+          fi
+          echo "PIKOSTORE_IPK=$IPK" >> "$GITHUB_ENV"
+
       - name: package the sd card payload
         run: |
           TAG="sd-card-${{ github.run_number }}"
@@ -99,12 +108,16 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           tar -tzvf "piko-$TAG.tar.gz" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "### pikostore ipk" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -la "$PIKOSTORE_IPK" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" "$ARCHIVE" \
+          gh release create "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK" \
               --title "piko sd card $TAG" \
               --target "${{ github.sha }}" \
-              --notes "automated pubwish build via build.sh. extract $ARCHIVE and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash."
+              --notes "automated pubwish build via build.sh. $ARCHIVE: extract and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash a Zaurus from scratch (ships with pikostore pre-installed). $PIKOSTORE_IPK: pikostore (Software Center) on its own, to install or update it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK (NAND) or pkgadd $PIKOSTORE_IPK card (SD card)."
