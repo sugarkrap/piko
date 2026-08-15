@@ -230,10 +230,16 @@ static void scan_dir(const std::string &dir)
             continue;
 
         if (is_true(get(kv, "X-Piko-Heavy"))) {
-            std::string reason = get(kv, "X-Piko-Heavy-Reason");
-            std::string wrapped = "matchbox-fbrun -n '" + name + "'";
+            std::string reason  = get(kv, "X-Piko-Heavy-Reason");
+            std::string drivers = get(kv, "X-Piko-Drivers");
+            std::string video   = get(kv, "X-Piko-Video");
+            std::string wrapped = "matchbox-apprun -n '" + name + "'";
             if (!reason.empty())
                 wrapped += " -r '" + reason + "'";
+            if (!drivers.empty())
+                wrapped += " --drivers='" + drivers + "'";
+            if (!video.empty())
+                wrapped += " --video='" + video + "'";
             exec = wrapped + " -- " + exec;
         }
 

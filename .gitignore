@@ -110,9 +110,12 @@ userspace/src/MPlayer-*/
 userspace/stage-mplayer/
 userspace/src/SDL-*/
 userspace/src/SDL_image-*/
+userspace/src/SDL_mixer-*/
 userspace/src/SDL_ttf-*/
 userspace/stage-sdl/
 userspace/stage-sdl-runtime/
+userspace/stage-phoneme/
+userspace/build-phoneme/
 userspace/stage-target/
 userspace/stage-host/
 userspace/src/md5sum

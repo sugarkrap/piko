@@ -108,7 +108,7 @@
 	path = userspace/src/mb-applet-pikaffeine
 	url = https://github.com/sugarkrap/mb-applet-pikaffeine
 	branch = main
-[submodule "PocketSNES"]
-	path = userspace/src/PocketSNES
-	url = https://github.com/sugarkrap/PocketSNES.git
-	branch = main
+[submodule "userspace/src/phoneme"]
+	path = userspace/src/phoneme
+	url = https://github.com/sugarkrap/phoneME-GP2X-SDL.git
+	branch = master

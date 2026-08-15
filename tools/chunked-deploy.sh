@@ -344,6 +344,9 @@ send_file "$REPO/rootfs/etc/modprobe.d/hostap.conf" "/etc/modprobe.d/hostap.conf
 send_file "$REPO/rootfs/etc/wifi-up.sh" "/etc/wifi-up.sh"
 ssh_do "chmod 0755 /etc/wifi-up.sh"
 
+send_file "$REPO/rootfs/etc/asound.conf" "/etc/asound.conf"
+ssh_do "chmod 0644 /etc/asound.conf"
+
 send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
 send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
 ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
@@ -490,8 +493,9 @@ else
 fi
 
 if [ -x "$REPO/userspace/src/kill" ]; then
-    send_file "$REPO/userspace/src/kill" "/usr/local/bin/kill"
-    ssh_do "chmod 0755 /usr/local/bin/kill"
+    send_file "$REPO/userspace/src/kill" "/usr/bin/kill"
+    ssh_do "chmod 0755 /usr/bin/kill"
+    ssh_do "mkdir -p /usr/local/bin && ln -sf /usr/bin/kill /usr/local/bin/kill"
 fi
 
 send_file "$REPO/rootfs/usr/sbin/suspend"    "/usr/sbin/suspend"
@@ -585,6 +589,26 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
             fi
             send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/usr/lib/$SDL_SO_REAL"
             ssh_do "ln -sf '$SDL_SO_REAL' /usr/lib/libSDL-1.2.so.0"
+            for extra in libSDL_image-1.2.so.0 libSDL_mixer-1.2.so.0; do
+                [ -e "$SDL_STAGE/usr/lib/$extra" ] || continue
+                extra_real="$(basename "$(readlink -f "$SDL_STAGE/usr/lib/$extra")")"
+                send_file "$SDL_STAGE/usr/lib/$extra_real" "/usr/lib/$extra_real"
+                ssh_do "ln -sf '$extra_real' /usr/lib/$extra"
+            done
+
+            PHONEME_HOME="$REPO/userspace/stage-phoneme/usr/local/lib/phoneme"
+            if [ -f "$PHONEME_HOME/bin/runMidlet" ]; then
+                ssh_do "mkdir -p /usr/local/lib/phoneme/bin"
+                send_file "$PHONEME_HOME/bin/runMidlet" "/usr/local/lib/phoneme/bin/runMidlet"
+                ssh_do "chmod 0755 /usr/local/lib/phoneme/bin/runMidlet"
+                tar -C "$PHONEME_HOME" -cf "$STAGE/phoneme-data.tar" lib appdb
+                send_file "$STAGE/phoneme-data.tar" "$CARD_TMP/phoneme-data.tar"
+                ssh_do "/usr/local/bin/untar '$CARD_TMP/phoneme-data.tar' /usr/local/lib/phoneme && rm -f '$CARD_TMP/phoneme-data.tar'"
+                send_file "$REPO/userspace/src/phoneme-run" "/usr/local/bin/phoneme-run"
+                ssh_do "chmod 0755 /usr/local/bin/phoneme-run"
+                send_file "$REPO/userspace/desktop/rom.png" "/usr/share/pixmaps/rom.png"
+            fi
+
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
                 send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
                 ssh_do "chmod 0755 /usr/bin/sdltest"

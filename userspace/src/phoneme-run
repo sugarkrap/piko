@@ -1,0 +1,52 @@
+#!/bin/sh
+PM=${PHONEME_HOME:-/usr/local/lib/phoneme}
+CFG=${EMULATION_CFG:-/etc/zaurus/emulation.cfg}
+LOG=${PHONEME_LOG:-/mnt/card/.zaurus/var/log/phoneme.log}
+
+JAR=$1
+[ -n "$JAR" ] || exit 2
+[ -x "$PM/bin/runMidlet" ] || exit 1
+
+mkdir -p "${LOG%/*}" 2>/dev/null
+
+suite=
+rotate=
+if [ -f "$CFG" ]; then
+	while IFS='|' read -r p machine backend desktop icon options; do
+		[ "$p" = "$JAR" ] || continue
+		OLD=$IFS
+		IFS=','
+		for kv in $options; do
+			case "$kv" in
+				suite=*) suite=${kv#suite=} ;;
+				rotate=*) rotate=${kv#rotate=} ;;
+			esac
+		done
+		IFS=$OLD
+		break
+	done < "$CFG"
+fi
+
+if [ -z "$suite" ]; then
+	echo "phoneme-run: $JAR has no installed suite, installing now" >> "$LOG"
+	out=$("$PM/bin/installMidlet" "file:///$JAR" 2>&1)
+	echo "$out" >> "$LOG"
+	suite=$(echo "$out" | while read -r line; do
+		case "$line" in
+			*"installed, ID:"*) echo "${line##*: }" ;;
+		esac
+	done | head -n 1)
+fi
+
+if [ -z "$suite" ]; then
+	echo "phoneme-run: no suite id for $JAR, giving up" >> "$LOG"
+	exit 3
+fi
+
+if [ "$rotate" = "1" ]; then
+	J2ME_GP2X_REVERSE=1
+	export J2ME_GP2X_REVERSE
+fi
+
+cd "$PM/bin" || exit 1
+exec ./runMidlet "$suite" >> "$LOG" 2>&1

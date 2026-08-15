@@ -50,7 +50,8 @@ for relpath in $AUDIO_MODULES; do
 done
 
 WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
-$SD_MODULES"
+$SD_MODULES
+$CPUFREQ_MODULES"
 for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
     dst="$OVERLAY/lib/modules/$KVER/$relpath"
@@ -94,33 +95,10 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
         "$OVERLAY/usr/share/applications/piko-sync-server.desktop"
     cp "$REPO/userspace/desktop/piko-sync-server.png" \
         "$OVERLAY/usr/share/pixmaps/piko-sync-server.png"
+    cp "$REPO/userspace/desktop/rom.png" \
+        "$OVERLAY/usr/share/pixmaps/rom.png"
     echo "    piko-sync: /usr/bin/piko-sync-server (+ launcher, icon)"
 
-    echo "==> building PocketSNES (tools/userspace/build-pocketsnes.sh)"
-    "$REPO/tools/userspace/build-pocketsnes.sh"
-
-    PSNES_BIN="$REPO/userspace/stage-target/usr/bin/PocketSNES"
-    PSNES_SRC="$REPO/userspace/src/PocketSNES/zaurus"
-    if [ ! -f "$PSNES_BIN" ]; then
-        echo "build-mtd3-jffs2: build-pocketsnes.sh reported success but there is no" >&2
-        echo "  $PSNES_BIN -- refusing to ship a launcher with no emulator" >&2
-        exit 1
-    fi
-    mkdir -p "$OVERLAY/usr/local/bin" "$OVERLAY/usr/share/applications"
-    cp "$PSNES_BIN" "$OVERLAY/usr/local/bin/PocketSNES"
-    chmod 0755 "$OVERLAY/usr/local/bin/PocketSNES"
-    cp "$PSNES_SRC/pocketsnes-run" "$OVERLAY/usr/local/bin/pocketsnes-run"
-    chmod 0755 "$OVERLAY/usr/local/bin/pocketsnes-run"
-    cp "$PSNES_SRC/pocketsnes-interp.desktop" \
-        "$OVERLAY/usr/share/applications/pocketsnes.desktop"
-    cp "$REPO/userspace/src/PocketSNES/data/pocketsnes.png" \
-        "$OVERLAY/usr/share/pixmaps/pocketsnes.png"
-    mkdir -p "$OVERLAY/usr/local/share/pocketsnes"
-    for png in "$REPO"/userspace/src/PocketSNES/data/*.png; do
-        [ -f "$png" ] || continue
-        cp "$png" "$OVERLAY/usr/local/share/pocketsnes/"
-    done
-    echo "    pocketsnes: /usr/local/bin/PocketSNES (+ pocketsnes-run, launcher)"
 else
     echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"
 fi
@@ -180,7 +158,8 @@ piko-splash:usr/sbin/piko-splash
 pkillx:usr/sbin/pkillx
 vol:usr/sbin/vol
 zramswap:usr/sbin/zramswap
-kill:usr/local/bin/kill
+kill:usr/bin/kill
+phoneme-run:usr/local/bin/phoneme-run
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar"
 for entry in $SRC_TOOLS; do
@@ -199,6 +178,10 @@ for entry in $SRC_TOOLS; do
     echo "    tool: /$rel"
 done
 
+mkdir -p "$OVERLAY/usr/local/bin"
+ln -sf /usr/bin/kill "$OVERLAY/usr/local/bin/kill"
+echo "    compat: /usr/local/bin/kill -> /usr/bin/kill"
+
 SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
 if [ -d "$SDL_STAGE" ]; then
     SDL_SONAME="libSDL-1.2.so.0"
@@ -212,6 +195,15 @@ if [ -d "$SDL_STAGE" ]; then
     chmod 0755 "$OVERLAY/lib/$SDL_LIB"
     [ "$SDL_LIB" = "$SDL_SONAME" ] || ln -sf "$SDL_LIB" "$OVERLAY/lib/$SDL_SONAME"
     echo "    sdl: /lib/$SDL_LIB (soname $SDL_SONAME)"
+
+    for extra in libSDL_image-1.2.so.0 libSDL_mixer-1.2.so.0; do
+        [ -e "$SDL_STAGE/usr/lib/$extra" ] || continue
+        real="$(basename "$(readlink -f "$SDL_STAGE/usr/lib/$extra")")"
+        cp "$SDL_STAGE/usr/lib/$real" "$OVERLAY/lib/$real"
+        chmod 0755 "$OVERLAY/lib/$real"
+        [ "$real" = "$extra" ] || ln -sf "$real" "$OVERLAY/lib/$extra"
+        echo "    sdl: /lib/$real (soname $extra)"
+    done
     for b in pikalibrate sdltest; do
         if [ ! -f "$SDL_STAGE/usr/bin/$b" ]; then
             echo "build-mtd3-jffs2: $SDL_STAGE exists but $b is missing -- rerun tools/userspace/build-sdl.sh" >&2
@@ -223,6 +215,25 @@ if [ -d "$SDL_STAGE" ]; then
     done
 else
     echo "build-mtd3-jffs2: WARNING -- no $SDL_STAGE, pikalibrate will be a dead launcher" >&2
+fi
+
+PHONEME_STAGE="${PHONEME_STAGE:-$REPO/userspace/stage-phoneme}"
+if [ "${SKIP_PHONEME:-0}" -ne 1 ]; then
+    echo "==> building phoneME J2ME (tools/userspace/build-phoneme.sh)"
+    "$REPO/tools/userspace/build-phoneme.sh"
+
+    PHONEME_HOME="$PHONEME_STAGE/usr/local/lib/phoneme"
+    if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
+        echo "build-mtd3-jffs2: build-phoneme.sh reported success but there is no" >&2
+        echo "  $PHONEME_HOME/bin/runMidlet -- refusing to ship a launcher with no runtime" >&2
+        exit 1
+    fi
+    mkdir -p "$OVERLAY/usr/local/lib/phoneme"
+    cp -a "$PHONEME_HOME/." "$OVERLAY/usr/local/lib/phoneme/"
+    chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
+    echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
+else
+    echo "==> SKIP_PHONEME=1: not staging the J2ME runtime"
 fi
 
 ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/userspace/stage-alsa-runtime}"

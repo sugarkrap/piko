@@ -53,6 +53,7 @@ using namespace piko_sync;
 static const char *DEFAULT_ADDRESS = "10.208.47.2";
 static const char *DEFAULT_DEST_DIR = "/mnt/card/Transfers";
 static const char *ROM_DEST_DIR = "/mnt/card/Emulation";
+static const char *APPLET_DEST_DIR = "/mnt/card/Applets";
 static const int ROM_PANEL_H = 196;
 static const int ROM_CONNECT_SECS = 5;
 static int rom_columns_[] = { 190, 60, 90, 90, 0 };
@@ -120,10 +121,18 @@ static std::string choice_label(const Fl_Choice *choice)
 
 class TransferPane;
 
+class TransferObserver {
+public:
+    virtual ~TransferObserver() {}
+    virtual void on_transfer_complete() = 0;
+};
+
 struct QueuedFile {
     std::string path;
     std::string name;
     std::string machine;
+    std::string options;
+    std::string dest;
     uint64_t total_size;
     uint32_t crc32;
     int row;
@@ -180,31 +189,61 @@ class BuildRunner;
 
 class TransferPane {
 public:
-    TransferPane(Fl_Group *transfer_tab, int X, int Y, int W, int H,
-                 const Settings &cfg, int reserve_h = 0,
-                 const char *dest_key = "transfer.dest_dir",
-                 const char *dest_default = DEFAULT_DEST_DIR);
+    TransferPane(int hx, int hy, int hw, int hh,
+                 int dx, int dy, int dw, int dh,
+                 const Settings &cfg);
     virtual ~TransferPane();
 
-    virtual std::string machine_for(const std::string &path) { (void)path; return std::string(); }
-    virtual void after_transfer_complete() {}
-    virtual std::string dest_for(const QueuedFile &qf) { (void)qf; return dest_dir(); }
-
-    bool queue_path(const std::string &path);
+    bool queue_path(const std::string &path, const std::string &options = std::string(),
+                    const std::string &dest = std::string(),
+                    const std::string &machine = std::string());
     void choose_and_queue(const char *pattern, const char *title);
+    void retry_failed() { do_retry_failed(); }
     void refresh_queue_view() { sync_table(); }
 
     virtual void store_settings(Settings &cfg) const
     {
         cfg.set("transfer.address", address_->value() ? address_->value() : "");
         cfg.set("transfer.last_dir", last_dir_);
-        cfg.set(dest_key_, dest_->value() ? dest_->value() : "");
+    }
+
+    void add_observer(TransferObserver *o) { observers_.push_back(o); }
+    void notify_transfer_complete()
+    {
+        for (size_t i = 0; i < observers_.size(); i++)
+            observers_[i]->on_transfer_complete();
     }
 
     TransferQueue &queue() { return queue_; }
     QueuedFile &file(int i) { return files_[i]; }
     std::string address() const { return address_->value() ? address_->value() : ""; }
-    std::string dest_dir() const { return dest_->value() ? dest_->value() : ""; }
+    std::string dest_dir() const { return default_dest_; }
+    void set_default_dest(const std::string &d) { default_dest_ = d; }
+
+    bool expanded() const { return expanded_; }
+    void set_expanded(bool on)
+    {
+        expanded_ = on;
+        if (expanded_)
+            table_->show();
+        else
+            table_->hide();
+        if (toggle_btn_)
+            toggle_btn_->label(expanded_ ? "@2>  Transfers" : "@>  Transfers");
+        if (relayout_cb_)
+            relayout_cb_(relayout_arg_);
+    }
+    void on_relayout(void (*fn)(void *), void *arg) { relayout_cb_ = fn; relayout_arg_ = arg; }
+    int table_bottom() const { return table_->y() + table_->h(); }
+    void dock_relayout(int dx, int dy, int dw, int dh)
+    {
+        int m = 10;
+        toggle_btn_->resize(dx + m, dy, 120, 22);
+        aggregate_bar_->resize(dx + m + 126, dy + 1, dw - 2 * m - 126 - 106, 20);
+        shot_btn_->resize(dx + dw - m - 100, dy, 100, 22);
+        int th = dh - 26;
+        table_->resize(dx + m, dy + 26, dw - 2 * m, th > 1 ? th : 1);
+    }
     const std::string &last_dir() const { return last_dir_; }
 
     void sync_table()
@@ -240,6 +279,7 @@ public:
 
 protected:
     int reserve_y() const { return reserve_y_; }
+    std::vector<TransferObserver *> observers_;
 
 private:
     static void retry_cb(void *v)
@@ -255,14 +295,22 @@ private:
     void do_add_files();
 
     static void screenshot_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_screenshot(); }
+    static void toggle_cb(Fl_Widget *, void *v)
+    {
+        TransferPane *p = static_cast<TransferPane *>(v);
+        p->set_expanded(!p->expanded());
+    }
     void do_screenshot();
 
     static void retry_failed_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_retry_failed(); }
     void do_retry_failed();
 
     Fl_Input *address_;
-    Fl_Input *dest_;
-    std::string dest_key_;
+    std::string default_dest_;
+    Fl_Button *toggle_btn_;
+    bool expanded_;
+    void (*relayout_cb_)(void *);
+    void *relayout_arg_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
@@ -335,7 +383,7 @@ void FileSend::terminate(TransferStatus status, const std::string &detail, bool 
     app_->queue().set_status(qf.row, status, detail);
     if (status == XFER_DONE) {
         app_->queue().set_progress(qf.row, total_size_);
-        app_->after_transfer_complete();
+        app_->notify_transfer_complete();
     }
     app_->sync_table();
 
@@ -371,8 +419,9 @@ void FileSend::send_offer()
 {
     QueuedFile &qf = app_->file(file_index_);
     FileOfferMsg fo; fo.name = qf.name; fo.total_size = qf.total_size;
-    fo.dest_dir = app_->dest_for(qf);
+    fo.dest_dir = qf.dest;
     fo.rom_machine = qf.machine;
+    fo.rom_options = qf.options;
     if (!send_frame_blocking(fd_, MSG_FILE_OFFER, encode(fo))) { terminate(XFER_RECONNECTING, "", true); return; }
     phase_ = WAIT_OFFER_ACK;
 }
@@ -699,12 +748,16 @@ void TransferPane::do_screenshot()
         fl_alert("Screenshot failed:\n%s", err.c_str());
 }
 
-TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
-                           const Settings &cfg, int reserve_h,
-                           const char *dest_key, const char *dest_default)
+TransferPane::TransferPane(int hx, int hy, int hw, int hh,
+                           int dx, int dy, int dw, int dh,
+                           const Settings &cfg)
 {
-    (void)tab;
     int m = 10;
+    expanded_ = false;
+    toggle_btn_ = 0;
+    relayout_cb_ = 0;
+    relayout_arg_ = 0;
+    reserve_y_ = 0;
 
     std::string saved_dir = cfg.get("transfer.last_dir");
     if (!saved_dir.empty()) {
@@ -712,28 +765,20 @@ TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
         if (stat(saved_dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
             last_dir_ = saved_dir;
     }
+    default_dest_ = cfg.get("transfer.dest_dir", DEFAULT_DEST_DIR);
 
-    address_ = new Fl_Input(X + m + 90, Y + m, 160, 24, "Zaurus:");
+    address_ = new Fl_Input(hx + m + 60, hy + (hh - 24) / 2, 170, 24, "Zaurus:");
     address_->align(FL_ALIGN_LEFT);
     address_->value(cfg.get("transfer.address", DEFAULT_ADDRESS).c_str());
+    address_->tooltip("Address of the device running piko-sync-server");
 
-    Fl_Button *add_btn = new Fl_Button(X + m + 260, Y + m, 100, 24, "Add Files...");
-    add_btn->callback(add_files_cb, this);
+    toggle_btn_ = new Fl_Button(dx + m, dy, 120, 22, "@>  Transfers");
+    toggle_btn_->box(FL_FLAT_BOX);
+    toggle_btn_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT);
+    toggle_btn_->callback(toggle_cb, this);
+    toggle_btn_->tooltip("Show or hide the file transfer list");
 
-    Fl_Button *retry_btn = new Fl_Button(X + m + 366, Y + m, 110, 24, "Retry failed");
-    retry_btn->callback(retry_failed_cb, this);
-
-    shot_btn_ = new Fl_Button(X + m + 482, Y + m, 110, 24, "Screenshot");
-    shot_btn_->callback(screenshot_cb, this);
-    shot_btn_->tooltip("Grab the device's screen and save it as a PNG on this machine");
-
-    dest_ = new Fl_Input(X + m + 90, Y + m + 32, W - 2 * m - 90, 24, "Folder:");
-    dest_->align(FL_ALIGN_LEFT);
-    dest_key_ = dest_key;
-    dest_->value(cfg.get(dest_key_, dest_default).c_str());
-    dest_->tooltip("Absolute path on the Zaurus where incoming files are written");
-
-    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 64, W - 2 * m, 20);
+    aggregate_bar_ = new Fl_Progress(dx + m + 126, dy + 1, dw - 2 * m - 126 - 106, 20);
     aggregate_bar_->minimum(0);
     aggregate_bar_->maximum(100);
     aggregate_bar_->value(0);
@@ -741,10 +786,13 @@ TransferPane::TransferPane(Fl_Group *tab, int X, int Y, int W, int H,
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
 
-    table_ = new TransferTable(X + m, Y + m + 92, W - 2 * m,
-                               H - m - 92 - m - reserve_h);
-    reserve_y_ = Y + H - m - reserve_h;
+    shot_btn_ = new Fl_Button(dx + dw - m - 100, dy, 100, 22, "Screenshot");
+    shot_btn_->callback(screenshot_cb, this);
+    shot_btn_->tooltip("Grab the device's screen and save it as a PNG on this machine");
+
+    table_ = new TransferTable(dx + m, dy + 26, dw - 2 * m, dh - 26);
     table_->queue(&queue_);
+    table_->hide();
 }
 
 TransferPane::~TransferPane()
@@ -756,7 +804,8 @@ TransferPane::~TransferPane()
     active_.clear();
 }
 
-bool TransferPane::queue_path(const std::string &path)
+bool TransferPane::queue_path(const std::string &path, const std::string &options,
+                              const std::string &dest, const std::string &machine)
 {
     struct stat st;
     if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
@@ -767,7 +816,9 @@ bool TransferPane::queue_path(const std::string &path)
     qf.name = basename_of(path);
     qf.total_size = static_cast<uint64_t>(st.st_size);
     qf.crc32 = compute_file_crc32(path);
-    qf.machine = machine_for(path);
+    qf.machine = machine;
+    qf.options = options;
+    qf.dest = dest.empty() ? dest_dir() : dest;
     qf.row = queue_.add(qf.name, qf.total_size);
 
     files_.push_back(qf);
@@ -888,9 +939,12 @@ private:
     SettingsStore *store_;
 };
 
+class ManagerPane;
+class TransferFilesPane;
+
 class SettingsStore {
 public:
-    SettingsStore() : client_(0), roms_(0), runner_(0) { cfg_.load(); }
+    SettingsStore() : client_(0), roms_(0), runner_(0), files_(0) { cfg_.load(); }
 
     const Settings &cfg() const { return cfg_; }
 
@@ -901,6 +955,9 @@ public:
         runner_ = runner;
     }
 
+    void add_manager(ManagerPane *m) { managers_.push_back(m); }
+    void add_files_pane(TransferFilesPane *f) { files_ = f; }
+
     void save_now();
 
 private:
@@ -908,6 +965,8 @@ private:
     TransferPane *client_;
     TransferPane *roms_;
     BuildRunner *runner_;
+    TransferFilesPane *files_;
+    std::vector<ManagerPane *> managers_;
 };
 
 BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H,
@@ -1027,17 +1086,6 @@ void BuildRunner::store_settings(Settings &cfg) const
     cfg.set_bool("build.skip_x11", skip_x11_->value() != 0);
     cfg.set_bool("build.build_only", build_only_->value() != 0);
     cfg.set_bool("build.no_backup", no_backup_->value() != 0);
-}
-
-void SettingsStore::save_now()
-{
-    if (client_)
-        client_->store_settings(cfg_);
-    if (roms_)
-        roms_->store_settings(cfg_);
-    if (runner_)
-        runner_->store_settings(cfg_);
-    cfg_.save();
 }
 
 std::string BuildRunner::script_path() const
@@ -1532,91 +1580,243 @@ static bool get_rom_icon(const std::string &address, const std::string &rom_path
     return true;
 }
 
-class RomPane : public TransferPane {
+static const char *media_base(int idx)
+{
+    switch (idx) {
+    case 1:  return "/mnt/card";
+    case 2:  return "/mnt/cf";
+    default: return "/usr/local";
+    }
+}
+
+static const char *media_name(int idx)
+{
+    switch (idx) {
+    case 1:  return "SD";
+    case 2:  return "CF";
+    default: return "NAND";
+    }
+}
+
+struct ManagerSpec {
+    const char *media_key;
+    const char *subdir;
+    const char *dest_label;
+    const char *add_label;
+    const char *add_tip;
+    const char *pattern;
+    const char *chooser_title;
+    const char *empty_text;
+    const char *reject_hint;
+    bool j2me;
+    bool want_icon;
+    bool want_rotate;
+};
+
+class ManagerPane : public TransferObserver {
 public:
-    RomPane(Fl_Group *tab, int X, int Y, int W, int H, const Settings &cfg)
-        : TransferPane(tab, X, Y, W, H, cfg, ROM_PANEL_H), preview_image_(0)
+    ManagerPane(Fl_Group *tab, TransferPane *xfer, int X, int Y, int W, int H,
+                const Settings &cfg, const ManagerSpec &spec)
+        : xfer_(xfer), spec_(spec), preview_(0), preview_image_(0),
+          icon_btn_(0), rotate_chk_(0)
     {
         int m = 10;
-        int y = reserve_y();
+        int y = Y + m;
         tab->begin();
 
-        rom_dest_ = new Fl_Input(X + m + 90, y, 200, 24, "ROM folder:");
-        rom_dest_->align(FL_ALIGN_LEFT);
-        rom_dest_->value(cfg.get("rom.dest_dir", ROM_DEST_DIR).c_str());
-        rom_dest_->tooltip("Where files detected as ROMs are sent");
+        media_ = new Fl_Choice(X + m + 90, y, 110, 24, spec_.dest_label);
+        media_->align(FL_ALIGN_LEFT);
+        media_->add("NAND");
+        media_->add("SD");
+        media_->add("CF");
+        {
+            std::string saved = cfg.get(spec_.media_key, "SD");
+            int idx = 1;
+            for (int i = 0; i < 3; i++)
+                if (saved == media_name(i))
+                    idx = i;
+            media_->value(idx);
+        }
+        media_->tooltip("Which storage the device keeps these on");
+
+        add_btn_ = new Fl_Button(X + m + 320, y, 150, 24, spec_.add_label);
+        add_btn_->callback(add_cb, this);
+        add_btn_->tooltip(spec_.add_tip);
+
+        if (spec_.want_rotate) {
+            rotate_chk_ = new Fl_Check_Button(X + m + 478, y, 150, 24, "Rotate (portrait)");
+            rotate_chk_->tooltip("Run applets added from now on with the screen rotated, "
+                                 "which suits the 240x320 layout most of them assume");
+        }
 
         y += 30;
 
-        backend_ = new Fl_Choice(X + m + 70, y, 140, 24, "Backend:");
-        backend_->align(FL_ALIGN_LEFT);
-        backend_->add("pocketsnes");
-        backend_->value(0);
-
-        add_rom_btn_ = new Fl_Button(X + m + 220, y, 110, 24, "Add ROM...");
-        add_rom_btn_->callback(add_rom_cb, this);
-        add_rom_btn_->tooltip("Send a ROM to the device and register it as a game");
-
-        refresh_btn_ = new Fl_Button(X + m + 336, y, 90, 24, "Refresh");
+        refresh_btn_ = new Fl_Button(X + m, y, 90, 24, "Refresh");
         refresh_btn_->callback(refresh_cb, this);
 
-        delete_btn_ = new Fl_Button(X + m + 432, y, 110, 24, "Delete ROM");
+        delete_btn_ = new Fl_Button(X + m + 96, y, 110, 24, "Delete");
         delete_btn_->callback(delete_cb, this);
 
-        icon_btn_ = new Fl_Button(X + m + 548, y, 100, 24, "Set Icon...");
-        icon_btn_->callback(icon_cb, this);
-        icon_btn_->tooltip("Choose the icon matchbox-desktop shows for this ROM");
+        if (spec_.want_icon) {
+            icon_btn_ = new Fl_Button(X + m + 212, y, 100, 24, "Set Icon...");
+            icon_btn_->callback(icon_cb, this);
+            icon_btn_->tooltip("Choose the icon matchbox-desktop shows for this entry");
+        }
 
-        preview_ = new Fl_Box(X + W - m - 48, y + 34, 48, 48);
-        preview_->box(FL_DOWN_BOX);
-        preview_->color(FL_BACKGROUND2_COLOR);
+        y += 30;
 
-        roms_ = new Fl_Hold_Browser(X + m, y + 30, W - 2 * m - 56, ROM_PANEL_H - 64);
-        roms_->callback(select_cb, this);
-        roms_->when(FL_WHEN_CHANGED);
-        roms_->column_widths(rom_columns_);
-        roms_->column_char('\t');
+        int list_h = Y + H - y - m;
+        int list_w = spec_.want_icon ? (W - 2 * m - 56) : (W - 2 * m);
+        list_ = new Fl_Hold_Browser(X + m, y, list_w, list_h);
+        list_->callback(select_cb, this);
+        list_->when(FL_WHEN_CHANGED);
+        static const int widths[] = { 210, 60, 70, 0 };
+        list_->column_widths(widths);
+        list_->column_char('\t');
+
+        if (spec_.want_icon) {
+            preview_ = new Fl_Box(X + W - m - 48, y, 48, 48);
+            preview_->box(FL_DOWN_BOX);
+            preview_->color(FL_BACKGROUND2_COLOR);
+        }
 
         tab->end();
-        roms_->add("press Refresh to read the device's rom list");
+
+        xfer_->add_observer(this);
         Fl::add_timeout(0.4, first_refresh_cb, this);
     }
 
-    std::string machine_for(const std::string &path)
-    {
-        return detect_machine(path);
-    }
+    virtual ~ManagerPane() { delete preview_image_; }
 
-    void after_transfer_complete() { refresh(); }
-
-    std::string dest_for(const QueuedFile &qf)
-    {
-        if (!qf.machine.empty() && rom_dest_->value() && *rom_dest_->value())
-            return rom_dest_->value();
-        return dest_dir();
-    }
+    void on_transfer_complete() { refresh(); }
 
     void store_settings(Settings &cfg) const
     {
-        TransferPane::store_settings(cfg);
-        cfg.set("rom.dest_dir", rom_dest_->value() ? rom_dest_->value() : "");
+        cfg.set(spec_.media_key, media_name(media_->value()));
     }
 
 private:
-    static void first_refresh_cb(void *v) { ((RomPane *)v)->refresh(); }
-    static void select_cb(Fl_Widget *, void *v) { ((RomPane *)v)->show_icon(); }
-    static void icon_cb(Fl_Widget *, void *v) { ((RomPane *)v)->choose_icon(); }
+    static void first_refresh_cb(void *v) { ((ManagerPane *)v)->refresh(); }
+    static void refresh_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->refresh(); }
+    static void delete_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->remove_selected(); }
+    static void add_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->add_entries(); }
+    static void select_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->show_icon(); }
+    static void icon_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->choose_icon(); }
+
+    std::string address() const { return xfer_->address(); }
+    std::string dest() const
+    {
+        return std::string(media_base(media_->value())) + "/" + spec_.subdir;
+    }
+
+    bool wanted(const RomEntry &e) const
+    {
+        bool is_j2me = (e.machine == "J2ME");
+        return is_j2me == spec_.j2me;
+    }
 
     const RomEntry *selected() const
     {
-        int sel = roms_->value();
+        int sel = list_->value();
         if (sel < 1 || (size_t)sel > entries_.size())
             return 0;
         return &entries_[sel - 1];
     }
 
+    void add_entries()
+    {
+        Fl_File_Chooser chooser(xfer_->last_dir().empty() ? "." : xfer_->last_dir().c_str(),
+                                 spec_.pattern, Fl_File_Chooser::MULTI, spec_.chooser_title);
+        chooser.show();
+        while (chooser.shown())
+            Fl::wait();
+        if (!chooser.value(1))
+            return;
+
+        std::string options;
+        option_set(options, "media", media_name(media_->value()));
+        if (rotate_chk_ && rotate_chk_->value())
+            option_set(options, "rotate", "1");
+
+        std::string rejected;
+        for (int i = 1; i <= chooser.count(); i++) {
+            const char *path = chooser.value(i);
+            if (!path)
+                continue;
+            std::string machine = detect_machine(path);
+            bool ok = spec_.j2me ? (machine == "J2ME") : (!machine.empty() && machine != "J2ME");
+            if (!ok) {
+                rejected += std::string("\n  ") + basename_of_path(path);
+                continue;
+            }
+            xfer_->queue_path(path, options, dest(), machine);
+        }
+        xfer_->refresh_queue_view();
+
+        if (!rejected.empty())
+            fl_alert("Not sent, because they were not recognised:%s\n\n%s",
+                     rejected.c_str(), spec_.reject_hint);
+    }
+
+    void refresh()
+    {
+        entries_.clear();
+        list_->clear();
+
+        std::string err;
+        std::string records;
+        if (!fetch_rom_list(address(), records, err)) {
+            list_->add(("@C1cannot read the device's list: " + err).c_str());
+            return;
+        }
+
+        std::string line;
+        for (size_t i = 0; i <= records.size(); i++) {
+            if (i == records.size() || records[i] == '\n') {
+                if (!line.empty()) {
+                    RomEntry e;
+                    if (decode_entry(line, e) && wanted(e))
+                        entries_.push_back(e);
+                }
+                line.clear();
+            } else {
+                line += records[i];
+            }
+        }
+
+        for (size_t i = 0; i < entries_.size(); i++) {
+            const RomEntry &e = entries_[i];
+            std::string media = option_get(e.options, "media");
+            if (media.empty())
+                media = "?";
+            std::string row = strip_extension(basename_of_path(e.path)) + "\t"
+                            + media + "\t" + e.machine + "\t" + e.path;
+            list_->add(row.c_str());
+        }
+        if (entries_.empty())
+            list_->add(spec_.empty_text);
+    }
+
+    void remove_selected()
+    {
+        const RomEntry *e = selected();
+        if (!e) { fl_alert("Select an entry to delete first."); return; }
+        std::string name = strip_extension(basename_of_path(e->path));
+        std::string path = e->path;
+        if (fl_choice("Delete \"%s\" from the device?\n%s",
+                      "Cancel", "Delete", 0, name.c_str(), path.c_str()) != 1)
+            return;
+
+        std::string err;
+        if (!delete_rom(address(), path, err))
+            fl_alert("Could not delete %s:\n%s", name.c_str(), err.c_str());
+        refresh();
+    }
+
     void show_icon()
     {
+        if (!preview_)
+            return;
         const RomEntry *e = selected();
         preview_->image(0);
         delete preview_image_;
@@ -1644,7 +1844,7 @@ private:
     void choose_icon()
     {
         const RomEntry *e = selected();
-        if (!e) { fl_alert("Select a ROM first."); return; }
+        if (!e) { fl_alert("Select an entry first."); return; }
 
         Fl_File_Chooser chooser(".", "PNG icons (*.png)",
                                  Fl_File_Chooser::SINGLE, "Choose an icon");
@@ -1680,114 +1880,126 @@ private:
             return;
         }
         refresh();
-        for (size_t i = 0; i < entries_.size(); i++) {
-            if (entries_[i].path == rom) { roms_->value((int)i + 1); break; }
-        }
         show_icon();
     }
-    static void add_rom_cb(Fl_Widget *, void *v) { ((RomPane *)v)->add_rom(); }
-    static void refresh_cb(Fl_Widget *, void *v) { ((RomPane *)v)->refresh(); }
 
-    void add_rom()
-    {
-        Fl_File_Chooser chooser(last_dir().empty() ? "." : last_dir().c_str(),
-                                 "ROM files (*.{smc,sfc,fig,swc})",
-                                 Fl_File_Chooser::MULTI, "Add ROMs to send");
-        chooser.show();
-        while (chooser.shown())
-            Fl::wait();
-        if (!chooser.value(1))
-            return;
-
-        int queued = 0;
-        std::string rejected;
-        for (int i = 1; i <= chooser.count(); i++) {
-            const char *path = chooser.value(i);
-            if (!path)
-                continue;
-            if (detect_machine(path).empty()) {
-                rejected += std::string("\n  ") + basename_of_path(path);
-                continue;
-            }
-            if (queue_path(path))
-                queued++;
-        }
-        refresh_queue_view();
-
-        if (!rejected.empty())
-            fl_alert("Not recognised as a ROM, so not sent:%s\n\n"
-                     "Use Add Files... to send them as ordinary files.",
-                     rejected.c_str());
-    }
-    static void delete_cb(Fl_Widget *, void *v) { ((RomPane *)v)->remove_selected(); }
-
-    void refresh()
-    {
-        entries_.clear();
-        roms_->clear();
-
-        std::string err;
-        std::string records;
-        if (!fetch_rom_list(address(), records, err)) {
-            roms_->add(("@C1cannot read the device's rom list: " + err).c_str());
-            return;
-        }
-
-        std::string line;
-        for (size_t i = 0; i <= records.size(); i++) {
-            if (i == records.size() || records[i] == '\n') {
-                if (!line.empty()) {
-                    RomEntry e;
-                    if (decode_entry(line, e))
-                        entries_.push_back(e);
-                }
-                line.clear();
-            } else {
-                line += records[i];
-            }
-        }
-
-        for (size_t i = 0; i < entries_.size(); i++) {
-            const RomEntry &e = entries_[i];
-            std::string row = strip_extension(basename_of_path(e.path)) + "\t"
-                            + e.machine + "\t" + e.backend + "\t"
-                            + e.icon + "\t" + e.path;
-            roms_->add(row.c_str());
-        }
-        if (entries_.empty())
-            roms_->add("no roms registered on the device yet");
-    }
-
-    void remove_selected()
-    {
-        int sel = roms_->value();
-        if (sel < 1 || (size_t)sel > entries_.size()) {
-            fl_alert("Select a ROM to delete first.");
-            return;
-        }
-        const RomEntry &e = entries_[sel - 1];
-        std::string name = strip_extension(basename_of_path(e.path));
-        if (fl_choice("Delete \"%s\" from the device?\n%s",
-                      "Cancel", "Delete", 0, name.c_str(), e.path.c_str()) != 1)
-            return;
-
-        std::string err;
-        if (!delete_rom(address(), e.path, err))
-            fl_alert("Could not delete %s:\n%s", name.c_str(), err.c_str());
-        refresh();
-    }
-
-    Fl_Button *add_rom_btn_;
-    Fl_Input *rom_dest_;
-    Fl_Choice *backend_;
+    TransferPane *xfer_;
+    ManagerSpec spec_;
+    Fl_Choice *media_;
+    Fl_Button *add_btn_;
     Fl_Button *refresh_btn_;
     Fl_Button *delete_btn_;
-    Fl_Hold_Browser *roms_;
     Fl_Button *icon_btn_;
+    Fl_Check_Button *rotate_chk_;
+    Fl_Hold_Browser *list_;
     Fl_Box *preview_;
     Fl_PNG_Image *preview_image_;
     std::vector<RomEntry> entries_;
 };
+
+class TransferFilesPane {
+public:
+    TransferFilesPane(Fl_Group *tab, TransferPane *xfer, int X, int Y, int W, int H,
+                      const Settings &cfg)
+        : xfer_(xfer)
+    {
+        int m = 10;
+        int y = Y + m;
+        (void)H;
+        tab->begin();
+
+        dest_ = new Fl_Input(X + m + 90, y, W - 2 * m - 90, 24, "Folder:");
+        dest_->align(FL_ALIGN_LEFT);
+        dest_->value(cfg.get("transfer.dest_dir", DEFAULT_DEST_DIR).c_str());
+        dest_->tooltip("Absolute path on the Zaurus where incoming files are written");
+        dest_->callback(dest_cb, this);
+        dest_->when(FL_WHEN_CHANGED);
+
+        y += 32;
+
+        add_btn_ = new Fl_Button(X + m, y, 110, 24, "Add Files...");
+        add_btn_->callback(add_cb, this);
+        add_btn_->tooltip("Send any file to the folder above, without registering it");
+
+        retry_btn_ = new Fl_Button(X + m + 116, y, 110, 24, "Retry failed");
+        retry_btn_->callback(retry_cb, this);
+
+        tab->end();
+
+        xfer_->set_default_dest(dest_->value() ? dest_->value() : "");
+    }
+
+    void store_settings(Settings &cfg) const
+    {
+        cfg.set("transfer.dest_dir", dest_->value() ? dest_->value() : "");
+    }
+
+private:
+    static void dest_cb(Fl_Widget *, void *v)
+    {
+        TransferFilesPane *p = (TransferFilesPane *)v;
+        p->xfer_->set_default_dest(p->dest_->value() ? p->dest_->value() : "");
+    }
+    static void add_cb(Fl_Widget *, void *v)
+    {
+        TransferFilesPane *p = (TransferFilesPane *)v;
+        p->xfer_->set_default_dest(p->dest_->value() ? p->dest_->value() : "");
+        p->xfer_->choose_and_queue("All files (*)", "Add files to send");
+    }
+    static void retry_cb(Fl_Widget *, void *v)
+    {
+        ((TransferFilesPane *)v)->xfer_->retry_failed();
+    }
+
+    TransferPane *xfer_;
+    Fl_Input *dest_;
+    Fl_Button *add_btn_;
+    Fl_Button *retry_btn_;
+};
+
+void SettingsStore::save_now()
+{
+    if (client_)
+        client_->store_settings(cfg_);
+    if (roms_)
+        roms_->store_settings(cfg_);
+    if (runner_)
+        runner_->store_settings(cfg_);
+    for (size_t i = 0; i < managers_.size(); i++)
+        managers_[i]->store_settings(cfg_);
+    if (files_)
+        files_->store_settings(cfg_);
+    cfg_.save();
+}
+
+static const int WIN_W = 720;
+static const int WIN_H = 520;
+static const int HEADER_H = 32;
+static const int STATUS_H = 26;
+static const int DOCK_OPEN_H = 170;
+
+struct Layout {
+    Fl_Tabs *tabs;
+    TransferPane *xfer;
+    std::vector<Fl_Group *> pages;
+};
+
+static Layout g_layout;
+
+static void apply_layout()
+{
+    int dock_h = g_layout.xfer->expanded() ? DOCK_OPEN_H : STATUS_H;
+    int tabs_h = WIN_H - HEADER_H - dock_h;
+
+    g_layout.tabs->resize(0, HEADER_H, WIN_W, tabs_h);
+    for (size_t i = 0; i < g_layout.pages.size(); i++)
+        g_layout.pages[i]->resize(0, HEADER_H + 24, WIN_W, tabs_h - 24);
+
+    g_layout.xfer->dock_relayout(0, HEADER_H + tabs_h, WIN_W, dock_h);
+    g_layout.tabs->redraw();
+}
+
+static void relayout_cb(void *) { apply_layout(); }
 
 int main(int argc, char **argv)
 {
@@ -1795,32 +2007,87 @@ int main(int argc, char **argv)
 
     SettingsStore settings;
 
-    Fl_Double_Window win(720, 520, "Piko Sync");
+    Fl_Double_Window win(WIN_W, WIN_H, "Piko Sync");
     win.begin();
 
-    Fl_Tabs tabs(0, 0, 720, 520);
+    int tabs_h = WIN_H - HEADER_H - DOCK_OPEN_H;
+    int page_y = HEADER_H + 24;
+    int page_h = tabs_h - 24;
+
+    TransferPane xfer(0, 0, WIN_W, HEADER_H,
+                      0, HEADER_H + tabs_h, WIN_W, DOCK_OPEN_H,
+                      settings.cfg());
+
+    Fl_Tabs tabs(0, HEADER_H, WIN_W, tabs_h);
     tabs.begin();
 
-    Fl_Group transfer_tab(0, 24, 720, 496, "Transfer && Manage");
-    RomPane client(&transfer_tab, 0, 24, 720, 496, settings.cfg());
-    transfer_tab.end();
+    ManagerSpec rom_spec;
+    rom_spec.media_key = "rom.media";
+    rom_spec.subdir = "Emulation";
+    rom_spec.dest_label = "Stored on:";
+    rom_spec.add_label = "Add ROM...";
+    rom_spec.add_tip = "Send a ROM to the device and register it as a game";
+    rom_spec.pattern = "ROM files (*.{smc,sfc,fig,swc})";
+    rom_spec.chooser_title = "Add ROMs to send";
+    rom_spec.empty_text = "no roms registered on the device yet";
+    rom_spec.reject_hint = "Use the Transfer files tab to send them as ordinary files.";
+    rom_spec.j2me = false;
+    rom_spec.want_icon = true;
+    rom_spec.want_rotate = false;
 
-    Fl_Group deploy_tab(0, 24, 720, 496, "Build && Deploy");
-    BuildRunner runner(&deploy_tab, 0, 24, 720, 496, settings.cfg(), &settings);
+    Fl_Group rom_tab(0, page_y, WIN_W, page_h, "ROMs");
+    ManagerPane roms(&rom_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg(), rom_spec);
+    rom_tab.end();
+
+    ManagerSpec midlet_spec;
+    midlet_spec.media_key = "applet.media";
+    midlet_spec.subdir = "Applets";
+    midlet_spec.dest_label = "Stored on:";
+    midlet_spec.add_label = "Add J2ME applet...";
+    midlet_spec.add_tip = "Send a MIDlet to the device, install it and register it";
+    midlet_spec.pattern = "J2ME applets (*.{jar,jad})";
+    midlet_spec.chooser_title = "Add J2ME applets to send";
+    midlet_spec.empty_text = "no applets installed on the device yet";
+    midlet_spec.reject_hint = "A MIDlet is a .jar with a MIDlet manifest, or its .jad descriptor.";
+    midlet_spec.j2me = true;
+    midlet_spec.want_icon = false;
+    midlet_spec.want_rotate = true;
+
+    Fl_Group midlet_tab(0, page_y, WIN_W, page_h, "J2ME");
+    ManagerPane midlets(&midlet_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg(), midlet_spec);
+    midlet_tab.end();
+
+    Fl_Group files_tab(0, page_y, WIN_W, page_h, "Transfer files");
+    TransferFilesPane files(&files_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg());
+    files_tab.end();
+
+    Fl_Group deploy_tab(0, page_y, WIN_W, page_h, "Build && Deploy");
+    BuildRunner runner(&deploy_tab, 0, page_y, WIN_W, page_h, settings.cfg(), &settings);
     deploy_tab.end();
 
-    settings.bind(&client, 0, &runner);
-
     tabs.end();
-    tabs.resizable(transfer_tab);
+    tabs.resizable(rom_tab);
 
     win.end();
-    win.resizable(tabs);
+
+    g_layout.tabs = &tabs;
+    g_layout.xfer = &xfer;
+    g_layout.pages.push_back(&rom_tab);
+    g_layout.pages.push_back(&midlet_tab);
+    g_layout.pages.push_back(&files_tab);
+    g_layout.pages.push_back(&deploy_tab);
+    xfer.on_relayout(relayout_cb, 0);
+
+    settings.bind(&xfer, 0, &runner);
+    settings.add_manager(&roms);
+    settings.add_manager(&midlets);
+    settings.add_files_pane(&files);
 
     static Fl_Pixmap icon_pixmap(piko_sync_icon_xpm);
     static Fl_RGB_Image icon_img(&icon_pixmap);
     win.icon(&icon_img);
 
+    apply_layout();
     win.show(argc, argv);
 
     int rc = Fl::run();

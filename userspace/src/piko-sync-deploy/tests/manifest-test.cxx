@@ -293,7 +293,7 @@ static void test_conditional_files_absent_by_default()
     check(!any_step_with_remote(steps, "/usr/sbin/mhz"), "mhz absent -> not in plan");
     check(!any_step_with_remote(steps, "/usr/sbin/flipd"), "flipd absent -> not in plan");
     check(!any_step_with_remote(steps, "/usr/sbin/pkillx"), "pkillx absent -> not in plan");
-    check(!any_step_with_remote(steps, "/usr/local/bin/kill"), "kill absent -> not in plan");
+    check(!any_step_with_remote(steps, "/usr/bin/kill"), "kill absent -> not in plan");
     check(!any_step_with_remote(steps, "/usr/sbin/dropbear"),
           "dropbear absent from plan without --replace-dropbear (if_flag gate)");
 

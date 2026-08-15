@@ -2,6 +2,9 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Box.H>
+#include <FL/Fl_Round_Button.H>
+#include <FL/fl_ask.H>
+#include <FL/Fl_Group.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Return_Button.H>
 #include <FL/Fl_Table.H>
@@ -34,7 +37,7 @@
 #define FALLBACK_TIMEOUT_S  20
 #define CLOSE_TIMEOUT_S      5
 
-#define LOCK_PATH   "/tmp/matchbox-fbrun.lock"
+#define LOCK_PATH   "/tmp/matchbox-heavyrun.lock"
 
 #define REENTRY_ENV "MATCHBOX_FBRUN_ACTIVE"
 
@@ -72,6 +75,7 @@ static int   lock_held;
 static int   cleaned_up;
 static int   qvga_requested;
 static int   qvga_applied;
+static int   video_touched;
 static int   fast_pll_requested;
 static int   fast_pll_applied;
 static struct fb_var_screeninfo saved_var;
@@ -222,12 +226,14 @@ static int set_qvga_mode(void)
     return 1;
 }
 
+#define DESKTOP_XRES 640
+#define DESKTOP_YRES 480
+
 static void restore_video_mode(void)
 {
+    struct fb_var_screeninfo var;
     int fd;
 
-    if (!qvga_applied)
-        return;
     qvga_applied = 0;
 
     fd = open(FB_DEV, O_RDWR);
@@ -235,12 +241,31 @@ static void restore_video_mode(void)
         trace("restore_video_mode: open %s failed: %s", FB_DEV, strerror(errno));
         return;
     }
-    saved_var.activate = FB_ACTIVATE_NOW;
-    if (ioctl(fd, FBIOPUT_VSCREENINFO, &saved_var) < 0)
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &var) < 0) {
+        trace("restore_video_mode: FBIOGET_VSCREENINFO failed: %s", strerror(errno));
+        close(fd);
+        return;
+    }
+    if (var.xres == DESKTOP_XRES && var.yres == DESKTOP_YRES) {
+        trace("restore_video_mode: already %ux%u, nothing to do", var.xres, var.yres);
+        close(fd);
+        return;
+    }
+
+    var.xres = DESKTOP_XRES;
+    var.yres = DESKTOP_YRES;
+    var.xres_virtual = DESKTOP_XRES;
+    if (var.yres_virtual < DESKTOP_YRES * 2)
+        var.yres_virtual = DESKTOP_YRES * 2;
+    var.xoffset = 0;
+    var.yoffset = 0;
+    var.activate = FB_ACTIVATE_NOW;
+
+    if (ioctl(fd, FBIOPUT_VSCREENINFO, &var) < 0)
         trace("restore_video_mode: FBIOPUT_VSCREENINFO %ux%u failed: %s",
-              saved_var.xres, saved_var.yres, strerror(errno));
+              var.xres, var.yres, strerror(errno));
     else
-        trace("restore_video_mode: restored %ux%u", saved_var.xres, saved_var.yres);
+        trace("restore_video_mode: forced back to %ux%u", var.xres, var.yres);
     close(fd);
 }
 
@@ -266,8 +291,6 @@ static int set_fast_pll(int enable)
 
 static void restore_fast_pll(void)
 {
-    if (!fast_pll_applied)
-        return;
     fast_pll_applied = 0;
     set_fast_pll(0);
 }
@@ -381,10 +404,15 @@ static void cleanup(void)
         return;
     cleaned_up = 1;
 
-    trace("cleanup: entered (session_was_stopped=%d)", session_was_stopped);
+    trace("cleanup: entered (session_was_stopped=%d, video_touched=%d)",
+          session_was_stopped, video_touched);
 
-    restore_video_mode();
-    restore_fast_pll();
+    if (video_touched) {
+        restore_video_mode();
+        restore_fast_pll();
+    } else {
+        trace("cleanup: never touched the panel, leaving it alone");
+    }
 
     if (session_was_stopped) {
         console_text_mode();
@@ -480,6 +508,56 @@ static const char *video_mode_keys[VIDEO_MODE_COUNT] = {
     "vga-fast",
 };
 
+enum app_driver {
+    DRIVER_FB = 0,
+    DRIVER_X11,
+    DRIVER_COUNT
+};
+
+static const char *driver_keys[DRIVER_COUNT]   = { "fb", "x11" };
+static const char *driver_labels[DRIVER_COUNT] = { "Framebuffer", "X11" };
+
+static int            driver_allowed[DRIVER_COUNT] = { 1, 0 };
+static enum app_driver driver_selected = DRIVER_FB;
+static int            qvga_only = 0;
+
+static int mode_is_qvga(enum video_mode m)
+{
+    return m == VIDEO_MODE_QVGA_NORMAL || m == VIDEO_MODE_QVGA_FAST;
+}
+
+static void parse_drivers(const char *list)
+{
+    int i;
+    for (i = 0; i < DRIVER_COUNT; i++)
+        driver_allowed[i] = 0;
+
+    while (list && *list) {
+        const char *end = list;
+        while (*end && *end != ';' && *end != ',')
+            end++;
+        for (i = 0; i < DRIVER_COUNT; i++) {
+            size_t klen = strlen(driver_keys[i]);
+            if ((size_t)(end - list) == klen && !strncmp(list, driver_keys[i], klen))
+                driver_allowed[i] = 1;
+        }
+        list = *end ? end + 1 : end;
+    }
+
+    for (i = 0; i < DRIVER_COUNT; i++)
+        if (driver_allowed[i])
+            break;
+    if (i == DRIVER_COUNT)
+        driver_allowed[DRIVER_FB] = 1;
+
+    for (i = 0; i < DRIVER_COUNT; i++) {
+        if (driver_allowed[i]) {
+            driver_selected = (enum app_driver)i;
+            break;
+        }
+    }
+}
+
 static enum video_mode mode_from_flags(int qvga, int fast_pll)
 {
     if (qvga)
@@ -493,12 +571,15 @@ static void mode_to_flags(enum video_mode mode, int *qvga, int *fast_pll)
     *fast_pll = (mode == VIDEO_MODE_QVGA_FAST    || mode == VIDEO_MODE_VGA_FAST);
 }
 
-#define FBRUN_CONFIG_DIR  "/etc/zaurus"
-#define FBRUN_CONFIG_PATH "/etc/zaurus/matchbox-fbrun.cfg"
+#define HEAVYRUN_CONFIG_DIR  "/etc/zaurus"
+#define HEAVYRUN_CONFIG_PATH "/etc/zaurus/matchbox-heavyrun.cfg"
+#define HEAVYRUN_LEGACY_PATH "/etc/zaurus/matchbox-fbrun.cfg"
 
 static enum video_mode load_video_mode_config(void)
 {
-    FILE *f = fopen(FBRUN_CONFIG_PATH, "r");
+    FILE *f = fopen(HEAVYRUN_CONFIG_PATH, "r");
+    if (!f)
+        f = fopen(HEAVYRUN_LEGACY_PATH, "r");
     enum video_mode mode = VIDEO_MODE_VGA_NORMAL;
     char line[128];
 
@@ -537,24 +618,24 @@ static enum video_mode load_video_mode_config(void)
 
 static void save_video_mode_config(enum video_mode mode)
 {
-    char tmp_path[sizeof(FBRUN_CONFIG_PATH) + 4];
+    char tmp_path[sizeof(HEAVYRUN_CONFIG_PATH) + 4];
     FILE *f;
 
-    mkdir(FBRUN_CONFIG_DIR, 0755);
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", FBRUN_CONFIG_PATH);
+    mkdir(HEAVYRUN_CONFIG_DIR, 0755);
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", HEAVYRUN_CONFIG_PATH);
 
     f = fopen(tmp_path, "w");
     if (!f) {
         trace("save_video_mode_config: fopen %s failed: %s", tmp_path, strerror(errno));
         return;
     }
-    fprintf(f, "# matchbox-fbrun persisted video mode -- see the dialog's Advanced panel\n");
+    fprintf(f, "# matchbox-heavyrun persisted video mode -- see the dialog's Advanced panel\n");
     fprintf(f, "video_mode=%s\n", video_mode_keys[mode]);
     fclose(f);
 
-    if (rename(tmp_path, FBRUN_CONFIG_PATH) < 0)
+    if (rename(tmp_path, HEAVYRUN_CONFIG_PATH) < 0)
         trace("save_video_mode_config: rename %s -> %s failed: %s",
-              tmp_path, FBRUN_CONFIG_PATH, strerror(errno));
+              tmp_path, HEAVYRUN_CONFIG_PATH, strerror(errno));
     else
         trace("save_video_mode_config: saved video_mode=%s", video_mode_keys[mode]);
 }
@@ -562,8 +643,9 @@ static void save_video_mode_config(enum video_mode mode)
 class VideoModeList : public Fl_Table {
 public:
     VideoModeList(int X, int Y, int W, int H)
-        : Fl_Table(X, Y, W, H), selected_(VIDEO_MODE_VGA_NORMAL)
+        : Fl_Table(X, Y, W, H), selected_(VIDEO_MODE_VGA_NORMAL), row_count_(0)
     {
+        rebuild();
         col_header(0);
         col_resize(0);
         row_header(0);
@@ -571,7 +653,7 @@ public:
         row_height_all(26);
         cols(1);
         col_width_all(W - 4);
-        rows(VIDEO_MODE_COUNT);
+        rows(row_count_);
         end();
         callback(table_cb, this);
         when(FL_WHEN_CHANGED | FL_WHEN_RELEASE);
@@ -580,6 +662,19 @@ public:
     void selected(enum video_mode m) { selected_ = m; redraw(); }
     enum video_mode selected(void) const { return selected_; }
 
+    void rebuild(void)
+    {
+        int m;
+        row_count_ = 0;
+        for (m = 0; m < VIDEO_MODE_COUNT; m++) {
+            if (qvga_only && !mode_is_qvga((enum video_mode)m))
+                continue;
+            row_mode_[row_count_++] = (enum video_mode)m;
+        }
+        rows(row_count_);
+        redraw();
+    }
+
 protected:
     void draw_cell(TableContext context, int R = 0, int C = 0,
                    int X = 0, int Y = 0, int W = 0, int H = 0)
@@ -587,13 +682,15 @@ protected:
         (void)C;
         switch (context) {
         case CONTEXT_CELL: {
-            int is_selected = (R == (int)selected_);
+            enum video_mode m = (R >= 0 && R < row_count_)
+                                ? row_mode_[R] : VIDEO_MODE_QVGA_NORMAL;
+            int is_selected = (m == selected_);
 
             fl_push_clip(X, Y, W, H);
             fl_draw_box(FL_THIN_UP_BOX, X, Y, W, H,
                         is_selected ? FL_SELECTION_COLOR : FL_BACKGROUND2_COLOR);
             fl_color(is_selected ? FL_WHITE : FL_BLACK);
-            fl_draw(video_mode_labels[R], X + 6, Y, W - 12, H, FL_ALIGN_LEFT);
+            fl_draw(video_mode_labels[m], X + 6, Y, W - 12, H, FL_ALIGN_LEFT);
             fl_pop_clip();
             break;
         }
@@ -610,28 +707,78 @@ private:
         if (self->callback_context() == CONTEXT_CELL) {
             int r = self->callback_row();
 
-            if (r >= 0 && r < VIDEO_MODE_COUNT) {
-                self->selected_ = (enum video_mode)r;
+            if (r >= 0 && r < self->row_count_) {
+                self->selected_ = self->row_mode_[r];
                 self->redraw();
             }
         }
     }
 
     enum video_mode selected_;
+    enum video_mode row_mode_[VIDEO_MODE_COUNT];
+    int             row_count_;
 };
 
 static int dialog_result = 0;
+
+static Fl_Box *dialog_text_box = 0;
+static char    dialog_text[512];
+static const char *dialog_app_name = "This application";
+
+static void build_dialog_text(const char *reason)
+{
+    if (driver_selected == DRIVER_X11)
+        snprintf(dialog_text, sizeof(dialog_text),
+                 "%s wants the whole screen.\n\n"
+                 "The desktop keeps running underneath it, but the screen mode "
+                 "changes while %s is open and every other window is closed first."
+                 "\n%s%s",
+                 dialog_app_name, dialog_app_name,
+                 reason ? "\n" : "", reason ? reason : "");
+    else
+        snprintf(dialog_text, sizeof(dialog_text),
+                 "%s needs the whole screen.\n\n"
+                 "Every other application that is running will be closed, the "
+                 "desktop will stop, and it comes back when %s exits.\n%s%s",
+                 dialog_app_name, dialog_app_name,
+                 reason ? "\n" : "", reason ? reason : "");
+}
+
+static const char *dialog_reason = 0;
+
+static void refresh_dialog_text(void)
+{
+    build_dialog_text(dialog_reason);
+    if (dialog_text_box) {
+        dialog_text_box->label(dialog_text);
+        dialog_text_box->redraw();
+    }
+}
+
+static void driver_fb_cb(Fl_Widget *, void *)
+{
+    driver_selected = DRIVER_FB;
+    refresh_dialog_text();
+}
+
+static void driver_x11_cb(Fl_Widget *, void *)
+{
+    driver_selected = DRIVER_X11;
+    refresh_dialog_text();
+}
 
 static void abort_cb(Fl_Widget *, void *w)     { dialog_result = 0; ((Fl_Window *)w)->hide(); }
 static void continue_cb(Fl_Widget *, void *w)  { dialog_result = 1; ((Fl_Window *)w)->hide(); }
 
 #define DIALOG_BASE_W   420
 #define DIALOG_BASE_H   200
-#define DIALOG_EXTRA_H  150
+#define DIALOG_EXTRA_H  185
 #define DIALOG_BTN_Y    150
 
 struct advanced_ui {
     Fl_Window        *win;
+    Fl_Box           *driver_label;
+    Fl_Group         *driver_group;
     Fl_Box           *mode_label;
     VideoModeList    *list;
     Fl_Button        *advanced_btn;
@@ -649,9 +796,13 @@ static void advanced_cb(Fl_Widget *, void *v)
     button_y = DIALOG_BTN_Y + (ui->expanded ? DIALOG_EXTRA_H : 0);
 
     if (ui->expanded) {
+        ui->driver_label->show();
+        ui->driver_group->show();
         ui->mode_label->show();
         ui->list->show();
     } else {
+        ui->driver_label->hide();
+        ui->driver_group->hide();
         ui->mode_label->hide();
         ui->list->hide();
     }
@@ -665,26 +816,44 @@ static void advanced_cb(Fl_Widget *, void *v)
 
 static int confirm(const char *name, const char *reason, enum video_mode *mode)
 {
-    char msg[512];
     struct advanced_ui ui;
 
-    snprintf(msg, sizeof(msg),
-             "%s needs the whole screen.\n\n"
-             "Every other application that is running will be closed, and "
-             "the desktop will come back when %s exits.\n%s%s",
-             name, name,
-             reason ? "\n" : "",
-             reason ? reason : "");
+    dialog_app_name = name;
+    dialog_reason = reason;
+    build_dialog_text(reason);
 
     Fl_Window win(DIALOG_BASE_W, DIALOG_BASE_H, "Start application");
-    Fl_Box text(10, 10, 400, 130, msg);
+    Fl_Box text(10, 10, 400, 130, dialog_text);
+    dialog_text_box = &text;
     text.align(FL_ALIGN_WRAP | FL_ALIGN_LEFT | FL_ALIGN_TOP | FL_ALIGN_INSIDE);
 
-    Fl_Box mode_label(10, 145, 200, 20, "Video mode:");
+    Fl_Box driver_label(10, 145, 200, 20, "Driver:");
+    driver_label.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    driver_label.hide();
+
+    Fl_Group driver_group(10, 167, 400, 26);
+    Fl_Round_Button driver_fb(10, 167, 150, 26, driver_labels[DRIVER_FB]);
+    Fl_Round_Button driver_x11(170, 167, 150, 26, driver_labels[DRIVER_X11]);
+    driver_group.end();
+    driver_fb.type(FL_RADIO_BUTTON);
+    driver_x11.type(FL_RADIO_BUTTON);
+    driver_fb.callback(driver_fb_cb);
+    driver_x11.callback(driver_x11_cb);
+    if (!driver_allowed[DRIVER_FB])
+        driver_fb.deactivate();
+    if (!driver_allowed[DRIVER_X11])
+        driver_x11.deactivate();
+    if (driver_selected == DRIVER_X11)
+        driver_x11.setonly();
+    else
+        driver_fb.setonly();
+    driver_group.hide();
+
+    Fl_Box mode_label(10, 200, 200, 20, "Video mode:");
     mode_label.align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
     mode_label.hide();
 
-    VideoModeList mode_list(10, 168, 400, 112);
+    VideoModeList mode_list(10, 223, 400, 112);
     mode_list.selected(*mode);
     mode_list.hide();
 
@@ -695,6 +864,8 @@ static int confirm(const char *name, const char *reason, enum video_mode *mode)
 
     dialog_result = 0;
     ui.win = &win;
+    ui.driver_label = &driver_label;
+    ui.driver_group = &driver_group;
     ui.mode_label = &mode_label;
     ui.list = &mode_list;
     ui.advanced_btn = &advanced_btn;
@@ -757,8 +928,8 @@ static int confirm(const char *name, const char *reason, enum video_mode *mode)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: matchbox-fbrun [-n NAME] [-r REASON] [-y] [--qvga] "
-            "[--fast-pll] [--] program [args...]\n");
+            "usage: matchbox-heavyrun [-n NAME] [-r REASON] [-y] [--qvga] "
+            "[--fast-pll] [--drivers=fb;x11] [--video=qvga] [--] program [args...]\n");
 }
 
 int main(int argc, char **argv)
@@ -778,6 +949,10 @@ int main(int argc, char **argv)
             { qvga_requested = 1; mode_flag_given = 1; }
         else if (!strcmp(argv[i], "--fast-pll"))
             { fast_pll_requested = 1; mode_flag_given = 1; }
+        else if (!strncmp(argv[i], "--drivers=", 10))
+            parse_drivers(argv[i] + 10);
+        else if (!strncmp(argv[i], "--video=", 8))
+            qvga_only = !strcmp(argv[i] + 8, "qvga");
         else if (!strcmp(argv[i], "--"))                 { i++; break; }
         else if (argv[i][0] == '-')                      { usage(); return 2; }
         else                                             break;
@@ -788,6 +963,12 @@ int main(int argc, char **argv)
     } else {
         mode = load_video_mode_config();
         mode_to_flags(mode, &qvga_requested, &fast_pll_requested);
+    }
+
+    if (qvga_only && !mode_is_qvga(mode)) {
+        mode = fast_pll_requested ? VIDEO_MODE_QVGA_FAST : VIDEO_MODE_QVGA_NORMAL;
+        mode_to_flags(mode, &qvga_requested, &fast_pll_requested);
+        trace("main: app is qvga-only, forcing %s", video_mode_keys[mode]);
     }
 
     if (i >= argc) {
@@ -816,13 +997,22 @@ int main(int argc, char **argv)
     if (getenv(REENTRY_ENV)) {
         execvp(prog_argv[0], prog_argv);
         trace("main: re-entrant execvp failed: %s", strerror(errno));
-        fprintf(stderr, "matchbox-fbrun: cannot run %s: %s\n",
+        fprintf(stderr, "matchbox-heavyrun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         return 127;
     }
 
     if (!take_lock()) {
-        fprintf(stderr, "matchbox-fbrun: another one is already running\n");
+        trace("main: lock held by a live instance, refusing to start a second one");
+        if (getenv("DISPLAY") && x_is_running()) {
+            Display *dpy = XOpenDisplay(NULL);
+            if (dpy) {
+                XCloseDisplay(dpy);
+                fl_alert("Another full-screen application is already running.\n\n"
+                         "Close it before starting %s.", name);
+            }
+        }
+        fprintf(stderr, "matchbox-heavyrun: another one is already running\n");
         return 0;
     }
 
@@ -861,20 +1051,29 @@ int main(int argc, char **argv)
               XSERVER_NAME, x_is_running() ? "running" : "not running");
     }
 
-    session_was_stopped = session_stop();
-    trace("main: session_was_stopped=%d, forking", session_was_stopped);
+    if (driver_selected == DRIVER_X11) {
+        trace("main: x11 driver -- leaving the session up, changing mode underneath it");
+    } else {
+        session_was_stopped = session_stop();
+        trace("main: session_was_stopped=%d, forking", session_was_stopped);
+    }
 
-    if (qvga_requested)
+    if (qvga_requested) {
+        video_touched = 1;
         qvga_applied = set_qvga_mode();
-    if (fast_pll_requested)
+    }
+    if (fast_pll_requested) {
+        video_touched = 1;
         fast_pll_applied = set_fast_pll(1);
+    }
 
-    show_splash(name);
+    if (driver_selected != DRIVER_X11)
+        show_splash(name);
 
     child_pid = fork();
     if (child_pid < 0) {
         trace("main: fork failed: %s", strerror(errno));
-        perror("matchbox-fbrun: fork");
+        perror("matchbox-heavyrun: fork");
         return 126;
     }
     if (child_pid == 0) {
@@ -886,7 +1085,7 @@ int main(int argc, char **argv)
         trace("main: child pid=%d exec'ing %s", (int)getpid(), prog_argv[0]);
         execvp(prog_argv[0], prog_argv);
         trace("main: child execvp failed: %s", strerror(errno));
-        fprintf(stderr, "matchbox-fbrun: cannot run %s: %s\n",
+        fprintf(stderr, "matchbox-heavyrun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         _exit(127);
     }

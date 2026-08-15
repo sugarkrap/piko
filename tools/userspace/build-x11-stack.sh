@@ -363,7 +363,7 @@ if [ "$FULL_BUILD" -eq 1 ]; then
     fi
 
     echo ""
-    echo "==> building FLTK + fltktest + matchbox-fbrun + mb-wallpaper-picker (tools/userspace/build-fltk.sh)"
+    echo "==> building FLTK + fltktest + matchbox-apprun + mb-wallpaper-picker (tools/userspace/build-fltk.sh)"
     FORCE_ARG=""
     [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
     sh "$REPO/tools/userspace/build-fltk.sh" $FORCE_ARG

@@ -243,6 +243,7 @@ struct FileOfferMsg {
     uint64_t total_size;
     std::string dest_dir;
     std::string rom_machine;
+    std::string rom_options;
     FileOfferMsg() : total_size(0) {}
 };
 inline std::string encode(const FileOfferMsg &m)
@@ -250,10 +251,13 @@ inline std::string encode(const FileOfferMsg &m)
     std::string p;
     put_str16(p, m.name);
     put_u64(p, m.total_size);
-    if (!m.dest_dir.empty() || !m.rom_machine.empty())
+    bool need_machine = !m.rom_machine.empty() || !m.rom_options.empty();
+    if (!m.dest_dir.empty() || need_machine)
         put_str16(p, m.dest_dir);
-    if (!m.rom_machine.empty())
+    if (need_machine)
         put_str16(p, m.rom_machine);
+    if (!m.rom_options.empty())
+        put_str16(p, m.rom_options);
     return p;
 }
 inline bool decode_file_offer(const std::string &p, FileOfferMsg &m)
@@ -264,6 +268,8 @@ inline bool decode_file_offer(const std::string &p, FileOfferMsg &m)
     if (pos < p.size() && !get_str16(p, pos, m.dest_dir))
         return false;
     if (pos < p.size() && !get_str16(p, pos, m.rom_machine))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.rom_options))
         return false;
     return true;
 }

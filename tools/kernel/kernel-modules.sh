@@ -39,3 +39,7 @@ kernel/fs/nls/nls_cp437.ko
 kernel/fs/nls/nls_cp850.ko
 kernel/fs/nls/nls_iso8859-15.ko
 "
+
+CPUFREQ_MODULES="
+kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
+"

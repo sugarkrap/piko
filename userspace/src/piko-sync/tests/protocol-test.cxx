@@ -1,6 +1,7 @@
 
 #include "../protocol.h"
 #include "../rom_detect.h"
+#include "../emulation_db.h"
 #include "../transfer_state.h"
 #include "../transfer_queue.h"
 
@@ -560,7 +561,44 @@ static void test_rom_detection()
     check(detect_machine("/tmp/pst_cop.smc") == "SNES", "512-byte copier header skipped");
     check(detect_machine("/tmp/pst_zero.bin").empty(), "zeroed header is not a rom");
     check(detect_machine("/tmp/pst_missing.smc").empty(), "missing file is not a rom");
-    check(machine_backend("SNES") == "pocketsnes", "SNES maps to pocketsnes");
+    check(machine_backend("SNES").empty(), "SNES has no backend since pocketsnes was dropped");
+    check(machine_backend("J2ME") == "phoneme", "J2ME maps to the phoneme backend");
+
+    {
+        std::string opts;
+        check(option_get(opts, "rotate").empty(), "options: missing key reads empty");
+        option_set(opts, "rotate", "1");
+        check(option_get(opts, "rotate") == "1", "options: set then get");
+        option_set(opts, "suite", "42");
+        check(option_get(opts, "rotate") == "1", "options: first key survives a second");
+        check(option_get(opts, "suite") == "42", "options: second key reads back");
+        option_set(opts, "rotate", "0");
+        check(option_get(opts, "rotate") == "0", "options: overwrite in place");
+        check(option_get(opts, "suite") == "42", "options: overwrite keeps siblings");
+        option_set(opts, "rotate", "");
+        check(option_get(opts, "rotate").empty(), "options: empty value removes the key");
+        check(option_get(opts, "suite") == "42", "options: removal keeps siblings");
+        check(opts.find(",,") == std::string::npos, "options: no empty fields left behind");
+    }
+
+    {
+        RomEntry e;
+        e.path = "/mnt/card/J2ME/game.jar";
+        e.machine = "J2ME";
+        e.backend = "phoneme";
+        e.desktop = "j2me-game.desktop";
+        e.icon = "/usr/share/pixmaps/midlet.png";
+        option_set(e.options, "suite", "7");
+        RomEntry back;
+        check(decode_entry(encode_entry(e), back), "j2me entry round-trips");
+        check(back.options == e.options, "options survive encode/decode");
+        check(option_get(back.options, "suite") == "7", "suite id survives the db");
+
+        std::string legacy = "/rom.smc|SNES|x|a.desktop|/i.png";
+        RomEntry old5;
+        check(decode_entry(legacy, old5), "five field lines still decode");
+        check(old5.options.empty(), "five field lines get empty options");
+    }
     check(machine_backend("MEGADRIVE").empty(), "unknown machine has no backend");
 
     remove("/tmp/pst_lo.smc"); remove("/tmp/pst_hi.sfc");

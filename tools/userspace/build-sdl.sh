@@ -11,6 +11,7 @@ SDL_URL="https://www.libsdl.org/release/SDL-$SDL_VERSION.tar.gz"
 SDL_SHA256="d6d316a793e5e348155f0dd93b979798933fb98aa1edebcc108829d6474aad00"
 
 STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-sdl}"
+THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/userspace/stage-target}"
 RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-sdl-runtime}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
@@ -81,8 +82,17 @@ echo "==> configuring SDL $SDL_VERSION"
         --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
         --prefix=/usr \
         --disable-static --enable-shared \
-        --disable-audio \
-        --disable-video-x11 \
+        --enable-audio \
+        --enable-video-x11 \
+        --disable-x11-shared \
+        --x-includes="$THIRDPARTY_STAGE/usr/include" \
+        --x-libraries="$THIRDPARTY_STAGE/usr/lib" \
+        --disable-video-x11-xv \
+        --disable-video-x11-xinerama \
+        --disable-video-x11-xme \
+        --disable-video-x11-xrandr \
+        --disable-video-x11-vm \
+        --disable-video-x11-dgamouse \
         --disable-video-dga \
         --disable-video-ggi \
         --disable-video-svga \
@@ -102,7 +112,14 @@ echo "==> configuring SDL $SDL_VERSION"
         --enable-joystick \
         --enable-threads \
         --disable-nasm \
-        --disable-oss \
+        --enable-oss \
+        --disable-alsa \
+        --disable-esd \
+        --disable-arts \
+        --disable-nas \
+        --disable-pulseaudio \
+        --disable-diskaudio \
+        --enable-dummyaudio \
         CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
     echo "==> building SDL"
     make -j"$JOBS"
@@ -139,7 +156,9 @@ if [ -f "$SDLTEST_SRC" ]; then
         -I"$STAGE_DIR/usr/include/SDL" \
         -o "$STAGE_DIR/usr/bin/.sdltest.tmp" \
         "$SDLTEST_SRC" \
-        -L"$STAGE_DIR/usr/lib" -lSDL -lpthread -lm -ldl
+        -L"$STAGE_DIR/usr/lib" -L"$THIRDPARTY_STAGE/usr/lib" \
+        -Wl,-rpath-link="$THIRDPARTY_STAGE/usr/lib" \
+        -lSDL -lpthread -lm -ldl
     mkdir -p "$STAGE_DIR/usr/bin"
     mv "$STAGE_DIR/usr/bin/.sdltest.tmp" "$STAGE_DIR/usr/bin/sdltest"
 
@@ -164,7 +183,9 @@ if [ -f "$PIKALIBRATE_SRC" ]; then
         -I"$STAGE_DIR/usr/include/SDL" \
         -o "$STAGE_DIR/usr/bin/.pikalibrate.tmp" \
         "$PIKALIBRATE_SRC" \
-        -L"$STAGE_DIR/usr/lib" -lSDL -lpthread -lm -ldl
+        -L"$STAGE_DIR/usr/lib" -L"$THIRDPARTY_STAGE/usr/lib" \
+        -Wl,-rpath-link="$THIRDPARTY_STAGE/usr/lib" \
+        -lSDL -lpthread -lm -ldl
     mkdir -p "$STAGE_DIR/usr/bin"
     mv "$STAGE_DIR/usr/bin/.pikalibrate.tmp" "$STAGE_DIR/usr/bin/pikalibrate"
 

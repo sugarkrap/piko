@@ -33,11 +33,57 @@ inline bool read_at(FILE *f, long off, unsigned char *buf, size_t len)
     return fread(buf, 1, len, f) == len;
 }
 
+inline bool has_suffix_nocase(const std::string &s, const char *suffix)
+{
+    size_t n = strlen(suffix);
+    if (s.size() < n)
+        return false;
+    for (size_t i = 0; i < n; i++) {
+        char a = s[s.size() - n + i];
+        char b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b)
+            return false;
+    }
+    return true;
+}
+
+inline bool looks_like_midlet_jar(FILE *f)
+{
+    unsigned char magic[4];
+    if (!read_at(f, 0, magic, sizeof(magic)))
+        return false;
+    return magic[0] == 'P' && magic[1] == 'K' && magic[2] == 0x03 && magic[3] == 0x04;
+}
+
+inline bool looks_like_midlet_jad(FILE *f)
+{
+    char buf[2048];
+    size_t got;
+    if (fseek(f, 0, SEEK_SET) != 0)
+        return false;
+    got = fread(buf, 1, sizeof(buf) - 1, f);
+    if (got == 0)
+        return false;
+    buf[got] = '\0';
+    return strstr(buf, "MIDlet-1") != NULL || strstr(buf, "MIDlet-Name") != NULL;
+}
+
 inline std::string detect_machine(const std::string &path)
 {
     FILE *f = fopen(path.c_str(), "rb");
     if (!f)
         return std::string();
+
+    if (has_suffix_nocase(path, ".jad") && looks_like_midlet_jad(f)) {
+        fclose(f);
+        return std::string("J2ME");
+    }
+    if (has_suffix_nocase(path, ".jar") && looks_like_midlet_jar(f)) {
+        fclose(f);
+        return std::string("J2ME");
+    }
 
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return std::string(); }
     long size = ftell(f);
@@ -58,8 +104,8 @@ inline std::string detect_machine(const std::string &path)
 
 inline std::string machine_backend(const std::string &machine)
 {
-    if (machine == "SNES")
-        return std::string("pocketsnes");
+    if (machine == "J2ME")
+        return std::string("phoneme");
     return std::string();
 }
 

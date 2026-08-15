@@ -163,30 +163,30 @@ else
     echo "==> skipping fltktest (no $FLTKTEST_SRC)"
 fi
 
-FBRUN_SRC="$SRC/matchbox-fbrun.cxx"
+FBRUN_SRC="$SRC/matchbox-apprun.cxx"
 if [ -f "$FBRUN_SRC" ]; then
-    echo "==> building matchbox-fbrun"
+    echo "==> building matchbox-apprun"
     fbrun_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
     mkdir -p "$STAGE/usr/bin"
     "$CXX" -O2 -Wall -Wextra \
         -isystem "$STAGE/usr/include" \
-        -o "$STAGE/usr/bin/matchbox-fbrun" \
+        -o "$STAGE/usr/bin/matchbox-apprun" \
         "$FBRUN_SRC" \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
         -lfltk $fbrun_ldlibs
 
-    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/matchbox-fbrun" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/matchbox-apprun" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
     echo "    NEEDED: $needed"
     case " $needed " in
         *" libfltk.so.$FL_DSO_VERSION "*) : ;;
         *)
-            echo "tools/userspace/build-fltk.sh: matchbox-fbrun does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "tools/userspace/build-fltk.sh: matchbox-apprun does not NEED libfltk.so.$FL_DSO_VERSION" >&2
             echo "-- it linked statically or against the wrong library." >&2
             exit 1
             ;;
     esac
 else
-    echo "==> skipping matchbox-fbrun (no $FBRUN_SRC)"
+    echo "==> skipping matchbox-apprun (no $FBRUN_SRC)"
 fi
 
 WALLPAPER_PICKER_SRC="$SRC/mb-wallpaper-picker.cxx"

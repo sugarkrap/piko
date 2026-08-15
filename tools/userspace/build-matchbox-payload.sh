@@ -48,7 +48,7 @@ XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
 TOASTERS_BIN="${TOASTERS_BIN:-$REPO/userspace/src/toasters}"
 FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
-FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-fbrun}"
+FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-apprun}"
 PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
 FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
 WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
@@ -116,7 +116,7 @@ $FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $PIKO_SETTINGS_BIN:usr/local/bin/piko-settings \
 $PIKO_PLAYER_BIN:usr/local/bin/piko-player \
-$FBRUN_BIN:usr/sbin/matchbox-fbrun"
+$FBRUN_BIN:usr/sbin/matchbox-apprun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
 else
@@ -133,6 +133,11 @@ for spec in $BINS; do
     cp "$src" "$PAYLOAD/$dst"
     echo "    bin: $dst"
 done
+
+ln -sf matchbox-apprun "$PAYLOAD/usr/sbin/matchbox-fbrun"
+echo "    compat: /usr/sbin/matchbox-fbrun -> matchbox-apprun"
+ln -sf matchbox-apprun "$PAYLOAD/usr/sbin/matchbox-heavyrun"
+echo "    compat: /usr/sbin/matchbox-heavyrun -> matchbox-apprun"
 
 mkdir -p "$PAYLOAD/usr/share/X11" "$PAYLOAD/etc/X11"
 cp -a "$STAGE/usr/share/X11/xkb" "$PAYLOAD/usr/share/X11/"

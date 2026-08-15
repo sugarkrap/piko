@@ -96,6 +96,31 @@ core_scripts:
     local: "${REPO}/rootfs/etc/wifi-up.sh"
     remote: /etc/wifi-up.sh
     mode: "0755"
+  - type: mkdir
+    remote: /usr/local/lib/phoneme/bin
+  - type: put_file
+    local: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+    remote: /usr/local/lib/phoneme/bin/runMidlet
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/lib"
+    remote_base: /usr/local/lib/phoneme/lib
+    mode: "0644"
+    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/lib"
+  - type: put_file
+    local: "${REPO}/userspace/src/phoneme-run"
+    remote: /usr/local/bin/phoneme-run
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+  - type: put_file
+    local: "${REPO}/userspace/desktop/rom.png"
+    remote: /usr/share/pixmaps/rom.png
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/asound.conf"
+    remote: /etc/asound.conf
+    mode: "0644"
   - type: put_file
     local: "${REPO}/rootfs/usr/sbin/audioon"
     remote: /usr/sbin/audioon
@@ -270,7 +295,7 @@ opkg:
     if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/userspace/src/kill"
-    remote: /usr/local/bin/kill
+    remote: /usr/bin/kill
     mode: "0755"
     if_exists: "${REPO}/userspace/src/kill"
 

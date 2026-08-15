@@ -248,6 +248,45 @@ static bool copy_file(const std::string &src, const std::string &dst)
     return ok;
 }
 
+static bool write_desktop_file(const RomEntry &e, std::string &err)
+{
+    mkdir_p(APPLICATIONS_DIR);
+    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
+    std::string contents = desktop_contents(e);
+    int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) { err = "cannot write " + dpath; return false; }
+    bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
+    close(fd);
+    if (!ok) { err = dpath + " is truncated"; return false; }
+    return true;
+}
+
+static int regenerate_rom_launchers()
+{
+    std::vector<RomEntry> db = load_emulation_db();
+    if (db.empty())
+        return 0;
+
+    bool db_changed = false;
+    int written = 0;
+    for (size_t i = 0; i < db.size(); i++) {
+        if (!db[i].icon.empty() && db[i].icon.find('/') == std::string::npos) {
+            db[i].icon = DEFAULT_ROM_ICON;
+            db_changed = true;
+        }
+        if (db[i].desktop.empty()) {
+            db[i].desktop = desktop_name_for(db[i].machine, db[i].path);
+            db_changed = true;
+        }
+        std::string err;
+        if (write_desktop_file(db[i], err))
+            written++;
+    }
+    if (db_changed)
+        save_emulation_db(db);
+    return written;
+}
+
 class ServerApp;
 
 class Connection {
@@ -286,6 +325,7 @@ private:
 
     std::string dest_dir_;
     std::string rom_machine_;
+    std::string rom_options_;
 
     bool send(uint32_t type, const std::string &payload);
     void fail(const std::string &reason);
@@ -565,6 +605,7 @@ void Connection::handle_offer(const std::string &payload)
     original_name_ = fo.name;
     total_size_ = fo.total_size;
     rom_machine_ = fo.rom_machine;
+    rom_options_ = fo.rom_options;
 
     TransferKey key(fo.name, fo.total_size);
     TransferMap::const_iterator it = app_->transfer_map().find(key);
@@ -733,16 +774,93 @@ void Connection::handle_complete(const std::string &payload)
     close_connection();
 }
 
+static std::string shell_quote(const std::string &s)
+{
+    std::string out = "'";
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] == '\'')
+            out += "'\\''";
+        else
+            out += s[i];
+    }
+    out += "'";
+    return out;
+}
+
+static std::string install_midlet_suite(const std::string &jar_path, std::string &err)
+{
+    std::string installer = "/usr/local/lib/phoneme/bin/installMidlet";
+    if (access(installer.c_str(), X_OK) != 0) {
+        err = "phoneme runtime is not installed";
+        return std::string();
+    }
+
+    std::string cmd = "SDL_VIDEODRIVER=dummy " + shell_quote(installer)
+                      + " " + shell_quote("file:///" + jar_path) + " 2>&1";
+    FILE *p = popen(cmd.c_str(), "r");
+    if (!p) {
+        err = "could not run the midlet installer";
+        return std::string();
+    }
+
+    std::string suite;
+    char line[512];
+    while (fgets(line, sizeof(line), p)) {
+        std::string l(line);
+        std::string::size_type at = l.find("installed, ID:");
+        if (at == std::string::npos)
+            continue;
+        std::string rest = l.substr(at + strlen("installed, ID:"));
+        std::string digits;
+        for (size_t i = 0; i < rest.size(); i++) {
+            if (rest[i] >= '0' && rest[i] <= '9')
+                digits += rest[i];
+            else if (!digits.empty())
+                break;
+        }
+        if (!digits.empty())
+            suite = digits;
+    }
+    pclose(p);
+
+    if (suite.empty())
+        err = "the installer did not report a suite id";
+    return suite;
+}
+
 void Connection::register_rom(const std::string &rom_path)
 {
     RomEntry e;
     e.path = rom_path;
     e.machine = rom_machine_;
     e.backend = machine_backend(rom_machine_);
-    if (e.backend.empty())
-        e.backend = "pocketsnes";
+    if (e.backend.empty()) {
+        app_->set_status("no emulator backend for " + e.machine
+                         + " -- rom transferred but not registered");
+        return;
+    }
     e.desktop = desktop_name_for(e.machine, rom_path);
     e.icon = DEFAULT_ROM_ICON;
+
+    {
+        std::string media = option_get(rom_options_, "media");
+        if (!media.empty())
+            option_set(e.options, "media", media);
+        if (option_get(rom_options_, "heavy") == "1" || e.machine != "J2ME")
+            option_set(e.options, "heavy", "1");
+    }
+
+    if (e.machine == "J2ME") {
+        std::string err;
+        std::string suite = install_midlet_suite(rom_path, err);
+        if (suite.empty()) {
+            app_->set_status("midlet transferred but not installed: " + err);
+            return;
+        }
+        option_set(e.options, "suite", suite);
+        if (option_get(rom_options_, "rotate") == "1")
+            option_set(e.options, "rotate", "1");
+    }
 
     std::vector<RomEntry> db = load_emulation_db();
     for (size_t i = 0; i < db.size(); i++) {
@@ -836,15 +954,7 @@ void Connection::handle_rom_delete(const std::string &payload)
 
 bool Connection::write_desktop_for(const RomEntry &e, std::string &err)
 {
-    mkdir_p(APPLICATIONS_DIR);
-    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
-    std::string contents = desktop_contents(e);
-    int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd < 0) { err = "cannot write " + dpath; return false; }
-    bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
-    close(fd);
-    if (!ok) { err = dpath + " is truncated"; return false; }
-    return true;
+    return write_desktop_file(e, err);
 }
 
 void Connection::handle_rom_set_icon(const std::string &payload)
@@ -1383,6 +1493,8 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     }
 
     scan_existing();
+    if (regenerate_rom_launchers() > 0)
+        system("/usr/sbin/deskscan >/dev/null 2>&1");
     sync_table();
 
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);

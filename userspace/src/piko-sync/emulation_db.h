@@ -14,7 +14,7 @@ const char *const EMULATION_DIR = "/etc/zaurus";
 const char *const EMULATION_CFG = "/etc/zaurus/emulation.cfg";
 const char *const APPLICATIONS_DIR = "/usr/share/applications";
 const char *const PIXMAPS_DIR = "/usr/share/pixmaps";
-const char *const DEFAULT_ROM_ICON = "/usr/share/pixmaps/pocketsnes.png";
+const char *const DEFAULT_ROM_ICON = "/usr/share/pixmaps/rom.png";
 const char FIELD_SEP = '|';
 
 struct RomEntry {
@@ -23,7 +23,60 @@ struct RomEntry {
     std::string backend;
     std::string desktop;
     std::string icon;
+    std::string options;
 };
+
+inline std::string option_get(const std::string &options, const std::string &key)
+{
+    std::string want = key + "=";
+    std::string::size_type pos = 0;
+    while (pos <= options.size()) {
+        std::string::size_type end = options.find(',', pos);
+        if (end == std::string::npos)
+            end = options.size();
+        std::string item = options.substr(pos, end - pos);
+        if (item.size() > want.size() && item.compare(0, want.size(), want) == 0)
+            return item.substr(want.size());
+        if (end == options.size())
+            break;
+        pos = end + 1;
+    }
+    return std::string();
+}
+
+inline void option_set(std::string &options, const std::string &key, const std::string &value)
+{
+    std::string out;
+    std::string want = key + "=";
+    std::string::size_type pos = 0;
+    bool replaced = false;
+    while (pos <= options.size() && !options.empty()) {
+        std::string::size_type end = options.find(',', pos);
+        if (end == std::string::npos)
+            end = options.size();
+        std::string item = options.substr(pos, end - pos);
+        if (!item.empty()) {
+            if (item.size() > want.size() && item.compare(0, want.size(), want) == 0) {
+                if (!value.empty()) {
+                    if (!out.empty()) out += ",";
+                    out += want + value;
+                }
+                replaced = true;
+            } else {
+                if (!out.empty()) out += ",";
+                out += item;
+            }
+        }
+        if (end == options.size())
+            break;
+        pos = end + 1;
+    }
+    if (!replaced && !value.empty()) {
+        if (!out.empty()) out += ",";
+        out += want + value;
+    }
+    options = out;
+}
 
 inline std::string basename_of_path(const std::string &p)
 {
@@ -77,7 +130,7 @@ inline std::string desktop_name_for(const std::string &machine, const std::strin
 inline std::string encode_entry(const RomEntry &e)
 {
     return e.path + FIELD_SEP + e.machine + FIELD_SEP + e.backend + FIELD_SEP
-           + e.desktop + FIELD_SEP + e.icon;
+           + e.desktop + FIELD_SEP + e.icon + FIELD_SEP + e.options;
 }
 
 inline bool decode_entry(const std::string &line, RomEntry &e)
@@ -96,6 +149,7 @@ inline bool decode_entry(const std::string &line, RomEntry &e)
     e.backend = f[2];
     e.desktop = f[3];
     e.icon = f[4];
+    e.options = (f.size() >= 6) ? f[5] : std::string();
     return true;
 }
 
@@ -152,10 +206,18 @@ inline std::string desktop_contents(const RomEntry &e)
     out += "Type=Application\n";
     out += "Name=" + name + "\n";
     out += "Comment=" + e.machine + " game\n";
-    out += "Exec=/usr/local/bin/pocketsnes-run interp \"" + e.path + "\"\n";
-    out += "X-Piko-Heavy=true\n";
-    out += "X-Piko-Heavy-Reason=" + e.machine
-           + " emulation needs the framebuffer and the input devices to itself.\n";
+    out += "Exec=/usr/local/bin/" + e.backend + "-run \"" + e.path + "\"\n";
+    if (option_get(e.options, "heavy") == "1") {
+        out += "X-Piko-Heavy=true\n";
+        out += "X-Piko-Heavy-Reason=" + e.machine
+               + " needs the framebuffer and the input devices to itself.\n";
+        out += "X-Piko-Drivers=fb\n";
+        out += "X-Piko-Video=qvga\n";
+    } else {
+        out += "X-Piko-Drivers=x11\n";
+        if (e.machine == "J2ME")
+            out += "X-Piko-Video=qvga\n";
+    }
     out += "Icon=" + e.icon + "\n";
     out += "Terminal=false\n";
     out += "Categories=Game;Emulation;" + e.machine + ";\n";
