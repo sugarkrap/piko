@@ -26,6 +26,47 @@ struct RomEntry {
     std::string options;
 };
 
+inline std::string option_escape(const std::string &value)
+{
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    for (size_t i = 0; i < value.size(); i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (c == '%' || c == ',' || c == '|' || c == '=' || c < 0x20) {
+            out += '%';
+            out += hex[(c >> 4) & 0xF];
+            out += hex[c & 0xF];
+        } else {
+            out += (char)c;
+        }
+    }
+    return out;
+}
+
+inline std::string option_unescape(const std::string &value)
+{
+    std::string out;
+    for (size_t i = 0; i < value.size(); i++) {
+        if (value[i] == '%' && i + 2 < value.size()) {
+            int hi = -1, lo = -1;
+            char a = value[i + 1], b = value[i + 2];
+            if (a >= '0' && a <= '9') hi = a - '0';
+            else if (a >= 'A' && a <= 'F') hi = a - 'A' + 10;
+            else if (a >= 'a' && a <= 'f') hi = a - 'a' + 10;
+            if (b >= '0' && b <= '9') lo = b - '0';
+            else if (b >= 'A' && b <= 'F') lo = b - 'A' + 10;
+            else if (b >= 'a' && b <= 'f') lo = b - 'a' + 10;
+            if (hi >= 0 && lo >= 0) {
+                out += (char)((hi << 4) | lo);
+                i += 2;
+                continue;
+            }
+        }
+        out += value[i];
+    }
+    return out;
+}
+
 inline std::string option_get(const std::string &options, const std::string &key)
 {
     std::string want = key + "=";
@@ -200,7 +241,9 @@ inline std::string icon_path_for(const std::string &machine, const std::string &
 
 inline std::string desktop_contents(const RomEntry &e)
 {
-    std::string name = strip_extension(basename_of_path(e.path));
+    std::string name = option_unescape(option_get(e.options, "title"));
+    if (name.empty())
+        name = strip_extension(basename_of_path(e.path));
     std::string out;
     out += "[Desktop Entry]\n";
     out += "Type=Application\n";

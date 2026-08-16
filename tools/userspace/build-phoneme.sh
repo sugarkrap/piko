@@ -20,6 +20,11 @@ SERIALIZER_URL="https://repo1.maven.org/maven2/xalan/serializer/$XALAN_VERSION/s
 XALAN_SHA256="febd48bb133a96c447282213951a6b74ea7fb45c0d896121296c014316bda6b0"
 SERIALIZER_SHA256="5f6804bacdfdb3ccc52d2538536fab8986696d61559b081054a420c653806667"
 
+if [ -n "${PIKO_VM_TRACE:-}" ]; then
+    ENABLE_TTY_TRACE=true
+    export ENABLE_TTY_TRACE
+fi
+
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 

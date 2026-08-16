@@ -654,6 +654,13 @@ int main(int argc, char **argv)
     if (const char *xp = getenv("X11_PAYLOAD"))
         if (*xp) ctx.x11_payload = xp;
 
+    ctx.timidity_stage = ctx.repo + "/userspace/stage-timidity";
+    if (const char *ts = getenv("TIMIDITY_STAGE"))
+        if (*ts) ctx.timidity_stage = ts;
+    ctx.timidity_dir = "/mnt/card/.zaurus/usr/share/timidity";
+    if (const char *td = getenv("TIMIDITY_DIR"))
+        if (*td) ctx.timidity_dir = td;
+
     std::string kver_path = ctx.kernel_dir + "/include/config/kernel.release";
     std::string kver_text;
     if (read_whole_file(kver_path, kver_text)) {

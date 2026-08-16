@@ -1,13 +1,35 @@
 #!/bin/sh
 PM=${PHONEME_HOME:-/usr/local/lib/phoneme}
 CFG=${EMULATION_CFG:-/etc/zaurus/emulation.cfg}
-LOG=${PHONEME_LOG:-/mnt/card/.zaurus/var/log/phoneme.log}
+LOGDIR=${PHONEME_LOG_DIR:-/mnt/card/.zaurus/var/log/phoneme}
+PIKO_CFG=${PIKO_PHONEME_CFG:-/etc/piko/phoneme.cfg}
+TIMIDITY_DEFAULT=/mnt/card/.zaurus/usr/share/timidity
+HEAP_MB_DEFAULT=12
+LOG_MAX=262144
 
 JAR=$1
 [ -n "$JAR" ] || exit 2
 [ -x "$PM/bin/runMidlet" ] || exit 1
 
+slug=$(basename "$JAR")
+slug=${slug%.*}
+slug=$(echo "$slug" | tr -c 'A-Za-z0-9._-' '_')
+LOG=${PHONEME_LOG:-$LOGDIR/$slug.log}
+
 mkdir -p "${LOG%/*}" 2>/dev/null
+
+if [ -f "$LOG" ]; then
+	size=$(wc -c < "$LOG" 2>/dev/null || echo 0)
+	if [ "$size" -gt "$LOG_MAX" ]; then
+		mv "$LOG" "$LOG.old" 2>/dev/null
+	fi
+fi
+
+{
+	echo "---- phoneme-run $(date 2>/dev/null) ----"
+	echo "jar:  $JAR"
+	echo "pid:  $$"
+} >> "$LOG"
 
 suite=
 rotate=
@@ -48,5 +70,44 @@ if [ "$rotate" = "1" ]; then
 	export J2ME_GP2X_REVERSE
 fi
 
+if [ -f "$PIKO_CFG" ]; then
+	while IFS='=' read -r key value; do
+		case "$key" in
+			timidity_dir) [ -n "${PIKO_TIMIDITY_DIR:-}" ] || PIKO_TIMIDITY_DIR=$value ;;
+			midi_amplification) [ -n "${PIKO_MIDI_AMP:-}" ] || PIKO_MIDI_AMP=$value ;;
+			eventlog) [ -n "${PIKO_EVENTLOG:-}" ] || { [ "$value" = "1" ] && PIKO_EVENTLOG=1; } ;;
+			heap_mb) [ -n "${PIKO_HEAP_MB:-}" ] || PIKO_HEAP_MB=$value ;;
+			vm_args) [ -n "${PIKO_VM_ARGS:-}" ] || PIKO_VM_ARGS=$value ;;
+		esac
+	done < "$PIKO_CFG"
+fi
+
+if [ -n "${PIKO_MIDI_AMP:-}" ]; then
+	export PIKO_MIDI_AMP
+fi
+
+if [ -n "${PIKO_EVENTLOG:-}" ]; then
+	export PIKO_EVENTLOG
+fi
+PIKO_TIMIDITY_DIR=${PIKO_TIMIDITY_DIR:-$TIMIDITY_DEFAULT}
+export PIKO_TIMIDITY_DIR
+
+if [ ! -f "$PIKO_TIMIDITY_DIR/timidity.cfg" ]; then
+	echo "phoneme-run: no timidity.cfg under $PIKO_TIMIDITY_DIR, midi will be silent" >> "$LOG"
+fi
+
+PIKO_HEAP_MB=${PIKO_HEAP_MB:-$HEAP_MB_DEFAULT}
+
+{
+	echo "suite: $suite"
+	echo "heap: ${PIKO_HEAP_MB}M"
+	echo "vm_args: ${PIKO_VM_ARGS:-(none)}"
+	echo "rotate: ${rotate:-0}"
+	echo "timidity: $PIKO_TIMIDITY_DIR"
+	echo "midi_amp: ${PIKO_MIDI_AMP:-default}"
+	echo "display: ${DISPLAY:-(unset)}"
+	echo "---- runMidlet output ----"
+} >> "$LOG"
+
 cd "$PM/bin" || exit 1
-exec ./runMidlet "$suite" >> "$LOG" 2>&1
+exec ./runMidlet ${PIKO_VM_ARGS:-} "=HeapCapacity${PIKO_HEAP_MB}M" "$suite" >> "$LOG" 2>&1

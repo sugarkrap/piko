@@ -114,6 +114,18 @@ core_scripts:
     mode: "0755"
     if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
   - type: put_file
+    local: "${REPO}/rootfs/etc/piko/phoneme.cfg"
+    remote: /etc/piko/phoneme.cfg
+    mode: "0644"
+    policy: if_missing
+    if_exists: "${REPO}/rootfs/etc/piko/phoneme.cfg"
+  - type: put_tree_from_dir
+    local_dir: "${TIMIDITY_STAGE}"
+    remote_base: "${TIMIDITY_DIR}"
+    mode: "0644"
+    recursive: "true"
+    if_exists: "${TIMIDITY_STAGE}/timidity.cfg"
+  - type: put_file
     local: "${REPO}/userspace/desktop/rom.png"
     remote: /usr/share/pixmaps/rom.png
     mode: "0644"

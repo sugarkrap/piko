@@ -45,8 +45,11 @@
 #include "icon_xpm.h"
 #include "settings.h"
 #include "png_write.h"
+#include <map>
+
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "jar_meta.h"
 
 using namespace piko_sync;
 
@@ -1688,7 +1691,18 @@ public:
 
     virtual ~ManagerPane() { delete preview_image_; }
 
-    void on_transfer_complete() { refresh(); }
+    void on_transfer_complete()
+    {
+        if (!pending_icons_.empty()) {
+            std::map<std::string, std::string>::iterator it;
+            for (it = pending_icons_.begin(); it != pending_icons_.end(); ++it) {
+                std::string err;
+                set_rom_icon(address(), it->first, it->second, err);
+            }
+            pending_icons_.clear();
+        }
+        refresh();
+    }
 
     void store_settings(Settings &cfg) const
     {
@@ -1749,7 +1763,17 @@ private:
                 rejected += std::string("\n  ") + basename_of_path(path);
                 continue;
             }
-            xfer_->queue_path(path, options, dest(), machine);
+            std::string per_file = options;
+            if (spec_.j2me) {
+                JarMeta meta;
+                if (jar_read_meta(path, meta)) {
+                    if (!meta.title.empty())
+                        option_set(per_file, "title", option_escape(meta.title));
+                    if (!meta.icon_png.empty())
+                        pending_icons_[dest() + "/" + basename_of_path(path)] = meta.icon_png;
+                }
+            }
+            xfer_->queue_path(path, per_file, dest(), machine);
         }
         xfer_->refresh_queue_view();
 
@@ -1895,6 +1919,7 @@ private:
     Fl_Box *preview_;
     Fl_PNG_Image *preview_image_;
     std::vector<RomEntry> entries_;
+    std::map<std::string, std::string> pending_icons_;
 };
 
 class TransferFilesPane {

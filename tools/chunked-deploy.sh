@@ -503,6 +503,21 @@ send_file "$REPO/rootfs/usr/sbin/gototty"    "/usr/sbin/gototty"
 send_file "$REPO/rootfs/usr/sbin/softreboot" "/usr/sbin/softreboot"
 ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty /usr/sbin/softreboot"
 
+if [ -x "$REPO/userspace/src/piko-sync/piko-sync-server" ]; then
+    echo "==> piko-sync-server (stopping it first -- it cannot replace itself)"
+    ssh_do "for p in \$(ps | grep '[p]iko-sync-server' | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 1" || true
+    send_file "$REPO/userspace/src/piko-sync/piko-sync-server" "/usr/bin/piko-sync-server"
+    ssh_do "chmod 0755 /usr/bin/piko-sync-server"
+    if [ -f "$REPO/userspace/desktop/piko-sync-server.desktop" ]; then
+        send_file "$REPO/userspace/desktop/piko-sync-server.desktop" "/usr/share/applications/piko-sync-server.desktop"
+    fi
+    if [ -f "$REPO/userspace/desktop/piko-sync-server.png" ]; then
+        send_file "$REPO/userspace/desktop/piko-sync-server.png" "/usr/share/pixmaps/piko-sync-server.png"
+    fi
+else
+    echo "==> no built piko-sync-server -- skipping (run tools/userspace/build-piko-sync.sh)"
+fi
+
 if [ -x "$REPO/userspace/src/pkillx" ]; then
     send_file "$REPO/userspace/src/pkillx" "/usr/sbin/pkillx"
     ssh_do "chmod 0755 /usr/sbin/pkillx"
@@ -587,13 +602,15 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 echo "    -- cannot bootstrap dynamic linking; SDL will only run if a" >&2
                 echo "    previous deploy already put ld-uClibc/libc.so on the device." >&2
             fi
-            send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/usr/lib/$SDL_SO_REAL"
-            ssh_do "ln -sf '$SDL_SO_REAL' /usr/lib/libSDL-1.2.so.0"
+            send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/lib/$SDL_SO_REAL"
+            ssh_do "ln -sf '$SDL_SO_REAL' /lib/libSDL-1.2.so.0"
+            ssh_do "rm -f /usr/lib/libSDL-1.2.so.0 /usr/lib/$SDL_SO_REAL"
             for extra in libSDL_image-1.2.so.0 libSDL_mixer-1.2.so.0; do
                 [ -e "$SDL_STAGE/usr/lib/$extra" ] || continue
                 extra_real="$(basename "$(readlink -f "$SDL_STAGE/usr/lib/$extra")")"
-                send_file "$SDL_STAGE/usr/lib/$extra_real" "/usr/lib/$extra_real"
-                ssh_do "ln -sf '$extra_real' /usr/lib/$extra"
+                send_file "$SDL_STAGE/usr/lib/$extra_real" "/lib/$extra_real"
+                ssh_do "ln -sf '$extra_real' /lib/$extra"
+                ssh_do "rm -f /usr/lib/$extra /usr/lib/$extra_real"
             done
 
             PHONEME_HOME="$REPO/userspace/stage-phoneme/usr/local/lib/phoneme"
@@ -607,6 +624,22 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 send_file "$REPO/userspace/src/phoneme-run" "/usr/local/bin/phoneme-run"
                 ssh_do "chmod 0755 /usr/local/bin/phoneme-run"
                 send_file "$REPO/userspace/desktop/rom.png" "/usr/share/pixmaps/rom.png"
+
+                TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
+                TIMIDITY_DIR="${TIMIDITY_DIR:-/mnt/card/.zaurus/usr/share/timidity}"
+                if [ -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
+                    echo "==> timidity patches -> $TIMIDITY_DIR ($(du -sh "$TIMIDITY_STAGE" | cut -f1))"
+                    tar -C "$TIMIDITY_STAGE" -cf "$STAGE/timidity.tar" .
+                    send_file "$STAGE/timidity.tar" "$CARD_TMP/timidity.tar"
+                    ssh_do "mkdir -p '$TIMIDITY_DIR' && /usr/local/bin/untar '$CARD_TMP/timidity.tar' '$TIMIDITY_DIR' && rm -f '$CARD_TMP/timidity.tar'"
+                else
+                    echo "==> no timidity patches staged -- midi will be silent"
+                    echo "    run tools/userspace/build-timidity-patches.sh"
+                fi
+                if [ -f "$REPO/rootfs/etc/piko/phoneme.cfg" ]; then
+                    ssh_do "[ -f /etc/piko/phoneme.cfg ]" 2>/dev/null || \
+                        send_file "$REPO/rootfs/etc/piko/phoneme.cfg" "/etc/piko/phoneme.cfg"
+                fi
             fi
 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then

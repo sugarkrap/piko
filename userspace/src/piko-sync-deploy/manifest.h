@@ -38,6 +38,8 @@ struct DeployContext {
     std::string sdl_stage;
     std::string tcroot;
     std::string x11_payload;
+    std::string timidity_stage;
+    std::string timidity_dir;
     DeployFlags flags;
 
     std::string get(const std::string &name) const
@@ -51,6 +53,8 @@ struct DeployContext {
         if (name == "SDL_STAGE") return sdl_stage;
         if (name == "TCROOT") return tcroot;
         if (name == "X11_PAYLOAD") return x11_payload;
+        if (name == "TIMIDITY_STAGE") return timidity_stage;
+        if (name == "TIMIDITY_DIR") return timidity_dir;
         return std::string();
     }
 };
@@ -206,7 +210,8 @@ inline bool put_files_from_dir(const std::string &local_dir, const std::string &
 }
 
 inline bool put_files_from_tree(const std::string &local_dir, const std::string &remote_base,
-                                 std::vector<Step> &out, std::string &error)
+                                 std::vector<Step> &out, std::string &error,
+                                 uint32_t fixed_mode = 0)
 {
     DIR *d = opendir(local_dir.c_str());
     if (!d) {
@@ -227,7 +232,7 @@ inline bool put_files_from_tree(const std::string &local_dir, const std::string 
             continue;
 
         if (S_ISDIR(st.st_mode)) {
-            if (!put_files_from_tree(full, remote, out, error))
+            if (!put_files_from_tree(full, remote, out, error, fixed_mode))
                 return false;
             continue;
         }
@@ -238,7 +243,7 @@ inline bool put_files_from_tree(const std::string &local_dir, const std::string 
         s.type = STEP_PUT_FILE;
         s.local_path = full;
         s.remote_path = remote;
-        s.mode = st.st_mode & 0777;
+        s.mode = fixed_mode ? fixed_mode : (st.st_mode & 0777);
         s.policy = PUT_ALWAYS;
         out.push_back(s);
     }
@@ -397,7 +402,11 @@ inline bool build_plan(const std::vector<yaml::Section> &sections,
                 std::string local_dir = substitute(e.get("local_dir"), ctx);
                 std::string remote_base = substitute(e.get("remote_base"), ctx);
                 uint32_t mode = parse_mode(e.get("mode"));
-                if (!put_files_from_dir(local_dir, remote_base, mode, out, error))
+                std::string rec = e.get("recursive");
+                if (rec == "true" || rec == "1") {
+                    if (!put_files_from_tree(local_dir, remote_base, out, error, mode))
+                        return false;
+                } else if (!put_files_from_dir(local_dir, remote_base, mode, out, error))
                     return false;
 
             } else if (type == "put_tar_tree") {

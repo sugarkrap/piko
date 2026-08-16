@@ -28,6 +28,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define XSERVER_NAME    "Xfbdev"
@@ -37,11 +38,11 @@
 #define FALLBACK_TIMEOUT_S  20
 #define CLOSE_TIMEOUT_S      5
 
-#define LOCK_PATH   "/tmp/matchbox-heavyrun.lock"
+#define LOCK_PATH   "/tmp/matchbox-apprun.lock"
 
-#define REENTRY_ENV "MATCHBOX_FBRUN_ACTIVE"
+#define REENTRY_ENV "MATCHBOX_APPRUN_ACTIVE"
 
-#define TRACE_LOG "/mnt/card/.zaurus/var/log/fbrun-trace.log"
+#define TRACE_LOG "/mnt/card/.zaurus/var/log/apprun-trace.log"
 
 static void trace(const char *fmt, ...)
 {
@@ -75,6 +76,7 @@ static int   lock_held;
 static int   cleaned_up;
 static int   qvga_requested;
 static int   qvga_applied;
+static int   x_qvga_applied;
 static int   video_touched;
 static int   fast_pll_requested;
 static int   fast_pll_applied;
@@ -228,6 +230,7 @@ static int set_qvga_mode(void)
 
 #define DESKTOP_XRES 640
 #define DESKTOP_YRES 480
+#define QVGA_XRES    320
 
 static void restore_video_mode(void)
 {
@@ -267,6 +270,76 @@ static void restore_video_mode(void)
     else
         trace("restore_video_mode: forced back to %ux%u", var.xres, var.yres);
     close(fd);
+}
+
+#define X_CTL_FIFO "/tmp/.pikalibrate-ctl"
+
+#define X_SETTLE_TRIES  100
+#define X_SETTLE_NS     20000000L
+
+static int send_x_command(const char *cmd)
+{
+    int fd = open(X_CTL_FIFO, O_WRONLY | O_NONBLOCK);
+
+    if (fd < 0) {
+        trace("send_x_command: %s: open %s failed: %s", cmd, X_CTL_FIFO,
+              strerror(errno));
+        return 0;
+    }
+    if (write(fd, cmd, strlen(cmd)) < 0) {
+        trace("send_x_command: %s: write failed: %s", cmd, strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+    return 1;
+}
+
+static int fb_xres(void)
+{
+    struct fb_var_screeninfo var;
+    int fd;
+    int res = -1;
+
+    fd = open(FB_DEV, O_RDONLY);
+    if (fd < 0)
+        return -1;
+    if (ioctl(fd, FBIOGET_VSCREENINFO, &var) == 0)
+        res = (int)var.xres;
+    close(fd);
+    return res;
+}
+
+static int wait_for_x_qvga(int want_qvga)
+{
+    struct timespec ts;
+    int tries;
+
+    ts.tv_sec  = 0;
+    ts.tv_nsec = X_SETTLE_NS;
+
+    for (tries = 0; tries < X_SETTLE_TRIES; tries++) {
+        int xres = fb_xres();
+
+        if (xres < 0)
+            return 0;
+        if (want_qvga ? (xres <= QVGA_XRES) : (xres > QVGA_XRES))
+            return 1;
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+static int set_x_qvga_mode(int qvga)
+{
+    if (!send_x_command(qvga ? "QVGA" : "VGA"))
+        return 0;
+    if (!wait_for_x_qvga(qvga)) {
+        trace("set_x_qvga_mode: X did not reach %s", qvga ? "QVGA" : "VGA");
+        return 0;
+    }
+    trace("set_x_qvga_mode: X is now %s", qvga ? "QVGA" : "VGA");
+    return 1;
 }
 
 #define FASTPLL_SYSFS "/sys/devices/platform/w100fb/fastpllclk"
@@ -407,7 +480,10 @@ static void cleanup(void)
     trace("cleanup: entered (session_was_stopped=%d, video_touched=%d)",
           session_was_stopped, video_touched);
 
-    if (video_touched) {
+    if (x_qvga_applied) {
+        set_x_qvga_mode(0);
+        restore_fast_pll();
+    } else if (video_touched) {
         restore_video_mode();
         restore_fast_pll();
     } else {
@@ -571,15 +647,18 @@ static void mode_to_flags(enum video_mode mode, int *qvga, int *fast_pll)
     *fast_pll = (mode == VIDEO_MODE_QVGA_FAST    || mode == VIDEO_MODE_VGA_FAST);
 }
 
-#define HEAVYRUN_CONFIG_DIR  "/etc/zaurus"
-#define HEAVYRUN_CONFIG_PATH "/etc/zaurus/matchbox-heavyrun.cfg"
-#define HEAVYRUN_LEGACY_PATH "/etc/zaurus/matchbox-fbrun.cfg"
+#define APPRUN_CONFIG_DIR  "/etc/zaurus"
+#define APPRUN_CONFIG_PATH "/etc/zaurus/matchbox-apprun.cfg"
+#define APPRUN_LEGACY_PATH "/etc/zaurus/matchbox-heavyrun.cfg"
+#define APPRUN_LEGACY2_PATH "/etc/zaurus/matchbox-fbrun.cfg"
 
 static enum video_mode load_video_mode_config(void)
 {
-    FILE *f = fopen(HEAVYRUN_CONFIG_PATH, "r");
+    FILE *f = fopen(APPRUN_CONFIG_PATH, "r");
     if (!f)
-        f = fopen(HEAVYRUN_LEGACY_PATH, "r");
+        f = fopen(APPRUN_LEGACY_PATH, "r");
+    if (!f)
+        f = fopen(APPRUN_LEGACY2_PATH, "r");
     enum video_mode mode = VIDEO_MODE_VGA_NORMAL;
     char line[128];
 
@@ -618,24 +697,24 @@ static enum video_mode load_video_mode_config(void)
 
 static void save_video_mode_config(enum video_mode mode)
 {
-    char tmp_path[sizeof(HEAVYRUN_CONFIG_PATH) + 4];
+    char tmp_path[sizeof(APPRUN_CONFIG_PATH) + 4];
     FILE *f;
 
-    mkdir(HEAVYRUN_CONFIG_DIR, 0755);
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", HEAVYRUN_CONFIG_PATH);
+    mkdir(APPRUN_CONFIG_DIR, 0755);
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", APPRUN_CONFIG_PATH);
 
     f = fopen(tmp_path, "w");
     if (!f) {
         trace("save_video_mode_config: fopen %s failed: %s", tmp_path, strerror(errno));
         return;
     }
-    fprintf(f, "# matchbox-heavyrun persisted video mode -- see the dialog's Advanced panel\n");
+    fprintf(f, "# matchbox-apprun persisted video mode -- see the dialog's Advanced panel\n");
     fprintf(f, "video_mode=%s\n", video_mode_keys[mode]);
     fclose(f);
 
-    if (rename(tmp_path, HEAVYRUN_CONFIG_PATH) < 0)
+    if (rename(tmp_path, APPRUN_CONFIG_PATH) < 0)
         trace("save_video_mode_config: rename %s -> %s failed: %s",
-              tmp_path, HEAVYRUN_CONFIG_PATH, strerror(errno));
+              tmp_path, APPRUN_CONFIG_PATH, strerror(errno));
     else
         trace("save_video_mode_config: saved video_mode=%s", video_mode_keys[mode]);
 }
@@ -928,7 +1007,7 @@ static int confirm(const char *name, const char *reason, enum video_mode *mode)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: matchbox-heavyrun [-n NAME] [-r REASON] [-y] [--qvga] "
+            "usage: matchbox-apprun [-n NAME] [-r REASON] [-y] [--qvga] "
             "[--fast-pll] [--drivers=fb;x11] [--video=qvga] [--] program [args...]\n");
 }
 
@@ -997,7 +1076,7 @@ int main(int argc, char **argv)
     if (getenv(REENTRY_ENV)) {
         execvp(prog_argv[0], prog_argv);
         trace("main: re-entrant execvp failed: %s", strerror(errno));
-        fprintf(stderr, "matchbox-heavyrun: cannot run %s: %s\n",
+        fprintf(stderr, "matchbox-apprun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         return 127;
     }
@@ -1012,7 +1091,7 @@ int main(int argc, char **argv)
                          "Close it before starting %s.", name);
             }
         }
-        fprintf(stderr, "matchbox-heavyrun: another one is already running\n");
+        fprintf(stderr, "matchbox-apprun: another one is already running\n");
         return 0;
     }
 
@@ -1052,15 +1131,17 @@ int main(int argc, char **argv)
     }
 
     if (driver_selected == DRIVER_X11) {
-        trace("main: x11 driver -- leaving the session up, changing mode underneath it");
+        trace("main: x11 driver -- leaving the session up, asking X to resize");
+        if (qvga_requested)
+            x_qvga_applied = set_x_qvga_mode(1);
     } else {
         session_was_stopped = session_stop();
         trace("main: session_was_stopped=%d, forking", session_was_stopped);
-    }
 
-    if (qvga_requested) {
-        video_touched = 1;
-        qvga_applied = set_qvga_mode();
+        if (qvga_requested) {
+            video_touched = 1;
+            qvga_applied = set_qvga_mode();
+        }
     }
     if (fast_pll_requested) {
         video_touched = 1;
@@ -1073,7 +1154,7 @@ int main(int argc, char **argv)
     child_pid = fork();
     if (child_pid < 0) {
         trace("main: fork failed: %s", strerror(errno));
-        perror("matchbox-heavyrun: fork");
+        perror("matchbox-apprun: fork");
         return 126;
     }
     if (child_pid == 0) {
@@ -1085,7 +1166,7 @@ int main(int argc, char **argv)
         trace("main: child pid=%d exec'ing %s", (int)getpid(), prog_argv[0]);
         execvp(prog_argv[0], prog_argv);
         trace("main: child execvp failed: %s", strerror(errno));
-        fprintf(stderr, "matchbox-heavyrun: cannot run %s: %s\n",
+        fprintf(stderr, "matchbox-apprun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         _exit(127);
     }
