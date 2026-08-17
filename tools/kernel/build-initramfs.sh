@@ -141,10 +141,10 @@ else
     chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
 fi
 
-BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync touch umount uname vi"
+BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync umount uname"
 SBIN_APPLETS="halt init losetup mdev poweroff reboot switch_root"
-USR_BIN_APPLETS="basename clear dirname env find free hd head hexdump reset setsid tail test tr wc which"
-USR_SBIN_APPLETS="fbset"
+USR_BIN_APPLETS="basename dirname find free hd head setsid tail test tr wc which"
+USR_SBIN_APPLETS=""
 
 for a in $BIN_APPLETS; do ln -sf busybox "$ROOTFS_BUILD_DIR/bin/$a"; done
 for a in $SBIN_APPLETS; do ln -sf ../bin/busybox "$ROOTFS_BUILD_DIR/sbin/$a"; done
