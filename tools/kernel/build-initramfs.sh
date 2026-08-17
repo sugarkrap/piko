@@ -94,7 +94,7 @@ fi
 BUILD_DIR="$INITRAMFS_DIR/.build-$BUSYBOX_VERSION"
 if [ "$FORCE" -eq 0 ] && [ -f "$BUILD_DIR/busybox_unstripped" ] &&
    cmp -s "$BB_CONFIG_SRC" "$BUILD_DIR/.config.piko-src"; then
-    echo "==> reusing the busybox built for an earlier flavor (same busybox.config)"
+    echo "==> reusing the busybox from an earlier flavor"
 else
     echo "==> configuring busybox $BUSYBOX_VERSION (O=$BUILD_DIR)"
     rm -rf "$BUILD_DIR"
@@ -161,7 +161,7 @@ ls -la "$OUT_CPIO"
 
 REFERENCE="$INITRAMFS_DIR/initramfs-minimal-v2.cpio.gz"
 if [ "$STAGE2" -eq 1 ]; then
-    echo "==> stage 2 initramfs, no bootstrap reference to compare against"
+    echo "==> stage 2 initramfs, no reference to compare"
 elif [ -f "$REFERENCE" ]; then
     if cmp -s "$OUT_CPIO" "$REFERENCE"; then
         echo "==> byte-identical to $REFERENCE"

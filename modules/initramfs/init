@@ -85,16 +85,8 @@ done
 
 if test -z "$BOOTDEV"; then
 	console_fallback
-	serial_echo "no $MEDIUM found"
-	echo ""
-	echo "This bootstrap is the '$FLAVOR' flavor: it boots piko from $MEDIUM,"
-	echo "and nothing mountable turned up there after 60 seconds."
-	echo ""
-	echo "Cacko's recovery only mounts the medium you pick in its menu, so an"
-	echo "install run from the wrong entry lands the payload somewhere this"
-	echo "kernel cannot reach. Reinstall from the $MEDIUM_MENU menu entry, or"
-	echo "flash the flavor matching the medium you installed to."
-	echo ""
+	serial_echo "$FLAVOR bootstrap: nothing mountable on $MEDIUM"
+	echo "reinstall from the $MEDIUM_MENU recovery entry, or flash the flavor matching your medium"
 	exec setsid cttyhack /bin/ash -l
 fi
 
@@ -139,24 +131,13 @@ done
 
 if test ! -f "$KERNEL"; then
 	console_fallback
-	serial_echo "no stage 2 kernel on $BOOTDEV"
-	echo ""
-	echo "$BOOTDEV mounted, but $PAYLOAD_DIR/zImage-full is not on it."
-	echo "piko-install populates $PAYLOAD_DIR when it flashes this bootstrap;"
-	echo "if you flashed by hand, copy the payload there and reboot."
-	echo ""
+	serial_echo "no $PAYLOAD_DIR/zImage-full on $BOOTDEV"
 	exec setsid cttyhack /bin/ash -l
 fi
 
 if test "$FLAVOR" != nand && test ! -f "/mnt/boot/$ROOTIMG"; then
 	console_fallback
-	serial_echo "no root image on $BOOTDEV"
-	echo ""
-	echo "$BOOTDEV has $PAYLOAD_DIR/zImage-full but no $ROOTIMG next to it."
-	echo "That image holds the whole piko root, so stage 2 has nothing to"
-	echo "pivot into. Reinstall, or point 'root' in $PAYLOAD_DIR/piko-boot.cfg"
-	echo "at wherever you moved it."
-	echo ""
+	serial_echo "no $ROOTIMG on $BOOTDEV"
 	exec setsid cttyhack /bin/ash -l
 fi
 

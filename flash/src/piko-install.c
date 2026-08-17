@@ -1010,7 +1010,7 @@ static int copy_one(const struct copy_target *c)
     if (dst < 0) {
         puts_("Piko Install: cannot create ");
         puts_(c->dest);
-        puts_(" -- is the card mounted read-only?\n");
+        puts_(" (read-only card?)\n");
         sys_close(src);
         return -1;
     }
@@ -1024,7 +1024,7 @@ static int copy_one(const struct copy_target *c)
             if (w <= 0) {
                 puts_("Piko Install: write failed at ");
                 putnum(total + off);
-                puts_(" -- the card is probably full\n");
+                puts_(" (card full?)\n");
                 sys_close(dst);
                 sys_close(src);
                 return -1;
@@ -1139,9 +1139,7 @@ int main(int argc, char *argv[])
         active_targets = cfg_targets;
         num_targets    = cfg_count;
         if (cfg_count == 0 && cfg_copy_count == 0) {
-            puts_("Piko Install: " CFG_FILE " parsed but declares no work at all.\n");
-            puts_("Piko Install: refusing to fall back to compile-time defaults -- a\n");
-            puts_("Piko Install: malformed config must not silently flash something else.\n");
+            puts_("Piko Install: " CFG_FILE " declares no work, refusing compile-time defaults\n");
             _exit_(1);
         }
     } else {
@@ -1151,21 +1149,11 @@ int main(int argc, char *argv[])
     }
 
     if (cfg_medium[0] && !streq_(cfg_medium, datapath)) {
-        puts_("Piko Install: WRONG MEDIUM.\n");
-        puts_("Piko Install: this payload boots piko from ");
+        puts_("Piko Install: wrong medium: payload is for ");
         puts_(cfg_medium);
-        puts_(", but the recovery\n");
-        puts_("Piko Install: menu you picked mounted ");
+        puts_(", recovery mounted ");
         puts_(datapath);
-        puts_(" instead, and that is the\n");
-        puts_("Piko Install: only place it can write to.\n");
-        puts_("Piko Install: reboot the recovery and pick the entry matching ");
-        puts_(cfg_medium);
-        puts_(",\n");
-        puts_("Piko Install: or use the release flavor built for ");
-        puts_(datapath);
-        puts_(".\n");
-        puts_("Piko Install: nothing has been written.\n");
+        puts_(". Nothing written.\n");
         _exit_(1);
     }
 
@@ -1178,9 +1166,7 @@ int main(int argc, char *argv[])
         puts_(" file(s) on the install medium before touching NAND\n");
         for (i = 0; i < cfg_copy_count; i++) {
             if (copy_one(&cfg_copies[i]) != 0) {
-                puts_("Piko Install: copy failed, nothing has been flashed yet.\n");
-                puts_("Piko Install: the machine you are running on is untouched -- fix the\n");
-                puts_("Piko Install: medium (space, write protection) and run the update again.\n");
+                puts_("Piko Install: copy failed, nothing flashed, board untouched.\n");
                 _exit_(1);
             }
         }

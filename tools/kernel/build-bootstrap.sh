@@ -67,7 +67,7 @@ if [ -z "${CROSS_COMPILE:-}" ]; then
     exit 1
 fi
 
-echo "==> restoring the base config (the tree is shared between flavors)"
+echo "==> restoring the base config"
 cp "$BASE_CONFIG" "$KERNEL_DIR/.config"
 
 echo "==> applying the $FLAVOR flavor fragment"
@@ -109,9 +109,7 @@ while read -r op sym val; do
     esac
 done < "$FLAVOR_CONF"
 if [ "$bad" -ne 0 ]; then
-    echo "tools/kernel/build-bootstrap.sh: the $FLAVOR fragment did not apply cleanly." >&2
-    echo "  A bootstrap that silently lost its storage driver cannot find the payload" >&2
-    echo "  and looks like a dead board, so this is fatal rather than a warning." >&2
+    echo "tools/kernel/build-bootstrap.sh: $FLAVOR fragment did not survive olddefconfig" >&2
     exit 1
 fi
 
@@ -131,18 +129,9 @@ SIZE="$(stat -c '%s' "$OUT")"
 echo ""
 echo "==> done: $OUT ($SIZE of $MTD1_SLOT bytes, $((SIZE * 100 / MTD1_SLOT))% of the mtd1 kernel slot)"
 if [ "$SIZE" -gt "$MTD1_SLOT" ]; then
-    echo "tools/kernel/build-bootstrap.sh: FATAL -- the $FLAVOR zImage is $SIZE bytes, over the" >&2
-    echo "  $MTD1_SLOT-byte kernel slot by $((SIZE - MTD1_SLOT)) bytes." >&2
-    echo "  The slot is not free space that happens to end there: the rest of smf holds the" >&2
-    echo "  replicated Embeddix kernels the recovery and flash path boots from. Writing past" >&2
-    echo "  the slot overwrites one of them and takes recovery down with it, which is exactly" >&2
-    echo "  what a board with failing NAND cannot afford to lose." >&2
-    echo "  Trim tools/kernel/flavors/$FLAVOR.conf or the initramfs (see modules/initramfs/)." >&2
+    echo "tools/kernel/build-bootstrap.sh: $FLAVOR zImage $((SIZE - MTD1_SLOT)) bytes over the $MTD1_SLOT slot, would overwrite a recovery kernel" >&2
     exit 1
 fi
 if [ "$SIZE" -gt "$MTD1_PROVEN" ]; then
-    echo ""
-    echo "    NOTE: $((SIZE - MTD1_PROVEN)) bytes larger than the biggest bootstrap piko has shipped"
-    echo "    and booted ($MTD1_PROVEN bytes, release 0.0.2). Still inside the slot, but no board"
-    echo "    has run a bootstrap this big yet -- verify on hardware before release."
+    echo "    $((SIZE - MTD1_PROVEN)) over the largest shipped bootstrap ($MTD1_PROVEN), untested on hardware"
 fi

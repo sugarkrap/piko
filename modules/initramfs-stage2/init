@@ -12,10 +12,7 @@ serial_echo() {
 }
 
 bail() {
-	serial_echo ""
-	serial_echo "stage 2 could not reach its root filesystem:"
-	serial_echo "  $1"
-	serial_echo ""
+	serial_echo "stage 2: no root: $1"
 	exec setsid cttyhack /bin/ash -l
 }
 
