@@ -110,30 +110,76 @@ jobs:
           fi
           echo "PIKOSTORE_IPK=$IPK" >> "$GITHUB_ENV"
 
-      - name: package the sd card payload
+      - name: package one payload per flavor
         run: |
           TAG="sd-card-${{ github.run_number }}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "ARCHIVE=piko-$TAG.tar.gz" >> "$GITHUB_ENV"
-          mkdir -p "dist/piko-$TAG"
-          cp sd-card/zImage sd-card/mtd3.jffs2 sd-card/piko.cfg \
-             sd-card/piko-install sd-card/updater.sh "dist/piko-$TAG/"
-          tar -C dist -czf "piko-$TAG.tar.gz" "piko-$TAG"
-          echo "### sd card payload" >> "$GITHUB_STEP_SUMMARY"
+          ARCHIVES=""
+          for flavor in nand sd cf; do
+              if [ ! -d "sd-card/$flavor" ]; then
+                  echo "::error::build.sh produced no sd-card/$flavor payload" >&2
+                  exit 1
+              fi
+              name="piko-$flavor-$TAG"
+              mkdir -p "dist/$name"
+              cp "sd-card/$flavor/"* "dist/$name/"
+              tar -C dist -czf "$name.tar.gz" "$name"
+              ARCHIVES="$ARCHIVES $name.tar.gz"
+              echo "### $flavor payload" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              tar -tzvf "$name.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "ARCHIVES=${ARCHIVES# }" >> "$GITHUB_ENV"
+          echo "### bootstrap sizes against the 1294336-byte mtd1 slot" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tar -tzvf "piko-$TAG.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+          for flavor in nand sd cf; do
+              sz="$(stat -c '%s' "flash/zImage-$flavor")"
+              printf '%-5s %8s bytes  %3d%%\n' \
+                  "$flavor" "$sz" "$((sz * 100 / 1294336))" >> "$GITHUB_STEP_SUMMARY"
+          done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "### pikostore ipk" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           ls -la "$PIKOSTORE_IPK" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: write the release notes
+        run: |
+          cat > release-notes.md <<NOTES
+          automated pubwish build via build.sh. three flavors, pick the one matching
+          where you want piko to live -- they differ only in the mtd1 bootstrap kernel,
+          which has room for exactly one storage driver set.
+
+          | flavor | piko lives on | pick this when |
+          | --- | --- | --- |
+          | \`piko-nand-$TAG.tar.gz\` | NAND (mtd3) | normal install, healthy NAND |
+          | \`piko-sd-$TAG.tar.gz\` | SD card | NAND is failing, or you want piko off the flash |
+          | \`piko-cf-$TAG.tar.gz\` | CF card | same, but on CF |
+
+          extract one archive and copy the files inside to the root of the card, then
+          boot Cacko recovery and pick the menu entry for that same card. the nand
+          flavor can be installed from either card; the sd and cf flavors must be
+          installed from the menu entry matching their own name, because recovery only
+          mounts the medium you pick and that is the only place the installer can
+          write. picking the wrong entry stops with an explanation before anything is
+          written.
+
+          the sd and cf flavors keep the whole piko root in \`.zaurus/piko-root.img\` on
+          the card and only write the small bootstrap to NAND, so a board with dying
+          flash still boots. the card stays FAT -- no repartitioning.
+
+          \`$PIKOSTORE_IPK\`: pikostore (Software Center) on its own, to install or update
+          it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK
+          (NAND) or pkgadd $PIKOSTORE_IPK card (SD card).
+          NOTES
+
       - name: keep the payload even if publishing fails
         uses: actions/upload-artifact@v4
         with:
           name: piko-${{ env.TAG }}
           path: |
-            ${{ env.ARCHIVE }}
+            piko-*-${{ env.TAG }}.tar.gz
             ${{ env.PIKOSTORE_IPK }}
           if-no-files-found: error
 
@@ -143,12 +189,12 @@ jobs:
         run: |
           publish() {
               if gh release view "$TAG" >/dev/null 2>&1; then
-                  gh release upload --clobber "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK"
+                  gh release upload --clobber "$TAG" $ARCHIVES "$PIKOSTORE_IPK"
               else
-                  gh release create "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK" \
+                  gh release create "$TAG" $ARCHIVES "$PIKOSTORE_IPK" \
                       --title "piko sd card $TAG" \
                       --target "${{ github.sha }}" \
-                      --notes "automated pubwish build via build.sh. $ARCHIVE: extract and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash a Zaurus from scratch (ships with pikostore pre-installed). $PIKOSTORE_IPK: pikostore (Software Center) on its own, to install or update it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK (NAND) or pkgadd $PIKOSTORE_IPK card (SD card)."
+                      --notes-file release-notes.md
               fi
           }
           n=0
