@@ -131,12 +131,12 @@ jobs:
               echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
           echo "ARCHIVES=${ARCHIVES# }" >> "$GITHUB_ENV"
-          echo "### bootstrap sizes against the 1294336-byte mtd1 slot" >> "$GITHUB_STEP_SUMMARY"
+          echo "### bootstrap sizes against the 6422528-byte mtd1 kernel slot" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           for flavor in nand sd cf; do
               sz="$(stat -c '%s' "flash/zImage-$flavor")"
               printf '%-5s %8s bytes  %3d%%\n' \
-                  "$flavor" "$sz" "$((sz * 100 / 1294336))" >> "$GITHUB_STEP_SUMMARY"
+                  "$flavor" "$sz" "$((sz * 100 / 6422528))" >> "$GITHUB_STEP_SUMMARY"
           done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "### pikostore ipk" >> "$GITHUB_STEP_SUMMARY"

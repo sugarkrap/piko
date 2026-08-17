@@ -9,7 +9,11 @@ BASE_CONFIG="$REPO/kernel.config-corgi-$KERNEL_VERSION-minimal"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
-MTD1_BUDGET=1294336
+
+SMF_SIZE=7340032
+KERNEL_START=917504
+MTD1_LIMIT=$((SMF_SIZE - KERNEL_START))
+MTD1_PROVEN=1280656
 
 FORCE=0
 FLAVOR=nand
@@ -127,10 +131,17 @@ mv "$OUT.partial" "$OUT"
 
 SIZE="$(stat -c '%s' "$OUT")"
 echo ""
-echo "==> done: $OUT ($SIZE of $MTD1_BUDGET bytes, $((SIZE * 100 / MTD1_BUDGET))% of the mtd1 slot)"
-if [ "$SIZE" -gt "$MTD1_BUDGET" ]; then
-    echo "tools/kernel/build-bootstrap.sh: FATAL -- the $FLAVOR zImage is $SIZE bytes, over the" >&2
-    echo "  $MTD1_BUDGET-byte mtd1 slot budget by $((SIZE - MTD1_BUDGET)) bytes. It will not flash." >&2
+echo "==> done: $OUT ($SIZE bytes, $((SIZE * 100 / MTD1_LIMIT))% of the $MTD1_LIMIT-byte kernel slot)"
+if [ "$SIZE" -gt "$MTD1_LIMIT" ]; then
+    echo "tools/kernel/build-bootstrap.sh: FATAL -- the $FLAVOR zImage is $SIZE bytes, which is" >&2
+    echo "  $((SIZE - MTD1_LIMIT)) bytes past the end of the smf partition. The kernel is written at" >&2
+    echo "  offset $KERNEL_START of a $SMF_SIZE-byte partition, so $MTD1_LIMIT bytes is all there is." >&2
     echo "  Trim tools/kernel/flavors/$FLAVOR.conf or the initramfs (see modules/initramfs/)." >&2
     exit 1
+fi
+if [ "$SIZE" -gt "$MTD1_PROVEN" ]; then
+    echo ""
+    echo "    NOTE: this is $((SIZE - MTD1_PROVEN)) bytes larger than the biggest bootstrap piko has"
+    echo "    ever shipped and booted ($MTD1_PROVEN bytes, release 0.0.2). It fits the partition,"
+    echo "    but no board has run a bootstrap this big yet -- verify on hardware before release."
 fi
