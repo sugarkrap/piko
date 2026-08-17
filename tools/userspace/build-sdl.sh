@@ -12,6 +12,7 @@ SDL_SHA256="d6d316a793e5e348155f0dd93b979798933fb98aa1edebcc108829d6474aad00"
 
 STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-sdl}"
 THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/userspace/stage-target}"
+ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa}"
 RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-sdl-runtime}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
@@ -22,6 +23,11 @@ FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
 mkdir -p "$SRC_DIR"
+
+if [ ! -f "$ALSA_STAGE/usr/lib/libasound.a" ] || [ ! -f "$ALSA_STAGE/usr/include/alsa/asoundlib.h" ]; then
+    echo "tools/userspace/build-sdl.sh: no alsa-lib at $ALSA_STAGE -- run tools/userspace/build-alsa.sh first" >&2
+    exit 1
+fi
 
 if [ -n "$TOOLCHAIN_BIN_DIR" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
     PATH="$TOOLCHAIN_BIN_DIR:$PATH"
@@ -113,7 +119,10 @@ echo "==> configuring SDL $SDL_VERSION"
         --enable-threads \
         --disable-nasm \
         --enable-oss \
-        --disable-alsa \
+        --enable-alsa \
+        --disable-alsa-shared \
+        --with-alsa-prefix="$ALSA_STAGE/usr/lib" \
+        --with-alsa-inc-prefix="$ALSA_STAGE/usr/include" \
         --disable-esd \
         --disable-arts \
         --disable-nas \
@@ -121,6 +130,11 @@ echo "==> configuring SDL $SDL_VERSION"
         --disable-diskaudio \
         --enable-dummyaudio \
         CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+    if ! grep -q -- "-lasound" Makefile; then
+        echo "tools/userspace/build-sdl.sh: configure produced no -lasound in Makefile" >&2
+        exit 1
+    fi
+    sed -i "s|-lasound|-Wl,--whole-archive,$ALSA_STAGE/usr/lib/libasound.a,--no-whole-archive|g" Makefile
     echo "==> building SDL"
     make -j"$JOBS"
     echo "==> installing SDL to $STAGE_DIR"
@@ -148,6 +162,26 @@ case "$elf_flags" in
         ;;
 esac
 echo "    Flags: $elf_flags"
+
+echo "==> verifying the ALSA audio driver is built in and statically linked"
+if ! "${CROSS_COMPILE}nm" -D --defined-only "$STAGE_DIR/usr/lib/$SDL_SO_REAL" 2>/dev/null | grep -q " snd_pcm_open$" \
+   && ! "${CROSS_COMPILE}nm" "$STAGE_DIR/usr/lib/$SDL_SO_REAL" 2>/dev/null | grep -q " ALSA_bootstrap$"; then
+    echo "tools/userspace/build-sdl.sh: libSDL has no ALSA driver -- configure did not detect $ALSA_STAGE" >&2
+    exit 1
+fi
+if "$READELF" -d "$STAGE_DIR/usr/lib/$SDL_SO_REAL" | grep -qi "NEEDED.*libasound"; then
+    echo "tools/userspace/build-sdl.sh: libSDL wants a shared libasound -- it must be linked static" >&2
+    exit 1
+fi
+for sym in _snd_pcm_plug_open _snd_pcm_hw_open _snd_pcm_dmix_open; do
+    if ! "${CROSS_COMPILE}nm" -D --defined-only "$STAGE_DIR/usr/lib/$SDL_SO_REAL" 2>/dev/null | grep -q " $sym$"; then
+        echo "tools/userspace/build-sdl.sh: $sym is not exported from libSDL" >&2
+        echo "  alsa-lib resolves its own plugins through dlsym, so every plugin object must be" >&2
+        echo "  force-linked (--whole-archive) and exported, or opening 'default' fails at runtime" >&2
+        exit 1
+    fi
+done
+echo "    ALSA in, plugins exported, no libasound.so dependency"
 
 SDLTEST_SRC="$REPO/userspace/src/sdltest.c"
 if [ -f "$SDLTEST_SRC" ]; then

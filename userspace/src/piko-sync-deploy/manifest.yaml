@@ -119,12 +119,13 @@ core_scripts:
     mode: "0644"
     policy: if_missing
     if_exists: "${REPO}/rootfs/etc/piko/phoneme.cfg"
-  - type: put_tree_from_dir
-    local_dir: "${TIMIDITY_STAGE}"
-    remote_base: "${TIMIDITY_DIR}"
+  - type: mkdir
+    remote: /etc/zaurus
+  - type: put_file
+    local: "${REPO}/rootfs/etc/zaurus/parts.cfg"
+    remote: /etc/zaurus/parts.cfg
     mode: "0644"
-    recursive: "true"
-    if_exists: "${TIMIDITY_STAGE}/timidity.cfg"
+    if_exists: "${REPO}/rootfs/etc/zaurus/parts.cfg"
   - type: put_file
     local: "${REPO}/userspace/desktop/rom.png"
     remote: /usr/share/pixmaps/rom.png
@@ -363,6 +364,11 @@ userspace_media:
     remote_base: /usr/share/alsa/pcm
     mode: "0644"
     if_exists: "${ALSA_STAGE}/usr/share/alsa/pcm"
+  - type: put_tree_from_dir
+    local_dir: "${ALSA_STAGE}/usr/share/alsa/cards"
+    remote_base: /usr/share/alsa/cards
+    mode: "0644"
+    if_exists: "${ALSA_STAGE}/usr/share/alsa/cards"
   - type: put_file
     local: "${ALSA_STAGE}/usr/bin/aplay"
     remote: /usr/bin/aplay

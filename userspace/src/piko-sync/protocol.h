@@ -54,7 +54,14 @@ enum MessageType {
     MSG_ROM_SET_ICON       = 30,
     MSG_ROM_SET_ICON_ACK   = 31,
     MSG_ROM_GET_ICON       = 32,
-    MSG_ROM_GET_ICON_ACK   = 33
+    MSG_ROM_GET_ICON_ACK   = 33,
+
+    MSG_PART_LIST          = 34,
+    MSG_PART_LIST_ACK      = 35,
+    MSG_PART_SET           = 36,
+    MSG_PART_SET_ACK       = 37,
+    MSG_PART_DELETE        = 38,
+    MSG_PART_DELETE_ACK    = 39
 };
 
 enum PutPolicy {
@@ -665,6 +672,66 @@ inline bool decode_screenshot_info(const std::string &p, ScreenshotInfoMsg &m)
         !get_u32(p, pos, m.bpp) || !get_u32(p, pos, m.byte_count))
         return false;
     return get_str16(p, pos, m.reason);
+}
+
+struct PartListAckMsg {
+    std::string records;
+};
+inline std::string encode(const PartListAckMsg &m)
+{
+    std::string p;
+    put_u32(p, static_cast<uint32_t>(m.records.size()));
+    p.append(m.records);
+    return p;
+}
+inline bool decode_part_list_ack(const std::string &p, PartListAckMsg &m)
+{
+    size_t pos = 0;
+    uint32_t len;
+    if (!get_u32(p, pos, len))
+        return false;
+    if (p.size() - pos < len)
+        return false;
+    m.records.assign(p, pos, len);
+    return true;
+}
+
+struct PartSetMsg {
+    std::string record;
+};
+inline std::string encode(const PartSetMsg &m)
+{
+    std::string p;
+    put_str16(p, m.record);
+    return p;
+}
+inline bool decode_part_set(const std::string &p, PartSetMsg &m)
+{
+    size_t pos = 0;
+    return get_str16(p, pos, m.record);
+}
+
+struct PartDeleteMsg {
+    std::string id;
+    bool purge;
+    PartDeleteMsg() : purge(true) {}
+};
+inline std::string encode(const PartDeleteMsg &m)
+{
+    std::string p;
+    put_str16(p, m.id);
+    p.push_back(m.purge ? 1 : 0);
+    return p;
+}
+inline bool decode_part_delete(const std::string &p, PartDeleteMsg &m)
+{
+    size_t pos = 0;
+    if (!get_str16(p, pos, m.id))
+        return false;
+    if (pos >= p.size())
+        return false;
+    m.purge = p[pos] != 0;
+    return true;
 }
 
 }

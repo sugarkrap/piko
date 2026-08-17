@@ -20,6 +20,7 @@
 #include <FL/Fl_Pixmap.H>
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
@@ -49,6 +50,7 @@
 
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "parts.h"
 #include "jar_meta.h"
 
 using namespace piko_sync;
@@ -150,6 +152,7 @@ public:
     ~FileSend();
 
     void abandon();
+    void cancel();
 
 private:
     enum Phase {
@@ -260,13 +263,51 @@ public:
         aggregate_bar_->redraw();
     }
 
-    void spawn_attempt(int file_index) { active_.push_back(new FileSend(this, file_index)); }
+    void spawn_attempt(int file_index)
+    {
+        if (cancelled_)
+            return;
+        if (active_.size() >= max_active_) {
+            pending_.push_back(file_index);
+            return;
+        }
+        active_.push_back(new FileSend(this, file_index));
+    }
 
     void forget_attempt(FileSend *fs)
     {
         for (size_t i = 0; i < active_.size(); i++) {
             if (active_[i] == fs) { active_.erase(active_.begin() + i); break; }
         }
+        while (!cancelled_ && !pending_.empty() && active_.size() < max_active_) {
+            int idx = pending_.front();
+            pending_.erase(pending_.begin());
+            active_.push_back(new FileSend(this, idx));
+        }
+    }
+
+    bool idle() const
+    {
+        return active_.empty() && pending_.empty();
+    }
+
+    void cancel_all()
+    {
+        cancelled_ = true;
+
+        for (size_t i = 0; i < pending_.size(); i++) {
+            QueuedFile &qf = files_[pending_[i]];
+            if (qf.row >= 0)
+                queue_.set_status(qf.row, XFER_ERROR, "cancelled");
+        }
+        pending_.clear();
+
+        std::vector<FileSend *> doomed = active_;
+        for (size_t i = 0; i < doomed.size(); i++)
+            doomed[i]->cancel();
+
+        cancelled_ = false;
+        sync_table();
     }
 
     void schedule_retry(int file_index)
@@ -306,6 +347,7 @@ private:
     void do_screenshot();
 
     static void retry_failed_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->do_retry_failed(); }
+    static void cancel_cb(Fl_Widget *, void *v) { static_cast<TransferPane *>(v)->cancel_all(); }
     void do_retry_failed();
 
     Fl_Input *address_;
@@ -317,10 +359,14 @@ private:
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
+    Fl_Button *cancel_btn_;
     int reserve_y_;
     TransferQueue queue_;
     std::vector<QueuedFile> files_;
     std::vector<FileSend *> active_;
+    std::vector<int> pending_;
+    size_t max_active_;
+    bool cancelled_;
     std::string last_dir_;
 };
 
@@ -364,6 +410,11 @@ FileSend::~FileSend()
     delete[] chunk_buf_;
 }
 
+void FileSend::cancel()
+{
+    terminate(XFER_ERROR, "cancelled", false);
+}
+
 void FileSend::abandon()
 {
     close_fd_only();
@@ -384,16 +435,17 @@ void FileSend::terminate(TransferStatus status, const std::string &detail, bool 
 
     QueuedFile &qf = app_->file(file_index_);
     app_->queue().set_status(qf.row, status, detail);
-    if (status == XFER_DONE) {
+    if (status == XFER_DONE)
         app_->queue().set_progress(qf.row, total_size_);
-        app_->notify_transfer_complete();
-    }
     app_->sync_table();
 
     close_fd_only();
     if (retry)
         app_->schedule_retry(file_index_);
     app_->forget_attempt(this);
+
+    if (status == XFER_DONE)
+        app_->notify_transfer_complete();
 
     Fl::add_timeout(0.0, deferred_delete_cb, this);
 }
@@ -757,6 +809,8 @@ TransferPane::TransferPane(int hx, int hy, int hw, int hh,
 {
     int m = 10;
     expanded_ = false;
+    max_active_ = 2;
+    cancelled_ = false;
     toggle_btn_ = 0;
     relayout_cb_ = 0;
     relayout_arg_ = 0;
@@ -788,6 +842,10 @@ TransferPane::TransferPane(int hx, int hy, int hw, int hh,
     aggregate_bar_->color(FL_BACKGROUND_COLOR);
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
+
+    cancel_btn_ = new Fl_Button(dx + dw - m - 176, dy, 70, 22, "Cancel");
+    cancel_btn_->callback(cancel_cb, this);
+    cancel_btn_->tooltip("Stop every queued and in-flight transfer");
 
     shot_btn_ = new Fl_Button(dx + dw - m - 100, dy, 100, 22, "Screenshot");
     shot_btn_->callback(screenshot_cb, this);
@@ -1553,6 +1611,45 @@ static bool delete_rom(const std::string &address, const std::string &path, std:
     return true;
 }
 
+static bool fetch_part_list(const std::string &address, std::string &records, std::string &err)
+{
+    std::string reply;
+    if (!rom_request(address, MSG_PART_LIST, std::string(), MSG_PART_LIST_ACK, reply, err))
+        return false;
+    PartListAckMsg ack;
+    if (!decode_part_list_ack(reply, ack)) { err = "malformed part list"; return false; }
+    records = ack.records;
+    return true;
+}
+
+static bool register_part(const std::string &address, const PartEntry &e, std::string &err)
+{
+    PartSetMsg m;
+    m.record = encode_part(e);
+    std::string reply;
+    if (!rom_request(address, MSG_PART_SET, encode(m), MSG_PART_SET_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed part reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+static bool delete_part_remote(const std::string &address, const std::string &id,
+                               std::string &err)
+{
+    PartDeleteMsg m;
+    m.id = id;
+    m.purge = true;
+    std::string reply;
+    if (!rom_request(address, MSG_PART_DELETE, encode(m), MSG_PART_DELETE_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed part delete reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
 static bool set_rom_icon(const std::string &address, const std::string &rom_path,
                          const std::string &png, std::string &err)
 {
@@ -1600,6 +1697,318 @@ static const char *media_name(int idx)
     default: return "NAND";
     }
 }
+
+class SetupPane : public TransferObserver {
+public:
+    SetupPane(Fl_Group *tab, TransferPane *xfer, int X, int Y, int W, int H,
+              const Settings &cfg)
+        : xfer_(xfer), pending_media_(PART_NAND), busy_(false)
+    {
+        repo_root_ = cfg.get("build.repo_root");
+        if (const char *env_root = getenv("PIKO_SYNC_REPO_ROOT"))
+            if (*env_root) repo_root_ = env_root;
+
+        std::string catalog = (repo_root_.empty() ? std::string(".") : repo_root_)
+                            + "/rootfs/etc/zaurus/parts.cfg";
+        if (load_part_catalog(catalog) == 0)
+            load_part_catalog(PARTS_CFG);
+
+        tab->begin();
+        const int m = 10;
+        int y = Y + m;
+
+        header_ = new Fl_Box(X + m, y, W - 2 * m, 34);
+        header_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+        header_->labelsize(11);
+        header_->label("Software parts are not flashed with the ROM. Install the ones you need "
+                       "onto SD, CF or NAND. freeJ2ME needs the Java runtime and, for music, "
+                       "the MIDI instruments.");
+        y += 38;
+
+        refresh_btn_ = new Fl_Button(X + m, y, 90, 24, "Refresh");
+        refresh_btn_->callback(refresh_cb, this);
+        status_ = new Fl_Box(X + m + 100, y, W - 2 * m - 100, 24);
+        status_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+        status_->labelsize(11);
+        status_->label("");
+        y += 32;
+
+        for (size_t i = 0; i < part_catalog().size(); i++) {
+            Row r;
+            r.spec = &part_catalog()[i];
+
+            r.label = new Fl_Box(X + m, y, 300, 18);
+            r.label->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+            r.label->labelfont(FL_HELVETICA_BOLD);
+            r.label->labelsize(12);
+            r.label->copy_label(r.spec->label.c_str());
+
+            r.media = new Fl_Choice(X + m + 310, y, 80, 22);
+            r.media->add("NAND");
+            r.media->add("SD");
+            r.media->add("CF");
+            r.media->value(r.spec->default_media);
+
+            r.install = new Fl_Button(X + m + 400, y, 80, 22, "Install");
+            r.install->callback(install_cb, this);
+
+            r.del = new Fl_Button(X + m + 486, y, 80, 22, "Delete");
+            r.del->callback(delete_cb, this);
+
+            r.status = new Fl_Box(X + m, y + 20, W - 2 * m, 16);
+            r.status->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+            r.status->labelsize(10);
+            r.status->label("");
+
+            rows_.push_back(r);
+            y += 46;
+        }
+
+        tab->end();
+        xfer_->add_observer(this);
+    }
+
+    virtual void on_transfer_complete()
+    {
+        finalize_install();
+    }
+
+    void finalize_install()
+    {
+        if (pending_id_.empty() || !xfer_->idle())
+            return;
+
+        PartEntry e;
+        e.id = pending_id_;
+        e.media = pending_media_;
+        e.path = pending_path_;
+        e.version = pending_version_;
+
+        pending_id_.clear();
+        busy_ = false;
+
+        std::string err;
+        if (!register_part(xfer_->address(), e, err))
+            set_status("installed but not registered: " + err);
+        else
+            set_status(e.id + " installed on " + part_media_name(e.media));
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (busy_ && xfer_->idle() && !pending_id_.empty()) {
+            finalize_install();
+            return;
+        }
+        if (busy_ && xfer_->idle())
+            busy_ = false;
+        std::string address = xfer_->address();
+        if (address.empty()) { set_status("set the Zaurus address first"); return; }
+
+        std::string records, err;
+        if (!fetch_part_list(address, records, err)) {
+            set_status("cannot read the device: " + err);
+            for (size_t i = 0; i < rows_.size(); i++)
+                apply_row(rows_[i], 0);
+            return;
+        }
+
+        std::vector<PartEntry> db;
+        std::string line;
+        for (size_t i = 0; i <= records.size(); i++) {
+            char c = (i < records.size()) ? records[i] : '\n';
+            if (c == '\n') {
+                PartEntry e;
+                if (!line.empty() && decode_part(line, e))
+                    db.push_back(e);
+                line.clear();
+            } else if (c != '\r') {
+                line += c;
+            }
+        }
+
+        for (size_t i = 0; i < rows_.size(); i++) {
+            const PartEntry *e = find_part(db, rows_[i].spec->id);
+            apply_row(rows_[i], e);
+        }
+        set_status("");
+    }
+
+private:
+    struct Row {
+        const PartSpec *spec;
+        Fl_Box *label;
+        Fl_Box *status;
+        Fl_Choice *media;
+        Fl_Button *install;
+        Fl_Button *del;
+    };
+
+    void set_status(const std::string &text)
+    {
+        status_text_ = text;
+        status_->copy_label(status_text_.c_str());
+        status_->redraw();
+    }
+
+    void apply_row(Row &r, const PartEntry *e)
+    {
+        if (busy_) {
+            r.install->deactivate();
+            r.del->deactivate();
+            r.media->deactivate();
+            return;
+        }
+        bool present = e != 0 && option_get(e->options, "present") != "0";
+        if (e != 0 && present) {
+            r.media->value(e->media);
+            r.media->deactivate();
+            r.install->deactivate();
+            r.del->activate();
+            row_text_[r.spec->id] = std::string("installed on ")
+                                  + part_media_name(e->media) + " at " + e->path;
+        } else if (e != 0) {
+            r.media->activate();
+            r.install->activate();
+            r.del->activate();
+            row_text_[r.spec->id] = std::string("registered but missing on the device: ") + e->path;
+        } else {
+            r.media->activate();
+            r.install->activate();
+            r.del->deactivate();
+            char sz[64];
+            snprintf(sz, sizeof(sz), " (about %ld MB)", r.spec->size_kb / 1000);
+            row_text_[r.spec->id] = std::string("not installed -- ") + r.spec->detail + sz;
+        }
+        r.status->copy_label(row_text_[r.spec->id].c_str());
+        r.status->redraw();
+    }
+
+    Row *row_for(Fl_Widget *w)
+    {
+        for (size_t i = 0; i < rows_.size(); i++)
+            if (rows_[i].install == w || rows_[i].del == w)
+                return &rows_[i];
+        return 0;
+    }
+
+    static void refresh_cb(Fl_Widget *, void *v) { static_cast<SetupPane *>(v)->refresh(); }
+
+    static void install_cb(Fl_Widget *w, void *v)
+    {
+        SetupPane *p = static_cast<SetupPane *>(v);
+        Row *r = p->row_for(w);
+        if (r) p->do_install(*r);
+    }
+
+    static void delete_cb(Fl_Widget *w, void *v)
+    {
+        SetupPane *p = static_cast<SetupPane *>(v);
+        Row *r = p->row_for(w);
+        if (r) p->do_delete(*r);
+    }
+
+    std::string stage_path(const PartSpec &spec) const
+    {
+        std::string base = repo_root_.empty() ? std::string(".") : repo_root_;
+        return base + "/userspace/" + spec.stage_dir;
+    }
+
+    static bool collect_files(const std::string &dir, const std::string &rel,
+                              std::vector<std::pair<std::string, std::string> > &out)
+    {
+        DIR *d = opendir(dir.c_str());
+        if (d == 0)
+            return false;
+        struct dirent *ent;
+        while ((ent = readdir(d)) != 0) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+                continue;
+            std::string child = dir + "/" + ent->d_name;
+            std::string child_rel = rel.empty() ? ent->d_name : rel + "/" + ent->d_name;
+            struct stat st;
+            if (lstat(child.c_str(), &st) != 0)
+                continue;
+            if (S_ISDIR(st.st_mode))
+                collect_files(child, child_rel, out);
+            else if (S_ISREG(st.st_mode))
+                out.push_back(std::make_pair(child, rel));
+        }
+        closedir(d);
+        return true;
+    }
+
+    void do_install(Row &r)
+    {
+        if (busy_) { set_status("a part install is already running"); return; }
+        if (xfer_->address().empty()) { set_status("set the Zaurus address first"); return; }
+
+        std::string stage = stage_path(*r.spec);
+        struct stat st;
+        if (stat(stage.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            set_status("nothing staged at " + stage + " -- build this part on the host first");
+            return;
+        }
+
+        std::vector<std::pair<std::string, std::string> > files;
+        collect_files(stage, std::string(), files);
+        if (files.empty()) { set_status(stage + " is empty"); return; }
+
+        int media = r.media->value();
+        std::string root = part_install_path(*r.spec, media);
+
+        for (size_t i = 0; i < files.size(); i++) {
+            std::string dest = files[i].second.empty() ? root : root + "/" + files[i].second;
+            xfer_->queue_path(files[i].first, "overwrite=1", dest, std::string());
+        }
+        xfer_->refresh_queue_view();
+
+        pending_id_ = r.spec->id;
+        pending_media_ = media;
+        pending_path_ = root;
+        pending_version_ = r.spec->version;
+        busy_ = true;
+        for (size_t i = 0; i < rows_.size(); i++) {
+            rows_[i].install->deactivate();
+            rows_[i].del->deactivate();
+            rows_[i].media->deactivate();
+        }
+
+        char msg[160];
+        snprintf(msg, sizeof(msg), "queued %d file(s) for %s -> %s",
+                 (int)files.size(), r.spec->id.c_str(), root.c_str());
+        set_status(msg);
+    }
+
+    void do_delete(Row &r)
+    {
+        if (xfer_->address().empty()) { set_status("set the Zaurus address first"); return; }
+        if (fl_choice("Delete %s from the device?\nThis removes the installed files.",
+                      "Cancel", "Delete", 0, r.spec->label.c_str()) != 1)
+            return;
+        std::string err;
+        if (!delete_part_remote(xfer_->address(), r.spec->id, err))
+            set_status("delete failed: " + err);
+        else
+            set_status(r.spec->id + " removed");
+        refresh();
+    }
+
+    TransferPane *xfer_;
+    std::string repo_root_;
+    std::vector<Row> rows_;
+    std::map<std::string, std::string> row_text_;
+    std::string status_text_;
+    Fl_Box *header_;
+    Fl_Box *status_;
+    Fl_Button *refresh_btn_;
+    std::string pending_id_;
+    std::string pending_path_;
+    std::string pending_version_;
+    int pending_media_;
+    bool busy_;
+};
 
 struct ManagerSpec {
     const char *media_key;
@@ -2046,6 +2455,10 @@ int main(int argc, char **argv)
     Fl_Tabs tabs(0, HEADER_H, WIN_W, tabs_h);
     tabs.begin();
 
+    Fl_Group setup_tab(0, page_y, WIN_W, page_h, "Setup");
+    SetupPane setup(&setup_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg());
+    setup_tab.end();
+
     ManagerSpec rom_spec;
     rom_spec.media_key = "rom.media";
     rom_spec.subdir = "Emulation";
@@ -2097,6 +2510,7 @@ int main(int argc, char **argv)
 
     g_layout.tabs = &tabs;
     g_layout.xfer = &xfer;
+    g_layout.pages.push_back(&setup_tab);
     g_layout.pages.push_back(&rom_tab);
     g_layout.pages.push_back(&midlet_tab);
     g_layout.pages.push_back(&files_tab);

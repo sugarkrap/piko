@@ -579,6 +579,10 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 [ -f "$f" ] || continue
                 send_file "$f" "/usr/share/alsa/pcm/$(basename "$f")"
             done
+            for f in "$ALSA_STAGE"/usr/share/alsa/cards/*.conf; do
+                [ -f "$f" ] || continue
+                send_file "$f" "/usr/share/alsa/cards/$(basename "$f")"
+            done
             for b in bin/aplay bin/amixer sbin/alsactl; do
                 [ -f "$ALSA_STAGE/usr/$b" ] || continue
                 send_file "$ALSA_STAGE/usr/$b" "/usr/$b"
@@ -623,23 +627,16 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 ssh_do "/usr/local/bin/untar '$CARD_TMP/phoneme-data.tar' /usr/local/lib/phoneme && rm -f '$CARD_TMP/phoneme-data.tar'"
                 send_file "$REPO/userspace/src/phoneme-run" "/usr/local/bin/phoneme-run"
                 ssh_do "chmod 0755 /usr/local/bin/phoneme-run"
-                send_file "$REPO/userspace/desktop/rom.png" "/usr/share/pixmaps/rom.png"
-
-                TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
-                TIMIDITY_DIR="${TIMIDITY_DIR:-/mnt/card/.zaurus/usr/share/timidity}"
-                if [ -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
-                    echo "==> timidity patches -> $TIMIDITY_DIR ($(du -sh "$TIMIDITY_STAGE" | cut -f1))"
-                    tar -C "$TIMIDITY_STAGE" -cf "$STAGE/timidity.tar" .
-                    send_file "$STAGE/timidity.tar" "$CARD_TMP/timidity.tar"
-                    ssh_do "mkdir -p '$TIMIDITY_DIR' && /usr/local/bin/untar '$CARD_TMP/timidity.tar' '$TIMIDITY_DIR' && rm -f '$CARD_TMP/timidity.tar'"
-                else
-                    echo "==> no timidity patches staged -- midi will be silent"
-                    echo "    run tools/userspace/build-timidity-patches.sh"
-                fi
                 if [ -f "$REPO/rootfs/etc/piko/phoneme.cfg" ]; then
+                    ssh_do "mkdir -p /etc/piko"
                     ssh_do "[ -f /etc/piko/phoneme.cfg ]" 2>/dev/null || \
                         send_file "$REPO/rootfs/etc/piko/phoneme.cfg" "/etc/piko/phoneme.cfg"
                 fi
+            fi
+
+            if [ -f "$REPO/rootfs/etc/zaurus/parts.cfg" ]; then
+                ssh_do "mkdir -p /etc/zaurus"
+                send_file "$REPO/rootfs/etc/zaurus/parts.cfg" "/etc/zaurus/parts.cfg"
             fi
 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then

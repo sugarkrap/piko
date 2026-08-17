@@ -35,6 +35,7 @@
 #include "icon_xpm.h"
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "parts.h"
 
 using namespace piko_sync;
 
@@ -321,6 +322,9 @@ private:
     void handle_rom_delete(const std::string &payload);
     void handle_rom_set_icon(const std::string &payload);
     void handle_rom_get_icon(const std::string &payload);
+    void handle_part_list(const std::string &payload);
+    void handle_part_set(const std::string &payload);
+    void handle_part_delete(const std::string &payload);
     bool write_desktop_for(const RomEntry &e, std::string &err);
 
     std::string dest_dir_;
@@ -527,6 +531,9 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_ROM_DELETE:       handle_rom_delete(payload); return;
         case MSG_ROM_SET_ICON:     handle_rom_set_icon(payload); return;
         case MSG_ROM_GET_ICON:     handle_rom_get_icon(payload); return;
+        case MSG_PART_LIST:        handle_part_list(payload); return;
+        case MSG_PART_SET:         handle_part_set(payload); return;
+        case MSG_PART_DELETE:      handle_part_delete(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -618,10 +625,23 @@ void Connection::handle_offer(const std::string &payload)
         names = &other_names;
     }
 
-    OfferDecision d = decide_offer(app_->transfer_map(), fo.name, fo.total_size,
-                                    *names);
-    final_name_ = d.final_name;
-    next_offset_ = d.resume_offset;
+    if (option_get(rom_options_, "overwrite") == "1") {
+        final_name_ = fo.name;
+        struct stat est;
+        std::string existing = dest_dir_ + "/" + final_name_;
+        if (stat(existing.c_str(), &est) == 0
+            && (uint64_t)est.st_size == total_size_) {
+            next_offset_ = total_size_;
+            already_fully_done_ = true;
+        } else {
+            next_offset_ = 0;
+        }
+    } else {
+        OfferDecision d = decide_offer(app_->transfer_map(), fo.name, fo.total_size,
+                                        *names);
+        final_name_ = d.final_name;
+        next_offset_ = d.resume_offset;
+    }
 
     if (next_offset_ < total_size_) {
         std::string part_path = dest_dir_ + "/" + final_name_ + PART_SUFFIX;
@@ -774,59 +794,6 @@ void Connection::handle_complete(const std::string &payload)
     close_connection();
 }
 
-static std::string shell_quote(const std::string &s)
-{
-    std::string out = "'";
-    for (size_t i = 0; i < s.size(); i++) {
-        if (s[i] == '\'')
-            out += "'\\''";
-        else
-            out += s[i];
-    }
-    out += "'";
-    return out;
-}
-
-static std::string install_midlet_suite(const std::string &jar_path, std::string &err)
-{
-    std::string installer = "/usr/local/lib/phoneme/bin/installMidlet";
-    if (access(installer.c_str(), X_OK) != 0) {
-        err = "phoneme runtime is not installed";
-        return std::string();
-    }
-
-    std::string cmd = "SDL_VIDEODRIVER=dummy " + shell_quote(installer)
-                      + " " + shell_quote("file:///" + jar_path) + " 2>&1";
-    FILE *p = popen(cmd.c_str(), "r");
-    if (!p) {
-        err = "could not run the midlet installer";
-        return std::string();
-    }
-
-    std::string suite;
-    char line[512];
-    while (fgets(line, sizeof(line), p)) {
-        std::string l(line);
-        std::string::size_type at = l.find("installed, ID:");
-        if (at == std::string::npos)
-            continue;
-        std::string rest = l.substr(at + strlen("installed, ID:"));
-        std::string digits;
-        for (size_t i = 0; i < rest.size(); i++) {
-            if (rest[i] >= '0' && rest[i] <= '9')
-                digits += rest[i];
-            else if (!digits.empty())
-                break;
-        }
-        if (!digits.empty())
-            suite = digits;
-    }
-    pclose(p);
-
-    if (suite.empty())
-        err = "the installer did not report a suite id";
-    return suite;
-}
 
 void Connection::register_rom(const std::string &rom_path)
 {
@@ -851,13 +818,6 @@ void Connection::register_rom(const std::string &rom_path)
     }
 
     if (e.machine == "J2ME") {
-        std::string err;
-        std::string suite = install_midlet_suite(rom_path, err);
-        if (suite.empty()) {
-            app_->set_status("midlet transferred but not installed: " + err);
-            return;
-        }
-        option_set(e.options, "suite", suite);
         if (option_get(rom_options_, "rotate") == "1")
             option_set(e.options, "rotate", "1");
     }
@@ -949,6 +909,165 @@ void Connection::handle_rom_delete(const std::string &payload)
 
     ack.ok = true;
     send(MSG_ROM_DELETE_ACK, encode(ack));
+    close_connection();
+}
+
+
+static bool part_path_is_safe(const std::string &path)
+{
+    if (path.size() < 8 || path[0] != '/')
+        return false;
+    if (path.find("..") != std::string::npos)
+        return false;
+    for (int m = piko_sync::PART_NAND; m <= piko_sync::PART_CF; m++) {
+        std::string base = piko_sync::part_media_base(m);
+        if (path.size() > base.size() + 1
+            && path.compare(0, base.size(), base) == 0
+            && path[base.size()] == '/')
+            return true;
+    }
+    return false;
+}
+
+static bool part_remove_tree(const std::string &path, std::string &err)
+{
+    DIR *d = opendir(path.c_str());
+    if (d == 0) {
+        if (errno == ENOENT)
+            return true;
+        if (errno == ENOTDIR) {
+            if (unlink(path.c_str()) != 0 && errno != ENOENT) {
+                err = "cannot delete " + path + ": " + strerror(errno);
+                return false;
+            }
+            return true;
+        }
+        err = "cannot open " + path + ": " + strerror(errno);
+        return false;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != 0) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        std::string child = path + "/" + ent->d_name;
+        struct stat st;
+        if (lstat(child.c_str(), &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (!part_remove_tree(child, err)) { closedir(d); return false; }
+        } else if (unlink(child.c_str()) != 0 && errno != ENOENT) {
+            err = "cannot delete " + child + ": " + strerror(errno);
+            closedir(d);
+            return false;
+        }
+    }
+    closedir(d);
+
+    if (rmdir(path.c_str()) != 0 && errno != ENOENT) {
+        err = "cannot remove " + path + ": " + strerror(errno);
+        return false;
+    }
+    return true;
+}
+
+void Connection::handle_part_list(const std::string &payload)
+{
+    (void)payload;
+    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
+    piko_sync::PartListAckMsg ack;
+    for (size_t i = 0; i < db.size(); i++) {
+        piko_sync::PartEntry e = db[i];
+        const piko_sync::PartSpec *spec = piko_sync::part_spec(e.id);
+        std::string probe = spec ? piko_sync::part_marker_path(*spec, e.path) : e.path;
+        struct stat st;
+        piko_sync::option_set(e.options, "present",
+                              stat(probe.c_str(), &st) == 0 ? "1" : "0");
+        ack.records += piko_sync::encode_part(e) + "\n";
+    }
+    send(MSG_PART_LIST_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_part_set(const std::string &payload)
+{
+    piko_sync::PartSetMsg m;
+    if (!decode_part_set(payload, m)) { fail("malformed PART_SET"); return; }
+
+    OkReasonMsg ack;
+    piko_sync::PartEntry e;
+    if (!piko_sync::decode_part(m.record, e)) {
+        ack.ok = false;
+        ack.reason = "malformed part record";
+        send(MSG_PART_SET_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    mkdir("/etc/zaurus", 0755);
+    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
+    piko_sync::set_part(db, e);
+    if (!piko_sync::save_parts(db)) {
+        ack.ok = false;
+        ack.reason = std::string(piko_sync::CONFIG_CFG) + " is not writable";
+        send(MSG_PART_SET_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    app_->set_status("part registered: " + e.id);
+    ack.ok = true;
+    send(MSG_PART_SET_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_part_delete(const std::string &payload)
+{
+    piko_sync::PartDeleteMsg m;
+    if (!decode_part_delete(payload, m)) { fail("malformed PART_DELETE"); return; }
+
+    OkReasonMsg ack;
+    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
+    const piko_sync::PartEntry *found = piko_sync::find_part(db, m.id);
+    if (found == 0) {
+        ack.ok = false;
+        ack.reason = "no such part in " + std::string(piko_sync::CONFIG_CFG);
+        send(MSG_PART_DELETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    std::string path = found->path;
+    if (m.purge) {
+        if (!part_path_is_safe(path)) {
+            ack.ok = false;
+            ack.reason = "refusing to delete " + path + ": outside the known media paths";
+            send(MSG_PART_DELETE_ACK, encode(ack));
+            close_connection();
+            return;
+        }
+        std::string err;
+        if (!part_remove_tree(path, err)) {
+            ack.ok = false;
+            ack.reason = err;
+            send(MSG_PART_DELETE_ACK, encode(ack));
+            close_connection();
+            return;
+        }
+    }
+
+    piko_sync::remove_part(db, m.id);
+    if (!piko_sync::save_parts(db)) {
+        ack.ok = false;
+        ack.reason = "files removed but " + std::string(piko_sync::CONFIG_CFG) + " is not writable";
+        send(MSG_PART_DELETE_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    app_->set_status("part removed: " + m.id);
+    ack.ok = true;
+    send(MSG_PART_DELETE_ACK, encode(ack));
     close_connection();
 }
 

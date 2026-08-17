@@ -249,7 +249,10 @@ inline std::string desktop_contents(const RomEntry &e)
     out += "Type=Application\n";
     out += "Name=" + name + "\n";
     out += "Comment=" + e.machine + " game\n";
-    out += "Exec=/usr/local/bin/" + e.backend + "-run \"" + e.path + "\"\n";
+    if (e.machine == "J2ME")
+        out += "Exec=/usr/local/bin/phoneme-run \"" + e.path + "\"\n";
+    else
+        out += "Exec=/usr/local/bin/" + e.backend + "-run \"" + e.path + "\"\n";
     if (option_get(e.options, "heavy") == "1") {
         out += "X-Piko-Heavy=true\n";
         out += "X-Piko-Heavy-Reason=" + e.machine
@@ -258,8 +261,10 @@ inline std::string desktop_contents(const RomEntry &e)
         out += "X-Piko-Video=qvga\n";
     } else {
         out += "X-Piko-Drivers=x11\n";
-        if (e.machine == "J2ME")
+        if (e.machine == "J2ME") {
             out += "X-Piko-Video=qvga\n";
+            out += "X-Piko-Parts=freepats\n";
+        }
     }
     out += "Icon=" + e.icon + "\n";
     out += "Terminal=false\n";

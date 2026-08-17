@@ -170,6 +170,7 @@ if [ -f "$FBRUN_SRC" ]; then
     mkdir -p "$STAGE/usr/bin"
     "$CXX" -O2 -Wall -Wextra \
         -isystem "$STAGE/usr/include" \
+        -I"$SRC" \
         -o "$STAGE/usr/bin/matchbox-apprun" \
         "$FBRUN_SRC" \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \

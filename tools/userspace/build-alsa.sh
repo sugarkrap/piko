@@ -83,7 +83,8 @@ echo "==> configuring alsa-lib $ALSA_LIB_VERSION"
         --host=arm-unknown-linux-uclibcgnueabi \
         --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
         --prefix=/usr \
-        --disable-shared --enable-static \
+        --disable-shared --enable-static --with-pic \
+        --without-versioned \
         --disable-python \
         --disable-old-symbols \
         --disable-ucm \

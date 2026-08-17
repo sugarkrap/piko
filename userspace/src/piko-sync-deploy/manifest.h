@@ -38,8 +38,6 @@ struct DeployContext {
     std::string sdl_stage;
     std::string tcroot;
     std::string x11_payload;
-    std::string timidity_stage;
-    std::string timidity_dir;
     DeployFlags flags;
 
     std::string get(const std::string &name) const
@@ -53,8 +51,6 @@ struct DeployContext {
         if (name == "SDL_STAGE") return sdl_stage;
         if (name == "TCROOT") return tcroot;
         if (name == "X11_PAYLOAD") return x11_payload;
-        if (name == "TIMIDITY_STAGE") return timidity_stage;
-        if (name == "TIMIDITY_DIR") return timidity_dir;
         return std::string();
     }
 };

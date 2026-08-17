@@ -159,7 +159,6 @@ pkillx:usr/sbin/pkillx
 vol:usr/sbin/vol
 zramswap:usr/sbin/zramswap
 kill:usr/bin/kill
-phoneme-run:usr/local/bin/phoneme-run
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar"
 for entry in $SRC_TOOLS; do
@@ -217,24 +216,30 @@ else
     echo "build-mtd3-jffs2: WARNING -- no $SDL_STAGE, pikalibrate will be a dead launcher" >&2
 fi
 
+
 PHONEME_STAGE="${PHONEME_STAGE:-$REPO/userspace/stage-phoneme}"
-if [ "${SKIP_PHONEME:-0}" -ne 1 ]; then
+PHONEME_HOME="$PHONEME_STAGE/usr/local/lib/phoneme"
+if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
     echo "==> building phoneME J2ME (tools/userspace/build-phoneme.sh)"
     "$REPO/tools/userspace/build-phoneme.sh"
-
-    PHONEME_HOME="$PHONEME_STAGE/usr/local/lib/phoneme"
-    if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
-        echo "build-mtd3-jffs2: build-phoneme.sh reported success but there is no" >&2
-        echo "  $PHONEME_HOME/bin/runMidlet -- refusing to ship a launcher with no runtime" >&2
-        exit 1
-    fi
-    mkdir -p "$OVERLAY/usr/local/lib/phoneme"
-    cp -a "$PHONEME_HOME/." "$OVERLAY/usr/local/lib/phoneme/"
-    chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
-    echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
-else
-    echo "==> SKIP_PHONEME=1: not staging the J2ME runtime"
 fi
+if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
+    echo "build-mtd3-jffs2: build-phoneme.sh reported success but there is no" >&2
+    echo "  $PHONEME_HOME/bin/runMidlet -- refusing to ship a J2ME-less image" >&2
+    exit 1
+fi
+mkdir -p "$OVERLAY/usr/local/lib/phoneme"
+cp -a "$PHONEME_HOME/." "$OVERLAY/usr/local/lib/phoneme/"
+chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
+echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
+
+if [ ! -f "$OVERLAY/etc/zaurus/parts.cfg" ]; then
+    echo "build-mtd3-jffs2: rootfs/etc/zaurus/parts.cfg did not reach the overlay" >&2
+    echo "  without the software-part catalog matchbox-apprun refuses to launch" >&2
+    echo "  anything that declares X-Piko-Parts" >&2
+    exit 1
+fi
+echo "    parts: /etc/zaurus/parts.cfg ($(grep -c . "$OVERLAY/etc/zaurus/parts.cfg") entries)"
 
 ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/userspace/stage-alsa-runtime}"
 if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
@@ -315,3 +320,6 @@ mv "$OUT.partial" "$OUT"
 
 md5sum "$BASE_JFFS2" "$OUT"
 echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
+
+echo ""
+IMAGE="$OUT" BASE_IMAGE="$BASE_JFFS2" "$REPO/tools/nand-budget.sh" "$OVERLAY"
