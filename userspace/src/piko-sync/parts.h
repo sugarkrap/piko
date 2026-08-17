@@ -12,14 +12,8 @@
 
 namespace piko_sync {
 
-const char *const CONFIG_CFG = "/etc/zaurus/config.cfg";
+const char *const LEGACY_CONFIG_CFG = "/etc/zaurus/config.cfg";
 const char *const PARTS_CFG = "/etc/zaurus/parts.cfg";
-
-enum PartMedia {
-    PART_NAND = 0,
-    PART_SD   = 1,
-    PART_CF   = 2
-};
 
 struct PartEntry {
     std::string id;
@@ -45,29 +39,9 @@ struct PartSpec {
     PartSpec() : default_media(0), size_kb(0) {}
 };
 
-inline const char *part_media_name(int media)
+inline std::string config_cfg_for(int media)
 {
-    switch (media) {
-    case PART_SD: return "SD";
-    case PART_CF: return "CF";
-    default:      return "NAND";
-    }
-}
-
-inline int part_media_from_name(const std::string &name)
-{
-    if (name == "SD") return PART_SD;
-    if (name == "CF") return PART_CF;
-    return PART_NAND;
-}
-
-inline const char *part_media_base(int media)
-{
-    switch (media) {
-    case PART_SD: return "/mnt/card/.zaurus/usr";
-    case PART_CF: return "/mnt/cf/.zaurus/usr";
-    default:      return "/usr/local";
-    }
+    return std::string(media_zaurus_root(media)) + "/config.cfg";
 }
 
 inline std::string part_install_path(const PartSpec &spec, int media)
@@ -107,7 +81,7 @@ inline bool decode_part(const std::string &line, PartEntry &e)
     return true;
 }
 
-inline std::vector<PartEntry> load_parts(const char *path = CONFIG_CFG)
+inline std::vector<PartEntry> load_parts_file(const char *path)
 {
     std::vector<PartEntry> out;
     FILE *f = fopen(path, "r");
@@ -128,7 +102,7 @@ inline std::vector<PartEntry> load_parts(const char *path = CONFIG_CFG)
     return out;
 }
 
-inline bool save_parts(const std::vector<PartEntry> &db, const char *path = CONFIG_CFG)
+inline bool save_parts_file(const std::vector<PartEntry> &db, const char *path)
 {
     std::string tmp = std::string(path) + ".tmp";
     FILE *f = fopen(tmp.c_str(), "w");
@@ -144,6 +118,46 @@ inline bool save_parts(const std::vector<PartEntry> &db, const char *path = CONF
     if (!ok) { remove(tmp.c_str()); return false; }
     if (rename(tmp.c_str(), path) != 0) { remove(tmp.c_str()); return false; }
     return true;
+}
+
+inline std::vector<PartEntry> load_parts()
+{
+    std::vector<PartEntry> out;
+    for (int m = PART_NAND; m <= PART_CF; m++) {
+        if (!media_present(m))
+            continue;
+        std::vector<PartEntry> one = load_parts_file(config_cfg_for(m).c_str());
+        for (size_t i = 0; i < one.size(); i++)
+            if (one[i].media == m)
+                out.push_back(one[i]);
+    }
+    return out;
+}
+
+inline bool save_parts(const std::vector<PartEntry> &db)
+{
+    bool ok = true;
+    for (int m = PART_NAND; m <= PART_CF; m++) {
+        std::vector<PartEntry> mine;
+        for (size_t i = 0; i < db.size(); i++)
+            if (db[i].media == m)
+                mine.push_back(db[i]);
+
+        std::string path = config_cfg_for(m);
+        if (!media_present(m)) {
+            if (!mine.empty())
+                ok = false;
+            continue;
+        }
+
+        struct stat st;
+        if (mine.empty() && stat(path.c_str(), &st) != 0)
+            continue;
+        if (!media_make_zaurus_root(m)) { ok = false; continue; }
+        if (!save_parts_file(mine, path.c_str()))
+            ok = false;
+    }
+    return ok;
 }
 
 inline const PartEntry *find_part(const std::vector<PartEntry> &db, const std::string &id)
@@ -167,6 +181,32 @@ inline void remove_part(std::vector<PartEntry> &db, const std::string &id)
     for (size_t i = 0; i < db.size(); i++) {
         if (db[i].id == id) { db.erase(db.begin() + i); return; }
     }
+}
+
+inline bool migrate_legacy_parts_db()
+{
+    struct stat st;
+    if (stat(LEGACY_CONFIG_CFG, &st) != 0)
+        return false;
+
+    std::vector<PartEntry> legacy = load_parts_file(LEGACY_CONFIG_CFG);
+    for (size_t i = 0; i < legacy.size(); i++)
+        if (!media_present(legacy[i].media))
+            return false;
+
+    std::vector<PartEntry> db = load_parts();
+    for (size_t i = 0; i < legacy.size(); i++) {
+        bool known = false;
+        for (size_t j = 0; j < db.size(); j++)
+            if (db[j].id == legacy[i].id && db[j].media == legacy[i].media) { known = true; break; }
+        if (!known)
+            db.push_back(legacy[i]);
+    }
+    if (!save_parts(db))
+        return false;
+
+    std::string old = std::string(LEGACY_CONFIG_CFG) + ".old";
+    return rename(LEGACY_CONFIG_CFG, old.c_str()) == 0;
 }
 
 inline std::vector<PartSpec> &part_catalog_storage()

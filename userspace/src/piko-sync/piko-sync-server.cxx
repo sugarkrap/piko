@@ -262,14 +262,60 @@ static bool write_desktop_file(const RomEntry &e, std::string &err)
     return true;
 }
 
-static int regenerate_rom_launchers()
+static std::string read_file(const std::string &path)
 {
-    std::vector<RomEntry> db = load_emulation_db();
-    if (db.empty())
+    std::string out;
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f)
+        return out;
+    char buf[1024];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    fclose(f);
+    return out;
+}
+
+static int prune_rom_launchers(const std::vector<RomEntry> &db)
+{
+    DIR *d = opendir(APPLICATIONS_DIR);
+    if (!d)
         return 0;
 
+    int removed = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != 0) {
+        std::string name(e->d_name);
+        if (name == "." || name == "..")
+            continue;
+
+        std::string dpath = std::string(APPLICATIONS_DIR) + "/" + name;
+        std::string rom = desktop_rom_path(read_file(dpath));
+        if (rom.empty())
+            continue;
+
+        bool live = false;
+        for (size_t i = 0; i < db.size(); i++)
+            if (db[i].path == rom && db[i].desktop == name) { live = true; break; }
+        if (!live && unlink(dpath.c_str()) == 0)
+            removed++;
+    }
+    closedir(d);
+    return removed;
+}
+
+static void migrate_legacy_dbs()
+{
+    migrate_legacy_emulation_db();
+    migrate_legacy_parts_db();
+}
+
+static int sync_rom_launchers()
+{
+    std::vector<RomEntry> db = load_emulation_db();
+
     bool db_changed = false;
-    int written = 0;
+    int changed = 0;
     for (size_t i = 0; i < db.size(); i++) {
         if (!db[i].icon.empty() && db[i].icon.find('/') == std::string::npos) {
             db[i].icon = DEFAULT_ROM_ICON;
@@ -279,13 +325,17 @@ static int regenerate_rom_launchers()
             db[i].desktop = desktop_name_for(db[i].machine, db[i].path);
             db_changed = true;
         }
+        std::string dpath = std::string(APPLICATIONS_DIR) + "/" + db[i].desktop;
+        if (read_file(dpath) == desktop_contents(db[i]))
+            continue;
         std::string err;
         if (write_desktop_file(db[i], err))
-            written++;
+            changed++;
     }
     if (db_changed)
         save_emulation_db(db);
-    return written;
+
+    return changed + prune_rom_launchers(db);
 }
 
 class ServerApp;
@@ -828,9 +878,8 @@ void Connection::register_rom(const std::string &rom_path)
     }
     db.push_back(e);
 
-    mkdir_p(EMULATION_DIR);
     if (!save_emulation_db(db)) {
-        app_->set_status("rom registered but " + std::string(EMULATION_CFG) + " is not writable");
+        app_->set_status("rom registered but " + emulation_cfg_for(media_of_path(e.path)) + " is not writable");
         return;
     }
 
@@ -879,7 +928,7 @@ void Connection::handle_rom_delete(const std::string &payload)
     OkReasonMsg ack;
     if (!have) {
         ack.ok = false;
-        ack.reason = "no such rom in " + std::string(EMULATION_CFG);
+        ack.reason = "no such rom on any mounted media";
         send(MSG_ROM_DELETE_ACK, encode(ack));
         close_connection();
         return;
@@ -898,7 +947,7 @@ void Connection::handle_rom_delete(const std::string &payload)
 
     if (!save_emulation_db(db)) {
         ack.ok = false;
-        ack.reason = "rom deleted but " + std::string(EMULATION_CFG) + " is not writable";
+        ack.reason = "rom deleted but " + emulation_cfg_for(media_of_path(found.path)) + " is not writable";
         send(MSG_ROM_DELETE_ACK, encode(ack));
         close_connection();
         return;
@@ -1004,12 +1053,11 @@ void Connection::handle_part_set(const std::string &payload)
         return;
     }
 
-    mkdir("/etc/zaurus", 0755);
     std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
     piko_sync::set_part(db, e);
     if (!piko_sync::save_parts(db)) {
         ack.ok = false;
-        ack.reason = std::string(piko_sync::CONFIG_CFG) + " is not writable";
+        ack.reason = piko_sync::config_cfg_for(e.media) + " is not writable";
         send(MSG_PART_SET_ACK, encode(ack));
         close_connection();
         return;
@@ -1031,13 +1079,14 @@ void Connection::handle_part_delete(const std::string &payload)
     const piko_sync::PartEntry *found = piko_sync::find_part(db, m.id);
     if (found == 0) {
         ack.ok = false;
-        ack.reason = "no such part in " + std::string(piko_sync::CONFIG_CFG);
+        ack.reason = "no such part on any mounted media";
         send(MSG_PART_DELETE_ACK, encode(ack));
         close_connection();
         return;
     }
 
     std::string path = found->path;
+    int media = found->media;
     if (m.purge) {
         if (!part_path_is_safe(path)) {
             ack.ok = false;
@@ -1059,7 +1108,7 @@ void Connection::handle_part_delete(const std::string &payload)
     piko_sync::remove_part(db, m.id);
     if (!piko_sync::save_parts(db)) {
         ack.ok = false;
-        ack.reason = "files removed but " + std::string(piko_sync::CONFIG_CFG) + " is not writable";
+        ack.reason = "files removed but " + piko_sync::config_cfg_for(media) + " is not writable";
         send(MSG_PART_DELETE_ACK, encode(ack));
         close_connection();
         return;
@@ -1088,7 +1137,7 @@ void Connection::handle_rom_set_icon(const std::string &payload)
         if (db[i].path == m.rom_path) { idx = (int)i; break; }
     if (idx < 0) {
         ack.ok = false;
-        ack.reason = "no such rom in " + std::string(EMULATION_CFG);
+        ack.reason = "no such rom on any mounted media";
         send(MSG_ROM_SET_ICON_ACK, encode(ack));
         close_connection();
         return;
@@ -1118,7 +1167,7 @@ void Connection::handle_rom_set_icon(const std::string &payload)
     std::string err;
     if (!save_emulation_db(db) || !write_desktop_for(db[idx], err)) {
         ack.ok = false;
-        ack.reason = err.empty() ? "cannot update " + std::string(EMULATION_CFG) : err;
+        ack.reason = err.empty() ? "cannot update " + emulation_cfg_for(media_of_path(db[idx].path)) : err;
         send(MSG_ROM_SET_ICON_ACK, encode(ack));
         close_connection();
         return;
@@ -1604,6 +1653,10 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
 
     mkdir(TRANSFERS_DIR, 0755);
 
+    migrate_legacy_dbs();
+    if (sync_rom_launchers() > 0)
+        system("/usr/sbin/deskscan >/dev/null 2>&1");
+
     if (access(TRANSFERS_DIR, W_OK) != 0) {
         char msg[256];
         snprintf(msg, sizeof(msg), "SD card not available: %s is not writable", TRANSFERS_DIR);
@@ -1612,8 +1665,6 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     }
 
     scan_existing();
-    if (regenerate_rom_launchers() > 0)
-        system("/usr/sbin/deskscan >/dev/null 2>&1");
     sync_table();
 
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -1711,6 +1762,13 @@ void ServerApp::on_accept()
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
+
+    if (argc > 1 && strcmp(argv[1], "--resync") == 0) {
+        migrate_legacy_dbs();
+        if (sync_rom_launchers() > 0)
+            system("/usr/sbin/deskscan >/dev/null 2>&1");
+        return 0;
+    }
 
     Fl_Double_Window win(640, 480, "Piko Sync");
     win.begin();

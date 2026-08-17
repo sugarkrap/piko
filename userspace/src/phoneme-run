@@ -1,6 +1,5 @@
 #!/bin/sh
 PM=${PHONEME_HOME:-/usr/local/lib/phoneme}
-CFG=${EMULATION_CFG:-/etc/zaurus/emulation.cfg}
 LOGDIR=${PHONEME_LOG_DIR:-/mnt/card/.zaurus/var/log/phoneme}
 PIKO_CFG=${PIKO_PHONEME_CFG:-/etc/piko/phoneme.cfg}
 TIMIDITY_DEFAULT=/mnt/card/.zaurus/usr/share/timidity
@@ -10,6 +9,13 @@ LOG_MAX=262144
 JAR=$1
 [ -n "$JAR" ] || exit 2
 [ -x "$PM/bin/runMidlet" ] || exit 1
+
+case "$JAR" in
+	/mnt/card/*) ZROOT=/mnt/card/.zaurus ;;
+	/mnt/cf/*)   ZROOT=/mnt/cf/.zaurus ;;
+	*)           ZROOT=/usr/local/.zaurus ;;
+esac
+CFG=${EMULATION_CFG:-$ZROOT/emulation.cfg}
 
 slug=$(basename "$JAR")
 slug=${slug%.*}

@@ -15,6 +15,9 @@ fi
 		mount "${PIKO_CARD_MNT:-/mnt/card}" 2>/dev/null
 		[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1
 	fi
+
+	[ -x /usr/bin/piko-sync-server ] && \
+		/usr/bin/piko-sync-server --resync >/dev/null 2>&1
 } &
 
 exit 0

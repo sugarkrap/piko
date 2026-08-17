@@ -58,6 +58,10 @@ if [ -r /etc/zaurus-card.sh ]; then
 	. /etc/zaurus-card.sh
 fi
 
+if [ -x /usr/bin/piko-sync-server ]; then
+	/usr/bin/piko-sync-server --resync >/dev/null 2>&1
+fi
+
 "$SESSION" > "$SLOG" 2>&1
 
 fallback_to_console "session exited"

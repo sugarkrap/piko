@@ -704,6 +704,40 @@ int main()
         check(!decode_part("onlyid", bad), "a truncated config.cfg line is rejected");
     }
 
+    {
+        check(media_of_path("/mnt/card/Emulation/game.smc") == PART_SD,
+              "a card path belongs to the card");
+        check(media_of_path("/mnt/cf/Emulation/game.smc") == PART_CF,
+              "a cf path belongs to the cf card");
+        check(media_of_path("/usr/local/lib/phoneme/game.jar") == PART_NAND,
+              "everything else belongs to nand");
+        check(media_of_path("/mnt/cardboard/game.smc") == PART_NAND,
+              "a lookalike mount point is not the card");
+
+        check(emulation_cfg_for(PART_SD) == "/mnt/card/.zaurus/emulation.cfg",
+              "the card carries its own emulation db");
+        check(emulation_cfg_for(PART_CF) == "/mnt/cf/.zaurus/emulation.cfg",
+              "the cf card carries its own emulation db");
+        check(emulation_cfg_for(PART_NAND) == "/usr/local/.zaurus/emulation.cfg",
+              "nand keeps its db out of the flashed tree");
+        check(config_cfg_for(PART_SD) == "/mnt/card/.zaurus/config.cfg",
+              "installed parts are recorded on the media that holds them");
+        check(media_present(PART_NAND), "nand is always present");
+
+        RomEntry r;
+        r.path = "/mnt/card/Emulation/game.smc";
+        r.machine = "SNES";
+        r.backend = "pocketsnes";
+        r.desktop = "snes-game.desktop";
+        r.icon = DEFAULT_ROM_ICON;
+        std::string d = desktop_contents(r);
+        check(desktop_rom_path(d) == r.path, "a launcher names the rom it came from");
+        check(d.find("X-Piko-Media=SD\n") != std::string::npos,
+              "a launcher names the media it came from");
+        check(desktop_rom_path("[Desktop Entry]\nExec=/usr/bin/st\n").empty(),
+              "a launcher we did not write is left alone");
+    }
+
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {
         printf("PROTOCOL-TEST: FAIL\n");
