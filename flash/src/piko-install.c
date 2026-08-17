@@ -275,7 +275,7 @@ static void load_config(void)
 
 #if defined(PIKO_FLASH_MTD1)
 static const struct flash_target default_targets[] = {
-    { "/dev/mtd1", "zImage", 917504, 6422528, 0, 0 },
+    { "/dev/mtd1", "zImage", 917504, 1294336, 0, 0 },
 };
 #elif defined(PIKO_FLASH_MTD3)
 static const struct flash_target default_targets[] = {

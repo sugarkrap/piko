@@ -10,9 +10,7 @@ BASE_CONFIG="$REPO/kernel.config-corgi-$KERNEL_VERSION-minimal"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
-SMF_SIZE=7340032
-KERNEL_START=917504
-MTD1_LIMIT=$((SMF_SIZE - KERNEL_START))
+MTD1_SLOT=1294336
 MTD1_PROVEN=1280656
 
 FORCE=0
@@ -131,17 +129,20 @@ mv "$OUT.partial" "$OUT"
 
 SIZE="$(stat -c '%s' "$OUT")"
 echo ""
-echo "==> done: $OUT ($SIZE bytes, $((SIZE * 100 / MTD1_LIMIT))% of the $MTD1_LIMIT-byte kernel slot)"
-if [ "$SIZE" -gt "$MTD1_LIMIT" ]; then
-    echo "tools/kernel/build-bootstrap.sh: FATAL -- the $FLAVOR zImage is $SIZE bytes, which is" >&2
-    echo "  $((SIZE - MTD1_LIMIT)) bytes past the end of the smf partition. The kernel is written at" >&2
-    echo "  offset $KERNEL_START of a $SMF_SIZE-byte partition, so $MTD1_LIMIT bytes is all there is." >&2
+echo "==> done: $OUT ($SIZE of $MTD1_SLOT bytes, $((SIZE * 100 / MTD1_SLOT))% of the mtd1 kernel slot)"
+if [ "$SIZE" -gt "$MTD1_SLOT" ]; then
+    echo "tools/kernel/build-bootstrap.sh: FATAL -- the $FLAVOR zImage is $SIZE bytes, over the" >&2
+    echo "  $MTD1_SLOT-byte kernel slot by $((SIZE - MTD1_SLOT)) bytes." >&2
+    echo "  The slot is not free space that happens to end there: the rest of smf holds the" >&2
+    echo "  replicated Embeddix kernels the recovery and flash path boots from. Writing past" >&2
+    echo "  the slot overwrites one of them and takes recovery down with it, which is exactly" >&2
+    echo "  what a board with failing NAND cannot afford to lose." >&2
     echo "  Trim tools/kernel/flavors/$FLAVOR.conf or the initramfs (see modules/initramfs/)." >&2
     exit 1
 fi
 if [ "$SIZE" -gt "$MTD1_PROVEN" ]; then
     echo ""
-    echo "    NOTE: this is $((SIZE - MTD1_PROVEN)) bytes larger than the biggest bootstrap piko has"
-    echo "    ever shipped and booted ($MTD1_PROVEN bytes, release 0.0.2). It fits the partition,"
-    echo "    but no board has run a bootstrap this big yet -- verify on hardware before release."
+    echo "    NOTE: $((SIZE - MTD1_PROVEN)) bytes larger than the biggest bootstrap piko has shipped"
+    echo "    and booted ($MTD1_PROVEN bytes, release 0.0.2). Still inside the slot, but no board"
+    echo "    has run a bootstrap this big yet -- verify on hardware before release."
 fi
