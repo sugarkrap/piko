@@ -1,0 +1,98 @@
+#!/bin/sh
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+
+export TERM=linux
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+serial_echo() {
+	echo "$1"
+	echo "$1" > /dev/ttyS0 2>/dev/null
+}
+
+bail() {
+	serial_echo ""
+	serial_echo "stage 2 could not reach its root filesystem:"
+	serial_echo "  $1"
+	serial_echo ""
+	exec setsid cttyhack /bin/ash -l
+}
+
+PIKOROOT=
+ROOTDEV=
+ROOTTYPE=
+for arg in $(cat /proc/cmdline); do
+	case "$arg" in
+	pikoroot=*) PIKOROOT="${arg#pikoroot=}" ;;
+	root=*)     ROOTDEV="${arg#root=}" ;;
+	rootfstype=*) ROOTTYPE="${arg#rootfstype=}" ;;
+	esac
+done
+
+if test -z "$PIKOROOT"; then
+	test -n "$ROOTDEV" || bail "neither pikoroot= nor root= was passed on the kernel command line"
+	PIKOROOT="dev:$ROOTDEV:${ROOTTYPE:-jffs2}"
+fi
+
+mkdir -p /newroot
+
+KIND="${PIKOROOT%%:*}"
+REST="${PIKOROOT#*:}"
+
+case "$KIND" in
+mtd)
+	serial_echo "stage 2 root: $REST (jffs2)"
+	wait_for="$REST"
+	;;
+dev)
+	DEV="${REST%%:*}"
+	TYPE="${REST#*:}"
+	serial_echo "stage 2 root: $DEV ($TYPE)"
+	wait_for="$DEV"
+	;;
+img)
+	DEV="${REST%%:*}"
+	IMG="${REST#*:}"
+	serial_echo "stage 2 root: $IMG on $DEV"
+	wait_for="$DEV"
+	;;
+*)
+	bail "unrecognised pikoroot form '$PIKOROOT'"
+	;;
+esac
+
+tries=0
+while test $tries -lt 60; do
+	test -b "$wait_for" && break
+	tries=$((tries + 1))
+	sleep 1
+done
+test -b "$wait_for" || bail "$wait_for never appeared"
+
+case "$KIND" in
+mtd)
+	mount -t jffs2 "$REST" /newroot || bail "mounting $REST as jffs2 failed"
+	;;
+dev)
+	mount -t "$TYPE" "$DEV" /newroot || bail "mounting $DEV as $TYPE failed"
+	;;
+img)
+	mkdir -p /media
+	mount -t vfat "$DEV" /media || bail "mounting $DEV as vfat failed"
+	test -f "/media/$IMG" || bail "$IMG is not on $DEV"
+	mount -o loop "/media/$IMG" /newroot || bail "loop-mounting $IMG failed"
+	;;
+esac
+
+test -x /newroot/sbin/init || bail "no /sbin/init inside the root filesystem"
+
+if test "$KIND" = img; then
+	mkdir -p /newroot/media/boot
+	mount --move /media /newroot/media/boot 2>/dev/null
+fi
+
+umount /sys 2>/dev/null
+umount /proc 2>/dev/null
+
+exec switch_root /newroot /sbin/init

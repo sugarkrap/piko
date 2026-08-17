@@ -13,21 +13,27 @@ JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
 FORCE=0
 FLAVOR=nand
+STAGE2=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --force)  FORCE=1; shift ;;
+        --stage2) STAGE2=1; shift ;;
         --flavor) FLAVOR="$2"; shift 2 ;;
         *)        echo "tools/kernel/build-initramfs.sh: unknown argument '$1'" >&2; exit 1 ;;
     esac
 done
 
-if [ ! -f "$REPO/tools/kernel/flavors/$FLAVOR.conf" ]; then
-    echo "tools/kernel/build-initramfs.sh: unknown flavor '$FLAVOR'" >&2
-    exit 1
+if [ "$STAGE2" -eq 1 ]; then
+    ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-stage2}"
+    OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-stage2-built.cpio.gz}"
+else
+    if [ ! -f "$REPO/tools/kernel/flavors/$FLAVOR.conf" ]; then
+        echo "tools/kernel/build-initramfs.sh: unknown flavor '$FLAVOR'" >&2
+        exit 1
+    fi
+    ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-$FLAVOR}"
+    OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built-$FLAVOR.cpio.gz}"
 fi
-
-ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-$FLAVOR}"
-OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built-$FLAVOR.cpio.gz}"
 
 mkdir -p "$INITRAMFS_DIR"
 
@@ -66,8 +72,12 @@ if [ ! -f "$BUSYBOX_SRC_DIR/Makefile" ]; then
 fi
 
 BB_CONFIG_SRC="$REPO/modules/initramfs/busybox.config"
-INIT_SRC="$REPO/modules/initramfs/init"
 SPLASH_SRC="$REPO/modules/initramfs/splash.ppm.gz"
+if [ "$STAGE2" -eq 1 ]; then
+    INIT_SRC="$REPO/modules/initramfs-stage2/init"
+else
+    INIT_SRC="$REPO/modules/initramfs/init"
+fi
 if [ ! -f "$BB_CONFIG_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $BB_CONFIG_SRC" >&2
     exit 1
@@ -76,7 +86,7 @@ if [ ! -f "$INIT_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $INIT_SRC" >&2
     exit 1
 fi
-if [ ! -f "$SPLASH_SRC" ]; then
+if [ "$STAGE2" -eq 0 ] && [ ! -f "$SPLASH_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $SPLASH_SRC" >&2
     exit 1
 fi
@@ -121,14 +131,18 @@ chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"
 cp "$INIT_SRC" "$ROOTFS_BUILD_DIR/init"
 chmod 755 "$ROOTFS_BUILD_DIR/init"
 
-printf '%s\n' "$FLAVOR" > "$ROOTFS_BUILD_DIR/piko-flavor"
-chmod 644 "$ROOTFS_BUILD_DIR/piko-flavor"
+if [ "$STAGE2" -eq 1 ]; then
+    mkdir -p "$ROOTFS_BUILD_DIR/newroot" "$ROOTFS_BUILD_DIR/media"
+else
+    printf '%s\n' "$FLAVOR" > "$ROOTFS_BUILD_DIR/piko-flavor"
+    chmod 644 "$ROOTFS_BUILD_DIR/piko-flavor"
 
-gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
-chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
+    gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
+    chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
+fi
 
 BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync touch umount uname vi"
-SBIN_APPLETS="halt init mdev poweroff reboot switch_root"
+SBIN_APPLETS="halt init losetup mdev poweroff reboot switch_root"
 USR_BIN_APPLETS="basename clear dirname env find free hd head hexdump reset setsid tail test tr wc which"
 USR_SBIN_APPLETS="fbset"
 
@@ -146,7 +160,9 @@ echo "==> built $OUT_CPIO"
 ls -la "$OUT_CPIO"
 
 REFERENCE="$INITRAMFS_DIR/initramfs-minimal-v2.cpio.gz"
-if [ -f "$REFERENCE" ]; then
+if [ "$STAGE2" -eq 1 ]; then
+    echo "==> stage 2 initramfs, no bootstrap reference to compare against"
+elif [ -f "$REFERENCE" ]; then
     if cmp -s "$OUT_CPIO" "$REFERENCE"; then
         echo "==> byte-identical to $REFERENCE"
     else

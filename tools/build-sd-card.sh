@@ -31,7 +31,13 @@ echo "==> [2/7] bootstrap zImage (mtd1, stage 1)"
 echo "==> [3/7] stage-2 kernel-src"
 "$REPO/tools/kernel/setup-kernel-src.sh" $FORCE_FLAG
 
-echo "==> [4/7] stage-2 kernel (zImage + modules)"
+echo "==> [4/7] stage-2 initramfs + kernel (zImage + modules)"
+"$REPO/tools/kernel/build-initramfs.sh" --stage2
+( cd "$KERNEL_DIR" && ./scripts/config \
+    --set-str CONFIG_INITRAMFS_SOURCE "$REPO/initramfs/initramfs-stage2-built.cpio.gz" )
+make -C "$KERNEL_DIR" ARCH=arm \
+    CROSS_COMPILE="$TOOLCHAIN_BIN_DIR/arm-unknown-linux-uclibcgnueabi-" \
+    olddefconfig
 make -C "$KERNEL_DIR" ARCH=arm \
     CROSS_COMPILE="$TOOLCHAIN_BIN_DIR/arm-unknown-linux-uclibcgnueabi-" \
     -j"$JOBS" zImage modules

@@ -46,9 +46,6 @@ mdev -d 2>/dev/null &
 
 modprobe hostap 2>/dev/null
 
-modprobe pxa2xx_base 2>/dev/null
-modprobe pxa2xx_sharpsl 2>/dev/null
-
 KVER="$(uname -r)"
 
 insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null

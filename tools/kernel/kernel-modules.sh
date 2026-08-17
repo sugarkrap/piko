@@ -19,12 +19,6 @@ sound/core/oss/snd-pcm-oss.ko
 "
 
 WIFI_MODULES="
-kernel/drivers/pcmcia/pcmcia_core.ko
-kernel/drivers/pcmcia/pcmcia_rsrc.ko
-kernel/drivers/pcmcia/pcmcia.ko
-kernel/drivers/pcmcia/soc_common.ko
-kernel/drivers/pcmcia/pxa2xx_base.ko
-kernel/drivers/pcmcia/pxa2xx_sharpsl.ko
 kernel/drivers/net/wireless/intersil/hostap/hostap.ko
 kernel/drivers/net/wireless/intersil/hostap/hostap_cs.ko
 kernel/net/wireless/lib80211.ko
