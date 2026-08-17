@@ -275,6 +275,10 @@ fi
 if [ "$SKIP_SDL" -eq 0 ]; then
     echo "==> building SDL 1.2"
     sh "$REPO/tools/userspace/build-sdl.sh" $FORCE_ARG
+    echo "==> building SDL_image"
+    sh "$REPO/tools/userspace/build-sdl-image.sh" $FORCE_ARG
+    echo "==> building SDL_mixer"
+    sh "$REPO/tools/userspace/build-sdl-mixer.sh" $FORCE_ARG
 else
     echo "==> --skip-sdl: not building SDL"
 fi

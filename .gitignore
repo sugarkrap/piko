@@ -113,6 +113,7 @@ userspace/src/SDL2-*/
 userspace/src/SDL_image-*/
 userspace/src/SDL_mixer-*/
 userspace/src/SDL_ttf-*/
+userspace/src/.sdl-config-wrapper-*
 userspace/stage-sdl/
 userspace/stage-sdl2/
 userspace/stage-sdl2-runtime/

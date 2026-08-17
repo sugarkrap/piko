@@ -28,8 +28,14 @@ jobs:
               build-essential git autoconf automake bison flex texinfo \
               gperf help2man libtool-bin libtool libncurses-dev unzip wget xz-utils \
               patch gawk python3-dev python3 python3-pip rsync bc libssl-dev libelf-dev \
-              cpio mtd-utils file pkg-config x11proto-dev
+              cpio mtd-utils file pkg-config x11proto-dev gcc-multilib g++-multilib
           sudo pip3 install --break-system-packages --quiet jefferson
+
+      - name: install a jdk 8 for phoneme
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
 
       - name: cache toolchain
         uses: actions/cache@v4
@@ -83,8 +89,17 @@ jobs:
             userspace/src/alsa-utils-*.tar.bz2
           key: alsa-src-${{ hashFiles('tools/userspace/build-alsa.sh') }}
 
+      - name: cache sdl source downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/src/SDL-*.tar.gz
+            userspace/src/SDL_image-*.tar.gz
+            userspace/src/SDL_mixer-*.tar.gz
+          key: sdl-src-${{ hashFiles('tools/userspace/build-sdl.sh', 'tools/userspace/build-sdl-image.sh', 'tools/userspace/build-sdl-mixer.sh') }}
+
       - name: build the sd card payload
-        run: ./build.sh
+        run: JDK_DIR="$JAVA_HOME" ./build.sh
 
       - name: locate the pikostore ipk
         run: |

@@ -29,6 +29,13 @@ if [ ! -f "$ALSA_STAGE/usr/lib/libasound.a" ] || [ ! -f "$ALSA_STAGE/usr/include
     exit 1
 fi
 
+if [ ! -f "$THIRDPARTY_STAGE/usr/include/X11/Xlib.h" ] || [ ! -e "$THIRDPARTY_STAGE/usr/lib/libX11.so" ]; then
+    echo "tools/userspace/build-sdl.sh: no X11 stack at $THIRDPARTY_STAGE -- run tools/userspace/build-x11-stack.sh first" >&2
+    echo "  this build is --enable-video-x11; without libX11 staged configure still succeeds" >&2
+    echo "  and the failure only shows up as a missing X11/Xlib.h halfway through make" >&2
+    exit 1
+fi
+
 if [ -n "$TOOLCHAIN_BIN_DIR" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
     PATH="$TOOLCHAIN_BIN_DIR:$PATH"
 fi
