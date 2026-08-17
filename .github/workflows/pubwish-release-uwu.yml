@@ -128,11 +128,36 @@ jobs:
           ls -la "$PIKOSTORE_IPK" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: keep the payload even if publishing fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: piko-${{ env.TAG }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.PIKOSTORE_IPK }}
+          if-no-files-found: error
+
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK" \
-              --title "piko sd card $TAG" \
-              --target "${{ github.sha }}" \
-              --notes "automated pubwish build via build.sh. $ARCHIVE: extract and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash a Zaurus from scratch (ships with pikostore pre-installed). $PIKOSTORE_IPK: pikostore (Software Center) on its own, to install or update it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK (NAND) or pkgadd $PIKOSTORE_IPK card (SD card)."
+          publish() {
+              if gh release view "$TAG" >/dev/null 2>&1; then
+                  gh release upload --clobber "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK"
+              else
+                  gh release create "$TAG" "$ARCHIVE" "$PIKOSTORE_IPK" \
+                      --title "piko sd card $TAG" \
+                      --target "${{ github.sha }}" \
+                      --notes "automated pubwish build via build.sh. $ARCHIVE: extract and copy the five files inside to the root of an sd card, then boot into Cacko recovery to flash a Zaurus from scratch (ships with pikostore pre-installed). $PIKOSTORE_IPK: pikostore (Software Center) on its own, to install or update it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK (NAND) or pkgadd $PIKOSTORE_IPK card (SD card)."
+              fi
+          }
+          n=0
+          until publish; do
+              n=$((n + 1))
+              if [ "$n" -ge 5 ]; then
+                  echo "::error::gh kept failing to publish $TAG -- the build itself was fine, rerun this job" >&2
+                  exit 1
+              fi
+              echo "publishing failed (attempt $n), retrying in 30s"
+              sleep 30
+          done
