@@ -7,14 +7,27 @@ INITRAMFS_DIR="${INITRAMFS_DIR:-$REPO/initramfs}"
 BUSYBOX_SRC_DIR="${BUSYBOX_SRC_DIR:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION}"
 BUSYBOX_TARBALL="${BUSYBOX_TARBALL:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION.tar.bz2}"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"
-ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build}"
-OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built.cpio.gz}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
 FORCE=0
-[ "${1:-}" = "--force" ] && FORCE=1
+FLAVOR=nand
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force)  FORCE=1; shift ;;
+        --flavor) FLAVOR="$2"; shift 2 ;;
+        *)        echo "tools/kernel/build-initramfs.sh: unknown argument '$1'" >&2; exit 1 ;;
+    esac
+done
+
+if [ ! -f "$REPO/tools/kernel/flavors/$FLAVOR.conf" ]; then
+    echo "tools/kernel/build-initramfs.sh: unknown flavor '$FLAVOR'" >&2
+    exit 1
+fi
+
+ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-$FLAVOR}"
+OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built-$FLAVOR.cpio.gz}"
 
 mkdir -p "$INITRAMFS_DIR"
 
@@ -69,17 +82,23 @@ if [ ! -f "$SPLASH_SRC" ]; then
 fi
 
 BUILD_DIR="$INITRAMFS_DIR/.build-$BUSYBOX_VERSION"
-echo "==> configuring busybox $BUSYBOX_VERSION (O=$BUILD_DIR)"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config"
+if [ "$FORCE" -eq 0 ] && [ -f "$BUILD_DIR/busybox_unstripped" ] &&
+   cmp -s "$BB_CONFIG_SRC" "$BUILD_DIR/.config.piko-src"; then
+    echo "==> reusing the busybox built for an earlier flavor (same busybox.config)"
+else
+    echo "==> configuring busybox $BUSYBOX_VERSION (O=$BUILD_DIR)"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config"
+    cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config.piko-src"
 
-make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
-    oldconfig </dev/null
+    make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+        oldconfig </dev/null
 
-echo "==> building busybox (static, -j$JOBS)"
-make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
-    -j"$JOBS" busybox
+    echo "==> building busybox (static, -j$JOBS)"
+    make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+        -j"$JOBS" busybox
+fi
 
 BB_BIN="$BUILD_DIR/busybox_unstripped"
 if [ ! -f "$BB_BIN" ]; then
@@ -101,6 +120,9 @@ chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"
 
 cp "$INIT_SRC" "$ROOTFS_BUILD_DIR/init"
 chmod 755 "$ROOTFS_BUILD_DIR/init"
+
+printf '%s\n' "$FLAVOR" > "$ROOTFS_BUILD_DIR/piko-flavor"
+chmod 644 "$ROOTFS_BUILD_DIR/piko-flavor"
 
 gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
 chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"

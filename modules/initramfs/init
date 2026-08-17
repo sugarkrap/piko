@@ -31,52 +31,157 @@ export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/root
 
+FLAVOR=nand
+test -f /piko-flavor && FLAVOR=$(cat /piko-flavor)
+
+case "$FLAVOR" in
+nand)
+	MEDIUM="the NAND home partition"
+	MEDIUM_MENU="NAND"
+	DEVICES="/dev/mtdblock2"
+	FSTYPE=jffs2
+	PAYLOAD_DIR=boot
+	;;
+sd)
+	MEDIUM="the SD card"
+	MEDIUM_MENU="SD"
+	DEVICES="/dev/mmcblk0p1 /dev/mmcblk0"
+	FSTYPE=vfat
+	PAYLOAD_DIR=.zaurus
+	;;
+cf)
+	MEDIUM="the CF card"
+	MEDIUM_MENU="CF"
+	DEVICES="/dev/sda1 /dev/sda /dev/hda1 /dev/hda"
+	FSTYPE=vfat
+	PAYLOAD_DIR=.zaurus
+	;;
+*)
+	console_fallback
+	serial_echo "bootstrap built with an unknown flavor: $FLAVOR"
+	exec setsid cttyhack /bin/ash -l
+	;;
+esac
+
 serial_echo ""
-serial_echo "=== zaurus-refresh bootstrap (kexec into stage 2) ==="
+serial_echo "=== zaurus-refresh bootstrap ($FLAVOR, kexec into stage 2) ==="
 serial_echo ""
 
-mkdir -p /mnt/home
-LOG=/mnt/home/debug.log
+mkdir -p /mnt/boot
 
-if mount -t jffs2 /dev/mtdblock2 /mnt/home 2>/dev/null; then
-	echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG"
-
-	echo "fbsplash rc=$SPLASH_RC" >> "$LOG"
-	if test -s /tmp/fbsplash.err; then
-		echo "fbsplash stderr:" >> "$LOG"
-		cat /tmp/fbsplash.err >> "$LOG"
-	fi
-
-	while true; do
-		if test -f /mnt/home/boot/zImage-full && test -f /mnt/home/sbin/kexec; then
+BOOTDEV=
+tries=0
+while test $tries -lt 60; do
+	for d in $DEVICES; do
+		if test -b "$d" && mount -t "$FSTYPE" "$d" /mnt/boot 2>/dev/null; then
+			BOOTDEV="$d"
 			break
 		fi
-		sleep 1
 	done
+	test -n "$BOOTDEV" && break
+	tries=$((tries + 1))
+	sleep 1
+done
 
-	echo "--- kexec -d -l output ---"
-	/mnt/home/sbin/kexec -d -l /mnt/home/boot/zImage-full \
-		--atags \
-		--append="console=tty0 root=/dev/mtdblock2 rootfstype=jffs2 rw quiet" \
-		> /tmp/kexec-l.out 2>&1
-	KEXEC_LOAD_RC=$?
-	cat /tmp/kexec-l.out
-	cat /tmp/kexec-l.out >> "$LOG"
-	echo "--- kexec -l exit code: $KEXEC_LOAD_RC ---"
-	echo "kexec -l exit code: $KEXEC_LOAD_RC" >> "$LOG"
-
-	if test "$KEXEC_LOAD_RC" -eq 0; then
-		echo "kexec -l ok, jumping to stage 2..."
-		sync
-		exec /mnt/home/sbin/kexec -e
-	fi
+if test -z "$BOOTDEV"; then
 	console_fallback
-	echo "kexec load failed -- dropping to bootstrap shell"
-	echo "kexec load failed" >> "$LOG"
-else
-	console_fallback
-	echo "home mount failed" >&2
-	echo "home mount failed" > /dev/ttyS0 2>/dev/null
+	serial_echo "no $MEDIUM found"
+	echo ""
+	echo "This bootstrap is the '$FLAVOR' flavor: it boots piko from $MEDIUM,"
+	echo "and nothing mountable turned up there after 60 seconds."
+	echo ""
+	echo "Cacko's recovery only mounts the medium you pick in its menu, so an"
+	echo "install run from the wrong entry lands the payload somewhere this"
+	echo "kernel cannot reach. Reinstall from the $MEDIUM_MENU menu entry, or"
+	echo "flash the flavor matching the medium you installed to."
+	echo ""
+	exec setsid cttyhack /bin/ash -l
 fi
+
+serial_echo "booting from $BOOTDEV ($FSTYPE)"
+
+KERNEL=/mnt/boot/$PAYLOAD_DIR/zImage-full
+ROOTIMG=$PAYLOAD_DIR/piko-root.img
+APPEND="console=tty0 quiet"
+
+BOOTCFG=/mnt/boot/$PAYLOAD_DIR/piko-boot.cfg
+if test -f "$BOOTCFG"; then
+	serial_echo "reading $PAYLOAD_DIR/piko-boot.cfg"
+	while read -r key value; do
+		case "$key" in
+		kernel) KERNEL=/mnt/boot/$value ;;
+		root)   ROOTIMG=$value ;;
+		append) APPEND=$value ;;
+		esac
+	done < "$BOOTCFG"
+fi
+
+if test "$FLAVOR" = nand; then
+	PIKOROOT="mtd:$BOOTDEV"
+else
+	PIKOROOT="img:$BOOTDEV:$ROOTIMG"
+fi
+
+LOG=/mnt/boot/piko-boot.log
+echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG" 2>/dev/null
+echo "fbsplash rc=$SPLASH_RC" >> "$LOG" 2>/dev/null
+if test -s /tmp/fbsplash.err; then
+	echo "fbsplash stderr:" >> "$LOG" 2>/dev/null
+	cat /tmp/fbsplash.err >> "$LOG" 2>/dev/null
+fi
+
+tries=0
+while test $tries -lt 60; do
+	test -f "$KERNEL" && break
+	tries=$((tries + 1))
+	sleep 1
+done
+
+if test ! -f "$KERNEL"; then
+	console_fallback
+	serial_echo "no stage 2 kernel on $BOOTDEV"
+	echo ""
+	echo "$BOOTDEV mounted, but $PAYLOAD_DIR/zImage-full is not on it."
+	echo "piko-install populates $PAYLOAD_DIR when it flashes this bootstrap;"
+	echo "if you flashed by hand, copy the payload there and reboot."
+	echo ""
+	exec setsid cttyhack /bin/ash -l
+fi
+
+if test "$FLAVOR" != nand && test ! -f "/mnt/boot/$ROOTIMG"; then
+	console_fallback
+	serial_echo "no root image on $BOOTDEV"
+	echo ""
+	echo "$BOOTDEV has $PAYLOAD_DIR/zImage-full but no $ROOTIMG next to it."
+	echo "That image holds the whole piko root, so stage 2 has nothing to"
+	echo "pivot into. Reinstall, or point 'root' in $PAYLOAD_DIR/piko-boot.cfg"
+	echo "at wherever you moved it."
+	echo ""
+	exec setsid cttyhack /bin/ash -l
+fi
+
+KEXEC=/mnt/boot/$PAYLOAD_DIR/kexec
+test -x "$KEXEC" || KEXEC=/mnt/boot/sbin/kexec
+
+echo "--- kexec -d -l output ---"
+"$KEXEC" -d -l "$KERNEL" \
+	--atags \
+	--append="$APPEND pikoroot=$PIKOROOT" \
+	> /tmp/kexec-l.out 2>&1
+KEXEC_LOAD_RC=$?
+cat /tmp/kexec-l.out
+cat /tmp/kexec-l.out >> "$LOG" 2>/dev/null
+echo "--- kexec -l exit code: $KEXEC_LOAD_RC ---"
+echo "kexec -l exit code: $KEXEC_LOAD_RC" >> "$LOG" 2>/dev/null
+
+if test "$KEXEC_LOAD_RC" -eq 0; then
+	echo "kexec -l ok, jumping to stage 2..."
+	sync
+	exec "$KEXEC" -e
+fi
+
+console_fallback
+echo "kexec load failed -- dropping to bootstrap shell"
+echo "kexec load failed" >> "$LOG" 2>/dev/null
 
 exec setsid cttyhack /bin/ash -l
