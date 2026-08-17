@@ -321,5 +321,20 @@ mv "$OUT.partial" "$OUT"
 md5sum "$BASE_JFFS2" "$OUT"
 echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
 
+if [ -n "${ROOT_IMG_OUT:-}" ]; then
+    if ! command -v mke2fs >/dev/null 2>&1; then
+        echo "build-mtd3-jffs2: mke2fs not found (apt install e2fsprogs)" >&2
+        exit 1
+    fi
+    tree_kb="$(du -sk "$MERGED" | while read -r n _; do echo "$n"; break; done)"
+    img_mb="${ROOT_IMG_SIZE_MB:-$(( tree_kb / 1024 * 14 / 10 + 32 ))}"
+    echo "==> building the ext2 root image (${img_mb}M for a $(( tree_kb / 1024 ))M tree)"
+    rm -f "$ROOT_IMG_OUT.partial"
+    truncate -s "${img_mb}M" "$ROOT_IMG_OUT.partial"
+    mke2fs -F -q -t ext2 -L pikoroot -d "$MERGED" "$ROOT_IMG_OUT.partial"
+    mv "$ROOT_IMG_OUT.partial" "$ROOT_IMG_OUT"
+    echo "==> done: $ROOT_IMG_OUT ($(stat -c '%s' "$ROOT_IMG_OUT") bytes)"
+fi
+
 echo ""
 IMAGE="$OUT" BASE_IMAGE="$BASE_JFFS2" "$REPO/tools/nand-budget.sh" "$OVERLAY"

@@ -134,6 +134,19 @@ static char cfg_mtd_buf[MAX_CFG_TARGETS][CFG_FIELD_LEN];
 static char cfg_file_buf[MAX_CFG_TARGETS][CFG_FIELD_LEN];
 static int  cfg_count = 0;
 
+struct copy_target {
+    const char *src;
+    const char *dest;
+};
+
+#define MAX_CFG_COPIES 8
+#define CFG_PATH_LEN   64
+
+static struct copy_target cfg_copies[MAX_CFG_COPIES];
+static char cfg_copy_src[MAX_CFG_COPIES][CFG_PATH_LEN];
+static char cfg_copy_dst[MAX_CFG_COPIES][CFG_PATH_LEN];
+static int  cfg_copy_count = 0;
+
 static void skip_ws(const char **p, const char *end)
 {
     while (*p < end && (**p == ' ' || **p == '\t')) (*p)++;
@@ -209,17 +222,35 @@ static void parse_config(const char *buf, long len)
             } else {
                 puts_("Piko Install: warning: too many targets in " CFG_FILE ", ignoring extras\n");
             }
+        } else if (lp < nl && *lp != '#' && startswith(lp, nl, "copy")) {
+            lp += 4;
+            if (cfg_copy_count < MAX_CFG_COPIES) {
+                int idx = cfg_copy_count;
+                if (parse_str_field(&lp, nl, cfg_copy_src[idx], CFG_PATH_LEN) == 0 &&
+                    parse_str_field(&lp, nl, cfg_copy_dst[idx], CFG_PATH_LEN) == 0) {
+                    cfg_copies[idx].src  = cfg_copy_src[idx];
+                    cfg_copies[idx].dest = cfg_copy_dst[idx];
+                    cfg_copy_count++;
+                } else {
+                    puts_("Piko Install: warning: malformed copy line in " CFG_FILE "\n");
+                }
+            } else {
+                puts_("Piko Install: warning: too many copies in " CFG_FILE ", ignoring extras\n");
+            }
         }
 
         p = nl + 1;
     }
 }
 
+static int cfg_loaded = 0;
+
 static void load_config(void)
 {
     static char cfgbuf[4096];
     long fd = sys_open((long)CFG_FILE, O_RDONLY, 0);
     if (fd < 0) return;
+    cfg_loaded = 1;
 
     long total = 0, n;
     while (total < (long)sizeof(cfgbuf) &&
@@ -929,6 +960,110 @@ static int flash_one(const struct flash_target *t)
     return 0;
 }
 
+static void mkdir_parents(const char *path)
+{
+    char buf[CFG_PATH_LEN];
+    int i;
+    for (i = 0; path[i] && i < CFG_PATH_LEN - 1; i++) {
+        buf[i] = path[i];
+        if (path[i] == '/') {
+            buf[i] = 0;
+            sys_mkdir((long)buf, 0755);
+            buf[i] = '/';
+        }
+    }
+}
+
+static int copy_one(const struct copy_target *c)
+{
+    puts_("Piko Install: === copying ");
+    puts_(c->src);
+    puts_(" -> ");
+    puts_(c->dest);
+    puts_(" ===\n");
+
+    long src = sys_open((long)c->src, O_RDONLY, 0);
+    if (src < 0) {
+        puts_("Piko Install: file not found: ");
+        puts_(c->src);
+        puts_("\n");
+        return -1;
+    }
+
+    long datasize = sys_lseek(src, 0, SEEK_END);
+    sys_lseek(src, 0, SEEK_SET);
+
+    mkdir_parents(c->dest);
+
+    long dst = sys_open((long)c->dest, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (dst < 0) {
+        puts_("Piko Install: cannot create ");
+        puts_(c->dest);
+        puts_(" -- is the card mounted read-only?\n");
+        sys_close(src);
+        return -1;
+    }
+
+    long total = 0;
+    long n;
+    while ((n = sys_read(src, (long)chunkbuf, CHUNK_SIZE)) > 0) {
+        long off = 0;
+        while (off < n) {
+            long w = sys_write(dst, (long)(chunkbuf + off), n - off);
+            if (w <= 0) {
+                puts_("Piko Install: write failed at ");
+                putnum(total + off);
+                puts_(" -- the card is probably full\n");
+                sys_close(dst);
+                sys_close(src);
+                return -1;
+            }
+            off += w;
+        }
+        total += n;
+        puts_("Piko Install: copied ");
+        putnum(total);
+        puts_(" of ");
+        putnum(datasize);
+        puts_("\n");
+    }
+    sys_close(dst);
+    sys_close(src);
+
+    if (n < 0) {
+        puts_("Piko Install: read error from ");
+        puts_(c->src);
+        puts_("\n");
+        return -1;
+    }
+
+    long check = sys_open((long)c->dest, O_RDONLY, 0);
+    if (check < 0) {
+        puts_("Piko Install: cannot reopen ");
+        puts_(c->dest);
+        puts_(" to check it\n");
+        return -1;
+    }
+    long written = sys_lseek(check, 0, SEEK_END);
+    sys_close(check);
+
+    if (written != datasize) {
+        puts_("Piko Install: SHORT COPY for ");
+        puts_(c->dest);
+        puts_(" (");
+        putnum(written);
+        puts_(" of ");
+        putnum(datasize);
+        puts_(" bytes) -- out of space?\n");
+        return -1;
+    }
+
+    puts_("Piko Install: COPY OK for ");
+    puts_(c->dest);
+    puts_("\n");
+    return 0;
+}
+
 static void dump_proc_file(const char *path)
 {
     char buf[512];
@@ -984,12 +1119,20 @@ int main(int argc, char *argv[])
 
     const struct flash_target *active_targets;
     int num_targets;
-    if (cfg_count > 0) {
+    if (cfg_loaded) {
         puts_("Piko Install: using ");
         putnum(cfg_count);
-        puts_(" target(s) from " CFG_FILE "\n");
+        puts_(" target(s) and ");
+        putnum(cfg_copy_count);
+        puts_(" copy/copies from " CFG_FILE "\n");
         active_targets = cfg_targets;
         num_targets    = cfg_count;
+        if (cfg_count == 0 && cfg_copy_count == 0) {
+            puts_("Piko Install: " CFG_FILE " parsed but declares no work at all.\n");
+            puts_("Piko Install: refusing to fall back to compile-time defaults -- a\n");
+            puts_("Piko Install: malformed config must not silently flash something else.\n");
+            _exit_(1);
+        }
     } else {
         puts_("Piko Install: no " CFG_FILE " found, using compile-time defaults\n");
         active_targets = default_targets;
@@ -998,6 +1141,21 @@ int main(int argc, char *argv[])
 
     int failures = 0;
     int i;
+
+    if (cfg_copy_count > 0) {
+        puts_("Piko Install: placing ");
+        putnum(cfg_copy_count);
+        puts_(" file(s) on the install medium before touching NAND\n");
+        for (i = 0; i < cfg_copy_count; i++) {
+            if (copy_one(&cfg_copies[i]) != 0) {
+                puts_("Piko Install: copy failed, nothing has been flashed yet.\n");
+                puts_("Piko Install: the machine you are running on is untouched -- fix the\n");
+                puts_("Piko Install: medium (space, write protection) and run the update again.\n");
+                _exit_(1);
+            }
+        }
+    }
+
     for (i = 0; i < num_targets; i++) {
         if (flash_one(&active_targets[i]) != 0) {
             failures++;
