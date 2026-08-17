@@ -68,6 +68,12 @@ typedef unsigned long size_t;
 
 static size_t strlen_(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 
+static int streq_(const char *a, const char *b)
+{
+    while (*a && *b) { if (*a != *b) return 0; a++; b++; }
+    return *a == *b;
+}
+
 void *memcpy(void *dst, const void *src, size_t n)
 {
     char *d = dst;
@@ -146,6 +152,7 @@ static struct copy_target cfg_copies[MAX_CFG_COPIES];
 static char cfg_copy_src[MAX_CFG_COPIES][CFG_PATH_LEN];
 static char cfg_copy_dst[MAX_CFG_COPIES][CFG_PATH_LEN];
 static int  cfg_copy_count = 0;
+static char cfg_medium[CFG_PATH_LEN];
 
 static void skip_ws(const char **p, const char *end)
 {
@@ -222,6 +229,10 @@ static void parse_config(const char *buf, long len)
             } else {
                 puts_("Piko Install: warning: too many targets in " CFG_FILE ", ignoring extras\n");
             }
+        } else if (lp < nl && *lp != '#' && startswith(lp, nl, "medium")) {
+            lp += 6;
+            if (parse_str_field(&lp, nl, cfg_medium, CFG_PATH_LEN) != 0)
+                puts_("Piko Install: warning: malformed medium line in " CFG_FILE "\n");
         } else if (lp < nl && *lp != '#' && startswith(lp, nl, "copy")) {
             lp += 4;
             if (cfg_copy_count < MAX_CFG_COPIES) {
@@ -1137,6 +1148,25 @@ int main(int argc, char *argv[])
         puts_("Piko Install: no " CFG_FILE " found, using compile-time defaults\n");
         active_targets = default_targets;
         num_targets    = NUM_DEFAULT_TARGETS;
+    }
+
+    if (cfg_medium[0] && !streq_(cfg_medium, datapath)) {
+        puts_("Piko Install: WRONG MEDIUM.\n");
+        puts_("Piko Install: this payload boots piko from ");
+        puts_(cfg_medium);
+        puts_(", but the recovery\n");
+        puts_("Piko Install: menu you picked mounted ");
+        puts_(datapath);
+        puts_(" instead, and that is the\n");
+        puts_("Piko Install: only place it can write to.\n");
+        puts_("Piko Install: reboot the recovery and pick the entry matching ");
+        puts_(cfg_medium);
+        puts_(",\n");
+        puts_("Piko Install: or use the release flavor built for ");
+        puts_(datapath);
+        puts_(".\n");
+        puts_("Piko Install: nothing has been written.\n");
+        _exit_(1);
     }
 
     int failures = 0;

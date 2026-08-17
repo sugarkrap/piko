@@ -7,6 +7,7 @@ KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-$KERNEL_VERSION}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 OUT_DIR="${OUT_DIR:-$REPO/sd-card}"
+FLAVORS="${FLAVORS:-nand sd cf}"
 
 FORCE=0
 FORCE_FLAG=""
@@ -25,8 +26,11 @@ until "$REPO/tools/toolchain/build-uclibc-toolchain.sh" $FORCE_FLAG; do
 done
 "$REPO/tools/toolchain/build-oabi-toolchain.sh"
 
-echo "==> [2/7] bootstrap zImage (mtd1, stage 1)"
-"$REPO/tools/kernel/build-bootstrap.sh" $FORCE_FLAG
+echo "==> [2/7] bootstrap zImage per flavor (mtd1, stage 1)"
+for flavor in $FLAVORS; do
+    "$REPO/tools/kernel/build-initramfs.sh" --flavor "$flavor" $FORCE_FLAG
+    "$REPO/tools/kernel/build-bootstrap.sh" --flavor "$flavor" $FORCE_FLAG
+done
 
 echo "==> [3/7] stage-2 kernel-src"
 "$REPO/tools/kernel/setup-kernel-src.sh" $FORCE_FLAG
@@ -51,21 +55,39 @@ echo "==> [5/7] userspace payload + mtd3.jffs2 (mtd3, stage 2)"
 "$REPO/tools/userspace/build-userspace.sh" \
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
-KERNEL_DIR="$KERNEL_DIR" "$REPO/tools/build-mtd3-jffs2.sh"
+KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
+    "$REPO/tools/build-mtd3-jffs2.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"
 "$REPO/tools/userspace/build-piko-install.sh" $FORCE_FLAG
 node "$REPO/tools/scripts/encode-updater.js" "$REPO/flash/updater-uncoded.sh" "$REPO/flash/updater-encoded.sh"
 
-echo "==> [7/7] assembling SD card payload in $OUT_DIR"
-mkdir -p "$OUT_DIR"
-cp "$REPO/flash/zImage" "$OUT_DIR/zImage"
-cp "$REPO/flash/mtd3.jffs2" "$OUT_DIR/mtd3.jffs2"
-cp "$REPO/flash/piko.cfg" "$OUT_DIR/piko.cfg"
-cp "$REPO/flash/piko-install" "$OUT_DIR/piko-install"
-cp "$REPO/flash/updater-encoded.sh" "$OUT_DIR/updater.sh"
-chmod 0755 "$OUT_DIR/piko-install"
+echo "==> [7/7] assembling one payload per flavor under $OUT_DIR"
+for flavor in $FLAVORS; do
+    dest="$OUT_DIR/$flavor"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+
+    cp "$REPO/flash/zImage-$flavor"      "$dest/zImage"
+    cp "$REPO/flash/cfg/$flavor.cfg"     "$dest/piko.cfg"
+    cp "$REPO/flash/piko-install"        "$dest/piko-install"
+    cp "$REPO/flash/updater-encoded.sh"  "$dest/updater.sh"
+    chmod 0755 "$dest/piko-install"
+
+    if [ "$flavor" = nand ]; then
+        cp "$REPO/flash/mtd3.jffs2" "$dest/mtd3.jffs2"
+    else
+        cp "$KERNEL_DIR/arch/arm/boot/zImage" "$dest/zImage-full"
+        cp "$REPO/flash/piko-root.img"        "$dest/piko-root.img"
+        cp "$REPO/userspace/stage-kexec/sbin/kexec" "$dest/kexec"
+        chmod 0755 "$dest/kexec"
+    fi
+done
 
 echo ""
-echo "==> done. copy the contents of $OUT_DIR to the root of the SD card:"
-ls -la "$OUT_DIR"
+echo "==> done. copy the contents of ONE flavor directory to the root of the card:"
+for flavor in $FLAVORS; do
+    echo ""
+    echo "    $OUT_DIR/$flavor"
+    ls -la "$OUT_DIR/$flavor" | sed 's/^/      /'
+done
