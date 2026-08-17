@@ -249,6 +249,18 @@ drop_host_libdir_from_libtool() {
     sed -i 's|^\([[:space:]]*\)add_dir=-L\$lt_sysroot\$libdir$|\1add_dir=|' ./libtool
 }
 
+order_generated_autotools_files() {
+    d="$1"
+    [ -f "$d/configure" ] || return 0
+    find "$d" \( -name configure.ac -o -name configure.in -o -name acinclude.m4 \) \
+        -exec touch {} + 2>/dev/null || true
+    [ -f "$d/aclocal.m4" ] && touch "$d/aclocal.m4"
+    touch "$d/configure"
+    find "$d" \( -name Makefile.in -o -name config.h.in -o -name stamp-h.in \) \
+        -exec touch {} + 2>/dev/null || true
+    return 0
+}
+
 build_one() {
     name="$1"
     dir="$(submodule_dir_for "$name")"
@@ -281,6 +293,7 @@ build_one() {
 
     echo "==> $name"
     [ "$FORCE" -eq 1 ] && rm -f "$dir/configure"
+    order_generated_autotools_files "$dir"
 
     ( cd "$dir"
       [ -d "$dir/m4" ] && ACLOCAL_PATH="$dir/m4${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
