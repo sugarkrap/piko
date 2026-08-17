@@ -144,36 +144,6 @@ jobs:
           ls -la "$PIKOSTORE_IPK" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: write the release notes
-        run: |
-          cat > release-notes.md <<NOTES
-          automated pubwish build via build.sh. three flavors, pick the one matching
-          where you want piko to live -- they differ only in the mtd1 bootstrap kernel,
-          which has room for exactly one storage driver set.
-
-          | flavor | piko lives on | pick this when |
-          | --- | --- | --- |
-          | \`piko-nand-$TAG.tar.gz\` | NAND (mtd3) | normal install, healthy NAND |
-          | \`piko-sd-$TAG.tar.gz\` | SD card | NAND is failing, or you want piko off the flash |
-          | \`piko-cf-$TAG.tar.gz\` | CF card | same, but on CF |
-
-          extract one archive and copy the files inside to the root of the card, then
-          boot Cacko recovery and pick the menu entry for that same card. the nand
-          flavor can be installed from either card; the sd and cf flavors must be
-          installed from the menu entry matching their own name, because recovery only
-          mounts the medium you pick and that is the only place the installer can
-          write. picking the wrong entry stops with an explanation before anything is
-          written.
-
-          the sd and cf flavors keep the whole piko root in \`.zaurus/piko-root.img\` on
-          the card and only write the small bootstrap to NAND, so a board with dying
-          flash still boots. the card stays FAT -- no repartitioning.
-
-          \`$PIKOSTORE_IPK\`: pikostore (Software Center) on its own, to install or update
-          it independently on a ROM that is already flashed -- pkgadd $PIKOSTORE_IPK
-          (NAND) or pkgadd $PIKOSTORE_IPK card (SD card).
-          NOTES
-
       - name: keep the payload even if publishing fails
         uses: actions/upload-artifact@v4
         with:
@@ -194,7 +164,7 @@ jobs:
                   gh release create "$TAG" $ARCHIVES "$PIKOSTORE_IPK" \
                       --title "piko sd card $TAG" \
                       --target "${{ github.sha }}" \
-                      --notes-file release-notes.md
+                      --notes ""
               fi
           }
           n=0
