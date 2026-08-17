@@ -10,7 +10,7 @@ initramfs/busybox-1.36.1/
 initramfs/*.cpio.gz
 initramfs/.build-*/
 initramfs/rootfs-minimal/
-initramfs/rootfs-build/
+initramfs/rootfs-build*/
 initramfs/rootfs/
 
 .cache/

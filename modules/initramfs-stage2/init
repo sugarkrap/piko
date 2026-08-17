@@ -85,7 +85,11 @@ img)
 	;;
 esac
 
-test -x /newroot/sbin/init || bail "no /sbin/init inside the root filesystem"
+REALINIT=
+for c in /sbin/init /init; do
+	test -x "/newroot$c" && REALINIT="$c" && break
+done
+test -n "$REALINIT" || bail "no /sbin/init or /init inside the root filesystem"
 
 if test "$KIND" = img; then
 	mkdir -p /newroot/media/boot
@@ -95,4 +99,4 @@ fi
 umount /sys 2>/dev/null
 umount /proc 2>/dev/null
 
-exec switch_root /newroot /sbin/init
+exec switch_root /newroot "$REALINIT"

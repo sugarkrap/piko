@@ -27,9 +27,11 @@ done
 "$REPO/tools/toolchain/build-oabi-toolchain.sh"
 
 echo "==> [2/7] bootstrap zImage per flavor (mtd1, stage 1)"
+FLAVOR_FORCE="$FORCE_FLAG"
 for flavor in $FLAVORS; do
-    "$REPO/tools/kernel/build-initramfs.sh" --flavor "$flavor" $FORCE_FLAG
-    "$REPO/tools/kernel/build-bootstrap.sh" --flavor "$flavor" $FORCE_FLAG
+    "$REPO/tools/kernel/build-initramfs.sh" --flavor "$flavor" $FLAVOR_FORCE
+    "$REPO/tools/kernel/build-bootstrap.sh" --flavor "$flavor" $FLAVOR_FORCE
+    FLAVOR_FORCE=""
 done
 
 echo "==> [3/7] stage-2 kernel-src"
