@@ -3,6 +3,10 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sysfs /sys 2>/dev/null
 
+if test -c /dev/tty0; then
+	exec < /dev/tty0 > /dev/tty0 2>&1
+fi
+
 export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 
@@ -12,7 +16,7 @@ serial_echo() {
 }
 
 bail() {
-	serial_echo "stage 2: no root: $1"
+	serial_echo "stage 2 stopped: $1"
 	while true; do
 		setsid cttyhack /bin/ash -l
 		sleep 1
@@ -76,11 +80,18 @@ img)
 	;;
 esac
 
+serial_echo "stage 2: root mounted, $(ls /newroot | tr '\n' ' ')"
+
+for n in console null tty; do
+	test -e "/newroot/dev/$n" || serial_echo "stage 2: /dev/$n missing in the root image"
+done
+
 REALINIT=
-for c in /sbin/init /init; do
+for c in /sbin/init /init /bin/init; do
 	test -x "/newroot$c" && REALINIT="$c" && break
 done
-test -n "$REALINIT" || bail "no /sbin/init or /init inside the root filesystem"
+test -n "$REALINIT" || bail "no init inside the root filesystem"
+serial_echo "stage 2: init is $(ls -l "/newroot$REALINIT" 2>&1)"
 
 if test "$KIND" = img; then
 	mkdir -p /newroot/media/boot
@@ -90,5 +101,6 @@ fi
 umount /sys 2>/dev/null
 umount /proc 2>/dev/null
 
+serial_echo "stage 2: handing over to $REALINIT"
 switch_root /newroot "$REALINIT"
-bail "switch_root returned: $REALINIT did not take over"
+bail "switch_root failed, $REALINIT did not take over"
