@@ -1,0 +1,28 @@
+#!/bin/sh
+KVER="$(uname -r)"
+MODDIR="/lib/modules/$KVER/kernel"
+DEV="${1:-/dev/mtdblock3}"
+MNT="${2:-/mnt/nand}"
+
+if ! test -b "$DEV"; then
+	insmod "$MODDIR/drivers/mtd/parsers/sharpslpart.ko" 2>/dev/null
+	insmod "$MODDIR/drivers/mtd/nand/raw/sharpsl.ko" 2>/dev/null
+	for try in 1 2 3 4 5 6 7 8 9 10; do
+		test -b "$DEV" && break
+		sleep 1
+	done
+fi
+
+if ! test -b "$DEV"; then
+	echo "nandmount: $DEV never appeared, the nand controller did not attach"
+	echo "nandmount: partitions seen:"
+	cat /proc/mtd 2>/dev/null
+	exit 1
+fi
+
+mkdir -p "$MNT"
+if ! mount -t jffs2 -o ro "$DEV" "$MNT"; then
+	echo "nandmount: mounting $DEV read-only failed"
+	exit 1
+fi
+echo "nandmount: $DEV mounted read-only at $MNT"

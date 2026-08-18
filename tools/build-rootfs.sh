@@ -33,6 +33,16 @@ if [ -z "$KVER" ]; then
     exit 1
 fi
 
+if command -v git >/dev/null 2>&1 && [ -d "$REPO/.git" ]; then
+    IGNORED="$(cd "$REPO" && git ls-files --others --ignored --exclude-standard rootfs/ 2>/dev/null || true)"
+    if [ -n "$IGNORED" ]; then
+        echo "build-rootfs: these rootfs files are git-ignored, so a clean checkout would not have them:" >&2
+        echo "$IGNORED" | sed 's/^/  /' >&2
+        echo "  add a !negation to .gitignore, or delete them" >&2
+        exit 1
+    fi
+fi
+
 STAGE="$(mktemp -d /tmp/piko-rootfs.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 OVERLAY="$STAGE/overlay"

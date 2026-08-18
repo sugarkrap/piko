@@ -75,6 +75,8 @@ rootfs/usr/sbin/*
 !rootfs/usr/sbin/deskscan
 !rootfs/usr/sbin/suspend
 !rootfs/usr/sbin/gototty
+!rootfs/usr/sbin/piko-shutdown
+!rootfs/usr/sbin/nandmount
 
 userspace/*.tar.gz
 userspace/*.tar.bz2
