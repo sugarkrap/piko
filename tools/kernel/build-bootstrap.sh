@@ -25,6 +25,8 @@ while [ $# -gt 0 ]; do
 done
 
 FLAVOR_CONF="$REPO/tools/kernel/flavors/$FLAVOR.conf"
+COMMON_CONF="$REPO/tools/kernel/flavors/common.conf"
+FRAGMENTS="$COMMON_CONF $FLAVOR_CONF"
 if [ ! -f "$FLAVOR_CONF" ]; then
     echo "tools/kernel/build-bootstrap.sh: unknown flavor '$FLAVOR' (no $FLAVOR_CONF)" >&2
     echo "  available: $(cd "$REPO/tools/kernel/flavors" && echo *.conf | sed 's/\.conf//g')" >&2
@@ -70,14 +72,16 @@ fi
 echo "==> restoring the base config"
 cp "$BASE_CONFIG" "$KERNEL_DIR/.config"
 
-echo "==> applying the $FLAVOR flavor fragment"
-while read -r op sym val; do
-    [ -n "$op" ] || continue
-    case "$op" in
-        --set-str|--set-val) ( cd "$KERNEL_DIR" && ./scripts/config "$op" "$sym" "$val" ) ;;
-        *)                   ( cd "$KERNEL_DIR" && ./scripts/config "$op" "$sym" ) ;;
-    esac
-done < "$FLAVOR_CONF"
+echo "==> applying the common and $FLAVOR fragments"
+for frag in $FRAGMENTS; do
+    while read -r op sym val; do
+        [ -n "$op" ] || continue
+        case "$op" in
+            --set-str|--set-val) ( cd "$KERNEL_DIR" && ./scripts/config "$op" "$sym" "$val" ) ;;
+            *)                   ( cd "$KERNEL_DIR" && ./scripts/config "$op" "$sym" ) ;;
+        esac
+    done < "$frag"
+done
 
 echo "==> pointing CONFIG_INITRAMFS_SOURCE at $INITRAMFS_CPIO"
 ( cd "$KERNEL_DIR" && ./scripts/config --set-str CONFIG_INITRAMFS_SOURCE "$INITRAMFS_CPIO" )
@@ -85,29 +89,31 @@ echo "==> pointing CONFIG_INITRAMFS_SOURCE at $INITRAMFS_CPIO"
 
 echo "==> verifying the fragment survived olddefconfig"
 bad=0
-while read -r op sym val; do
-    [ -n "$op" ] || continue
-    state="$( cd "$KERNEL_DIR" && ./scripts/config --state "$sym" 2>/dev/null || echo undef )"
-    case "$op" in
-        --enable)
-            case "$state" in
-                y|m) ;;
-                *)
-                    echo "  CONFIG_$sym is '$state', expected y -- an unmet dependency dropped it" >&2
-                    bad=1
-                    ;;
-            esac
-            ;;
-        --disable)
-            case "$state" in
-                y|m)
-                    echo "  CONFIG_$sym is '$state', expected off -- something reselected it" >&2
-                    bad=1
-                    ;;
-            esac
-            ;;
-    esac
-done < "$FLAVOR_CONF"
+for frag in $FRAGMENTS; do
+    while read -r op sym val; do
+        [ -n "$op" ] || continue
+        state="$( cd "$KERNEL_DIR" && ./scripts/config --state "$sym" 2>/dev/null || echo undef )"
+        case "$op" in
+            --enable)
+                case "$state" in
+                    y|m) ;;
+                    *)
+                        echo "  CONFIG_$sym is '$state', expected y -- an unmet dependency dropped it" >&2
+                        bad=1
+                        ;;
+                esac
+                ;;
+            --disable)
+                case "$state" in
+                    y|m)
+                        echo "  CONFIG_$sym is '$state', expected off -- something reselected it" >&2
+                        bad=1
+                        ;;
+                esac
+                ;;
+        esac
+    done < "$frag"
+done
 if [ "$bad" -ne 0 ]; then
     echo "tools/kernel/build-bootstrap.sh: $FLAVOR fragment did not survive olddefconfig" >&2
     exit 1

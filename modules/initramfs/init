@@ -101,6 +101,8 @@ if test -z "$BOOTDEV"; then
 	say "$(ls -l /dev/mmcblk* /dev/sd* /dev/hd* /dev/mtdblock* 2>/dev/null)"
 	say "partitions:"
 	say "$(cat /proc/partitions 2>/dev/null)"
+	say "kernel messages:"
+	say "$(dmesg | tail -40)"
 	rescue "nothing mountable on $MEDIUM"
 fi
 
