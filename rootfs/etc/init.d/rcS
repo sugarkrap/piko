@@ -46,14 +46,6 @@ mdev -d 2>/dev/null &
 
 modprobe hostap 2>/dev/null
 
-KVER="$(uname -r)"
-
-insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp437.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/fs/nls/nls_cp850.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/fs/nls/nls_iso8859-15.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/fs/fat/fat.ko" 2>/dev/null
-insmod "/lib/modules/$KVER/kernel/fs/fat/vfat.ko" 2>/dev/null
-
 mdev -s 2>/dev/null
 
 rm -rf /mnt/card/.zaurus/tmp 2>/dev/null

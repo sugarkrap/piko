@@ -28,11 +28,7 @@ kernel/net/wireless/lib80211_crypt_tkip.ko
 kernel/lib/crypto/libarc4.ko
 "
 
-SD_MODULES="
-kernel/fs/nls/nls_cp437.ko
-kernel/fs/nls/nls_cp850.ko
-kernel/fs/nls/nls_iso8859-15.ko
-"
+SD_MODULES=""
 
 CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
