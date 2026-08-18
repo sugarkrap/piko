@@ -7,7 +7,7 @@ KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-$KERNEL_VERSION}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 OUT_DIR="${OUT_DIR:-$REPO/sd-card}"
-FLAVORS="${FLAVORS:-nand sd cf}"
+FLAVORS="${FLAVORS:-nand sd}"
 
 FORCE=0
 FORCE_FLAG=""

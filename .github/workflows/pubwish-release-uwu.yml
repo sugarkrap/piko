@@ -115,7 +115,7 @@ jobs:
           TAG="sd-card-${{ github.run_number }}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           ARCHIVES=""
-          for flavor in nand sd cf; do
+          for flavor in nand sd; do
               if [ ! -d "sd-card/$flavor" ]; then
                   echo "::error::build.sh produced no sd-card/$flavor payload" >&2
                   exit 1
@@ -133,7 +133,7 @@ jobs:
           echo "ARCHIVES=${ARCHIVES# }" >> "$GITHUB_ENV"
           echo "### bootstrap sizes against the 1294336-byte mtd1 kernel slot" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          for flavor in nand sd cf; do
+          for flavor in nand sd; do
               sz="$(stat -c '%s' "flash/zImage-$flavor")"
               printf '%-5s %8s bytes  %3d%%\n' \
                   "$flavor" "$sz" "$((sz * 100 / 1294336))" >> "$GITHUB_STEP_SUMMARY"
