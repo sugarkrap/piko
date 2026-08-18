@@ -55,7 +55,7 @@ export PKG_CONFIG_PATH=
 export CPPFLAGS="-I$STAGE/usr/include"
 export LDFLAGS="-L$STAGE/usr/lib -Wl,-rpath-link=$STAGE/usr/lib"
 
-if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
+if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ] && [ -f "$FLTK_SRC_DIR/makeinclude" ]; then
     echo "==> FLTK library already staged, skipping build ($MARKER)"
 else
     echo "==> FLTK $(git -C "$FLTK_SRC_DIR" describe --tags 2>/dev/null || echo '(unknown revision)')"
