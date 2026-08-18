@@ -12,7 +12,7 @@ CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
 FORCE=0
-FLAVOR=nand
+FLAVOR=sd
 STAGE2=0
 while [ $# -gt 0 ]; do
     case "$1" in

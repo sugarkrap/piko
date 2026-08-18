@@ -7,7 +7,7 @@ KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-$KERNEL_VERSION}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 OUT_DIR="${OUT_DIR:-$REPO/sd-card}"
-FLAVORS="${FLAVORS:-nand sd}"
+FLAVORS="${FLAVORS:-sd}"
 
 FORCE=0
 FORCE_FLAG=""
@@ -48,7 +48,7 @@ make -C "$KERNEL_DIR" ARCH=arm \
     CROSS_COMPILE="$TOOLCHAIN_BIN_DIR/arm-unknown-linux-uclibcgnueabi-" \
     -j"$JOBS" zImage modules
 
-echo "==> [5/7] userspace payload + mtd3.jffs2 (mtd3, stage 2)"
+echo "==> [5/7] userspace payload + stage-2 root image"
 "$REPO/tools/userspace/build-kexec.sh"
 "$REPO/tools/userspace/build-ssh.sh"
 "$REPO/tools/userspace/build-alsa.sh"
@@ -57,7 +57,7 @@ echo "==> [5/7] userspace payload + mtd3.jffs2 (mtd3, stage 2)"
 "$REPO/tools/userspace/build-userspace.sh" \
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
-KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
+KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" SKIP_JFFS2=1 \
     "$REPO/tools/build-mtd3-jffs2.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"
@@ -76,20 +76,27 @@ for flavor in $FLAVORS; do
     cp "$REPO/flash/updater-encoded.sh"  "$dest/updater.sh"
     chmod 0755 "$dest/piko-install"
 
-    if [ "$flavor" = nand ]; then
-        cp "$REPO/flash/mtd3.jffs2" "$dest/mtd3.jffs2"
-    else
-        cp "$KERNEL_DIR/arch/arm/boot/zImage" "$dest/zImage-full"
-        cp "$REPO/flash/piko-root.img"        "$dest/piko-root.img"
-        cp "$REPO/userspace/stage-kexec/sbin/kexec" "$dest/kexec"
-        chmod 0755 "$dest/kexec"
-    fi
+    cp "$KERNEL_DIR/arch/arm/boot/zImage" "$dest/zImage-full"
+    cp "$REPO/flash/piko-root.img"        "$dest/piko-root.img"
+    cp "$REPO/userspace/stage-kexec/sbin/kexec" "$dest/kexec"
+    chmod 0755 "$dest/kexec"
 done
 
+UPDATE="$OUT_DIR/update/.zaurus"
+rm -rf "$OUT_DIR/update"
+mkdir -p "$UPDATE"
+cp "$KERNEL_DIR/arch/arm/boot/zImage" "$UPDATE/zImage-full"
+cp "$REPO/flash/piko-root.img"        "$UPDATE/piko-root.img"
+cp "$REPO/userspace/stage-kexec/sbin/kexec" "$UPDATE/kexec"
+chmod 0755 "$UPDATE/kexec"
+
 echo ""
-echo "==> done. copy the contents of ONE flavor directory to the root of the card:"
+echo "==> done. full install: copy the contents of one flavor directory to the card root"
 for flavor in $FLAVORS; do
     echo ""
     echo "    $OUT_DIR/$flavor"
     ls -la "$OUT_DIR/$flavor" | sed 's/^/      /'
 done
+echo ""
+echo "==> stage-2 update: drop this .zaurus onto a card that already runs piko"
+ls -la "$UPDATE" | sed 's/^/      /'

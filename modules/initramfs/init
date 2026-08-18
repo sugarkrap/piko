@@ -24,7 +24,7 @@ export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/root
 
-FLAVOR=nand
+FLAVOR=sd
 test -f /piko-flavor && FLAVOR=$(cat /piko-flavor)
 
 for bl in /sys/class/backlight/*/; do
@@ -37,11 +37,6 @@ done
 /bin/fbsplash -s /splash.ppm 2>/dev/null
 
 case "$FLAVOR" in
-nand)
-	DEVICES="/dev/mtdblock2"
-	FSTYPE=jffs2
-	PAYLOAD_DIR=boot
-	;;
 sd)
 	DEVICES="/dev/mmcblk0p1 /dev/mmcblk0"
 	FSTYPE=vfat
@@ -95,12 +90,8 @@ fi
 
 test -f "$KERNEL" || rescue "no $PAYLOAD_DIR/zImage-full on $BOOTDEV"
 
-if test "$FLAVOR" = nand; then
-	PIKOROOT="mtd:$BOOTDEV"
-else
-	test -f "/mnt/boot/$ROOTIMG" || rescue "no $ROOTIMG on $BOOTDEV"
-	PIKOROOT="img:$BOOTDEV:$ROOTIMG"
-fi
+test -f "/mnt/boot/$ROOTIMG" || rescue "no $ROOTIMG on $BOOTDEV"
+PIKOROOT="img:$BOOTDEV:$ROOTIMG"
 
 KEXEC=/mnt/boot/$PAYLOAD_DIR/kexec
 test -x "$KEXEC" || KEXEC=/mnt/boot/sbin/kexec

@@ -32,7 +32,7 @@ done
 
 if test -z "$PIKOROOT"; then
 	test -n "$ROOTDEV" || bail "neither pikoroot= nor root= was passed on the kernel command line"
-	PIKOROOT="dev:$ROOTDEV:${ROOTTYPE:-jffs2}"
+	PIKOROOT="dev:$ROOTDEV:${ROOTTYPE:-ext2}"
 fi
 
 mkdir -p /newroot
@@ -41,10 +41,6 @@ KIND="${PIKOROOT%%:*}"
 REST="${PIKOROOT#*:}"
 
 case "$KIND" in
-mtd)
-	serial_echo "stage 2 root: $REST (jffs2)"
-	wait_for="$REST"
-	;;
 dev)
 	DEV="${REST%%:*}"
 	TYPE="${REST#*:}"
@@ -69,9 +65,6 @@ done
 test -b "$wait_for" || bail "$wait_for never appeared"
 
 case "$KIND" in
-mtd)
-	mount -t jffs2 "$REST" /newroot || bail "mounting $REST as jffs2 failed"
-	;;
 dev)
 	mount -t "$TYPE" "$DEV" /newroot || bail "mounting $DEV as $TYPE failed"
 	;;

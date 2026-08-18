@@ -17,7 +17,7 @@ case "$(file -b "$BASE_JFFS2" 2>/dev/null)" in
     *) echo "build-mtd3-jffs2: $BASE_JFFS2 doesn't look like a little-endian JFFS2 image, refusing to guess" >&2; exit 1 ;;
 esac
 
-if ! command -v mkfs.jffs2 >/dev/null 2>&1; then
+if [ "${SKIP_JFFS2:-0}" -ne 1 ] && ! command -v mkfs.jffs2 >/dev/null 2>&1; then
     echo "build-mtd3-jffs2: mkfs.jffs2 not found (apt install mtd-utils)" >&2
     exit 1
 fi
@@ -313,13 +313,15 @@ if [ "$badlink" -ne 0 ]; then
 fi
 echo "    no dangling library symlinks"
 
-echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
-mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
-    -e "$ERASEBLOCK" -l -U -n -q -v 2>&1 | tail -20
-mv "$OUT.partial" "$OUT"
+if [ "${SKIP_JFFS2:-0}" -ne 1 ]; then
+    echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
+    mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
+        -e "$ERASEBLOCK" -l -U -n -q -v 2>&1 | tail -20
+    mv "$OUT.partial" "$OUT"
 
-md5sum "$BASE_JFFS2" "$OUT"
-echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
+    md5sum "$BASE_JFFS2" "$OUT"
+    echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
+fi
 
 if [ -n "${ROOT_IMG_OUT:-}" ]; then
     if ! command -v mke2fs >/dev/null 2>&1; then
@@ -336,5 +338,7 @@ if [ -n "${ROOT_IMG_OUT:-}" ]; then
     echo "==> done: $ROOT_IMG_OUT ($(stat -c '%s' "$ROOT_IMG_OUT") bytes)"
 fi
 
-echo ""
-IMAGE="$OUT" BASE_IMAGE="$BASE_JFFS2" "$REPO/tools/nand-budget.sh" "$OVERLAY"
+if [ "${SKIP_JFFS2:-0}" -ne 1 ]; then
+    echo ""
+    IMAGE="$OUT" BASE_IMAGE="$BASE_JFFS2" "$REPO/tools/nand-budget.sh" "$OVERLAY"
+fi

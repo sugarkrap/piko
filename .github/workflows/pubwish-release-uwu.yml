@@ -110,38 +110,35 @@ jobs:
           fi
           echo "PIKOSTORE_IPK=$IPK" >> "$GITHUB_ENV"
 
-      - name: package one payload per flavor
+      - name: package the install and update tarballs
         run: |
           TAG="sd-card-${{ github.run_number }}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          ARCHIVES=""
-          for flavor in nand sd; do
-              if [ ! -d "sd-card/$flavor" ]; then
-                  echo "::error::build.sh produced no sd-card/$flavor payload" >&2
+          for d in sd-card/sd sd-card/update/.zaurus; do
+              if [ ! -d "$d" ]; then
+                  echo "::error::build.sh produced no $d" >&2
                   exit 1
               fi
-              name="piko-$flavor-$TAG"
-              mkdir -p "dist/$name"
-              cp "sd-card/$flavor/"* "dist/$name/"
-              tar -C dist -czf "$name.tar.gz" "$name"
-              ARCHIVES="$ARCHIVES $name.tar.gz"
-              echo "### $flavor payload" >> "$GITHUB_STEP_SUMMARY"
+          done
+          rm -rf dist
+          mkdir -p dist/piko
+          cp sd-card/sd/* dist/piko/
+          tar -C dist -czf piko.tar.gz piko
+          tar -C sd-card/update -czf update.tar.gz .zaurus
+          echo "ARCHIVES=piko.tar.gz update.tar.gz" >> "$GITHUB_ENV"
+          for a in piko.tar.gz update.tar.gz; do
+              echo "### $a" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
-              tar -tzvf "$name.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+              tar -tzvf "$a" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
           done
-          echo "ARCHIVES=${ARCHIVES# }" >> "$GITHUB_ENV"
-          echo "### bootstrap sizes against the 1294336-byte mtd1 kernel slot" >> "$GITHUB_STEP_SUMMARY"
+          echo "### bootstrap size against the 1294336-byte mtd1 kernel slot" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          SIZES=""
-          for flavor in nand sd; do
-              sz="$(stat -c '%s' "flash/zImage-$flavor")"
-              printf '%-5s %8s bytes  %3d%% of slot\n' \
-                  "$flavor" "$sz" "$((sz * 100 / 1294336))" | tee -a "$GITHUB_STEP_SUMMARY"
-              SIZES="$SIZES $flavor=$sz"
-          done
-          echo "::notice title=bootstrap sizes::slot=1294336${SIZES}"
+          sz="$(stat -c '%s' flash/zImage-sd)"
+          printf '%-5s %8s bytes  %3d%% of slot\n' \
+              sd "$sz" "$((sz * 100 / 1294336))" | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=bootstrap size::slot=1294336 sd=$sz"
           echo "### pikostore ipk" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           ls -la "$PIKOSTORE_IPK" >> "$GITHUB_STEP_SUMMARY"
@@ -152,7 +149,8 @@ jobs:
         with:
           name: piko-${{ env.TAG }}
           path: |
-            piko-*-${{ env.TAG }}.tar.gz
+            piko.tar.gz
+            update.tar.gz
             ${{ env.PIKOSTORE_IPK }}
           if-no-files-found: error
 

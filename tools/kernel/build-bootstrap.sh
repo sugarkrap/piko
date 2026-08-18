@@ -14,7 +14,7 @@ MTD1_SLOT=1294336
 MTD1_PROVEN=1280656
 
 FORCE=0
-FLAVOR=nand
+FLAVOR=sd
 OUT=
 while [ $# -gt 0 ]; do
     case "$1" in
