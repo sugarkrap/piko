@@ -58,7 +58,7 @@ echo "==> [5/7] userspace payload + stage-2 root image"
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
 KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" SKIP_JFFS2=1 \
-    "$REPO/tools/build-mtd3-jffs2.sh"
+    "$REPO/tools/build-rootfs.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"
 "$REPO/tools/userspace/build-piko-install.sh" $FORCE_FLAG

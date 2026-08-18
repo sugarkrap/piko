@@ -9,31 +9,31 @@ KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
 ERASEBLOCK="${ERASEBLOCK:-0x4000}"
 
 if [ ! -f "$BASE_JFFS2" ]; then
-    echo "build-mtd3-jffs2: base image not found: $BASE_JFFS2" >&2
+    echo "build-rootfs: base image not found: $BASE_JFFS2" >&2
     exit 1
 fi
 case "$(file -b "$BASE_JFFS2" 2>/dev/null)" in
     *jffs2*little*endian*) ;;
-    *) echo "build-mtd3-jffs2: $BASE_JFFS2 doesn't look like a little-endian JFFS2 image, refusing to guess" >&2; exit 1 ;;
+    *) echo "build-rootfs: $BASE_JFFS2 doesn't look like a little-endian JFFS2 image, refusing to guess" >&2; exit 1 ;;
 esac
 
 if [ "${SKIP_JFFS2:-0}" -ne 1 ] && ! command -v mkfs.jffs2 >/dev/null 2>&1; then
-    echo "build-mtd3-jffs2: mkfs.jffs2 not found (apt install mtd-utils)" >&2
+    echo "build-rootfs: mkfs.jffs2 not found (apt install mtd-utils)" >&2
     exit 1
 fi
 
 if [ ! -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
-    echo "build-mtd3-jffs2: $KERNEL_DIR has no built zImage -- build it first:" >&2
+    echo "build-rootfs: $KERNEL_DIR has no built zImage -- build it first:" >&2
     echo "  cd $KERNEL_DIR && ARCH=arm CROSS_COMPILE=... make zImage modules" >&2
     exit 1
 fi
 KVER="$(cat "$KERNEL_DIR/include/config/kernel.release" 2>/dev/null || true)"
 if [ -z "$KVER" ]; then
-    echo "build-mtd3-jffs2: cannot determine kernel release (no include/config/kernel.release)" >&2
+    echo "build-rootfs: cannot determine kernel release (no include/config/kernel.release)" >&2
     exit 1
 fi
 
-STAGE="$(mktemp -d /tmp/piko-mtd3-jffs2.XXXXXX)"
+STAGE="$(mktemp -d /tmp/piko-rootfs.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 OVERLAY="$STAGE/overlay"
 mkdir -p "$OVERLAY"
@@ -84,7 +84,7 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
 
     PIKO_SYNC_BIN="$REPO/userspace/src/piko-sync/piko-sync-server"
     if [ ! -f "$PIKO_SYNC_BIN" ]; then
-        echo "build-mtd3-jffs2: build-piko-sync.sh reported success but there is no" >&2
+        echo "build-rootfs: build-piko-sync.sh reported success but there is no" >&2
         echo "  $PIKO_SYNC_BIN -- refusing to ship a launcher with no binary" >&2
         exit 1
     fi
@@ -121,7 +121,7 @@ $SSH_PAYLOAD_SERVER"
         rest="${entry#*:}"
         rel="${rest%%:*}"
         if [ ! -f "$src" ]; then
-            echo "build-mtd3-jffs2: $SSH_STAGE exists but $src is missing" >&2
+            echo "build-rootfs: $SSH_STAGE exists but $src is missing" >&2
             echo "  rerun tools/userspace/build-ssh.sh -- refusing to ship a half payload" >&2
             exit 1
         fi
@@ -132,13 +132,13 @@ $SSH_PAYLOAD_SERVER"
         echo "    ssh payload: /$rel"
     done
 else
-    echo "build-mtd3-jffs2: WARNING -- no $SSH_STAGE, this image will have no" >&2
+    echo "build-rootfs: WARNING -- no $SSH_STAGE, this image will have no" >&2
     echo "  scp/sftp-server. Run tools/userspace/build-ssh.sh first if that is not intended." >&2
 fi
 
 KEXEC_STAGE="${KEXEC_STAGE:-$REPO/userspace/stage-kexec}"
 if [ ! -f "$KEXEC_STAGE/sbin/kexec" ]; then
-    echo "build-mtd3-jffs2: no $KEXEC_STAGE/sbin/kexec -- run tools/userspace/build-kexec.sh first" >&2
+    echo "build-rootfs: no $KEXEC_STAGE/sbin/kexec -- run tools/userspace/build-kexec.sh first" >&2
     echo "  the bootstrap initramfs waits forever for /sbin/kexec on this image; refusing" >&2
     echo "  to ship one without it" >&2
     exit 1
@@ -165,7 +165,7 @@ for entry in $SRC_TOOLS; do
     src="$REPO/userspace/src/${entry%%:*}"
     rel="${entry#*:}"
     if [ ! -f "$src" ]; then
-        echo "build-mtd3-jffs2: missing $src -- run tools/userspace/build-userspace.sh first" >&2
+        echo "build-rootfs: missing $src -- run tools/userspace/build-userspace.sh first" >&2
         echo "  rootfs/etc/init.d/rcS and rootfs/etc/mdev.conf silently skip these when absent," >&2
         echo "  which ships a board with no swap/backlight/rotation/clock; refusing" >&2
         exit 1
@@ -185,7 +185,7 @@ SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
 if [ -d "$SDL_STAGE" ]; then
     SDL_SONAME="libSDL-1.2.so.0"
     if [ ! -e "$SDL_STAGE/usr/lib/$SDL_SONAME" ]; then
-        echo "build-mtd3-jffs2: $SDL_STAGE exists but has no $SDL_SONAME -- rerun tools/userspace/build-sdl.sh" >&2
+        echo "build-rootfs: $SDL_STAGE exists but has no $SDL_SONAME -- rerun tools/userspace/build-sdl.sh" >&2
         exit 1
     fi
     SDL_LIB="$(basename "$(readlink -f "$SDL_STAGE/usr/lib/$SDL_SONAME")")"
@@ -205,7 +205,7 @@ if [ -d "$SDL_STAGE" ]; then
     done
     for b in pikalibrate sdltest; do
         if [ ! -f "$SDL_STAGE/usr/bin/$b" ]; then
-            echo "build-mtd3-jffs2: $SDL_STAGE exists but $b is missing -- rerun tools/userspace/build-sdl.sh" >&2
+            echo "build-rootfs: $SDL_STAGE exists but $b is missing -- rerun tools/userspace/build-sdl.sh" >&2
             exit 1
         fi
         cp "$SDL_STAGE/usr/bin/$b" "$OVERLAY/usr/bin/$b"
@@ -213,7 +213,7 @@ if [ -d "$SDL_STAGE" ]; then
         echo "    sdl: /usr/bin/$b"
     done
 else
-    echo "build-mtd3-jffs2: WARNING -- no $SDL_STAGE, pikalibrate will be a dead launcher" >&2
+    echo "build-rootfs: WARNING -- no $SDL_STAGE, pikalibrate will be a dead launcher" >&2
 fi
 
 
@@ -224,7 +224,7 @@ if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
     "$REPO/tools/userspace/build-phoneme.sh"
 fi
 if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
-    echo "build-mtd3-jffs2: build-phoneme.sh reported success but there is no" >&2
+    echo "build-rootfs: build-phoneme.sh reported success but there is no" >&2
     echo "  $PHONEME_HOME/bin/runMidlet -- refusing to ship a J2ME-less image" >&2
     exit 1
 fi
@@ -234,7 +234,7 @@ chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
 echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
 
 if [ ! -f "$OVERLAY/etc/zaurus/parts.cfg" ]; then
-    echo "build-mtd3-jffs2: rootfs/etc/zaurus/parts.cfg did not reach the overlay" >&2
+    echo "build-rootfs: rootfs/etc/zaurus/parts.cfg did not reach the overlay" >&2
     echo "  without the software-part catalog matchbox-apprun refuses to launch" >&2
     echo "  anything that declares X-Piko-Parts" >&2
     exit 1
@@ -254,7 +254,7 @@ if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
         fi
     done
 else
-    echo "build-mtd3-jffs2: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume will fail to" >&2
+    echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume will fail to" >&2
     echo "  open the mixer (statically linked libasound still reads /usr/share/alsa/alsa.conf)" >&2
 fi
 
@@ -265,7 +265,7 @@ if [ -f "$OPKG_BIN" ]; then
     chmod 0755 "$OVERLAY/usr/bin/opkg"
     echo "    opkg: /usr/bin/opkg"
 else
-    echo "build-mtd3-jffs2: WARNING -- no $OPKG_BIN, the pkg* wrappers will be non-functional" >&2
+    echo "build-rootfs: WARNING -- no $OPKG_BIN, the pkg* wrappers will be non-functional" >&2
 fi
 
 echo "==> unpacking base image $BASE_JFFS2 (via the real kernel jffs2 driver -- needs sudo)"
@@ -290,7 +290,7 @@ refmissing=0
 for r in $REFS $DESKTOP_REFS; do
     [ -e "$MERGED$r" ] && continue
     [ -L "$MERGED$r" ] && continue
-    echo "build-mtd3-jffs2: boot scripts reference $r but the image does not provide it" >&2
+    echo "build-rootfs: boot scripts reference $r but the image does not provide it" >&2
     refmissing=1
 done
 if [ "$refmissing" -ne 0 ]; then
@@ -303,7 +303,7 @@ echo "    every binary referenced by boot scripts and .desktop launchers is pres
 badlink=0
 for l in $(find "$MERGED/lib" "$MERGED/usr/lib" -type l -name '*.so*' 2>/dev/null); do
     [ -e "$l" ] && continue
-    echo "build-mtd3-jffs2: dangling library symlink ${l#$MERGED} -> $(readlink "$l")" >&2
+    echo "build-rootfs: dangling library symlink ${l#$MERGED} -> $(readlink "$l")" >&2
     badlink=1
 done
 if [ "$badlink" -ne 0 ]; then
@@ -325,7 +325,7 @@ fi
 
 if [ -n "${ROOT_IMG_OUT:-}" ]; then
     if ! command -v mke2fs >/dev/null 2>&1; then
-        echo "build-mtd3-jffs2: mke2fs not found (apt install e2fsprogs)" >&2
+        echo "build-rootfs: mke2fs not found (apt install e2fsprogs)" >&2
         exit 1
     fi
     tree_kb="$(du -sk "$MERGED" | while read -r n _; do echo "$n"; break; done)"
