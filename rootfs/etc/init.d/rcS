@@ -48,7 +48,13 @@ modprobe hostap 2>/dev/null
 
 mdev -s 2>/dev/null
 
-rm -rf /mnt/card/.zaurus/tmp 2>/dev/null
+. /etc/piko-media
+if test "$PIKO_KIND" = img; then
+	mkdir -p "$PIKO_CARD_MNT"
+	mountpoint -q "$PIKO_CARD_MNT" || mount -o bind "$PIKO_BOOT_MNT" "$PIKO_CARD_MNT"
+fi
+
+rm -rf "$PIKO_CARD_ROOT/tmp" 2>/dev/null
 
 if test -x /usr/sbin/audioon; then
 	/usr/sbin/audioon 2>/dev/null

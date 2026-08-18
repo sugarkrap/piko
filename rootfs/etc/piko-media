@@ -1,0 +1,36 @@
+PIKO_KIND=mtd
+PIKO_BOOT_DEV=
+PIKO_BOOT_MNT=
+PIKO_KERNEL=/boot/zImage-full
+PIKO_CARD_MNT=/mnt/card
+
+_pikoroot=
+for _arg in $(cat /proc/cmdline 2>/dev/null); do
+	case "$_arg" in
+	pikoroot=*) _pikoroot="${_arg#pikoroot=}" ;;
+	esac
+done
+
+case "$_pikoroot" in
+img:*)
+	_rest="${_pikoroot#img:}"
+	PIKO_KIND=img
+	PIKO_BOOT_DEV="${_rest%%:*}"
+	PIKO_BOOT_MNT=/media/boot
+	PIKO_KERNEL="$PIKO_BOOT_MNT/.zaurus/zImage-full"
+	;;
+dev:*)
+	_rest="${_pikoroot#dev:}"
+	PIKO_KIND=dev
+	PIKO_BOOT_DEV="${_rest%%:*}"
+	PIKO_BOOT_MNT=/
+	;;
+mtd:*)
+	PIKO_KIND=mtd
+	PIKO_BOOT_DEV="${_pikoroot#mtd:}"
+	;;
+esac
+
+PIKO_CARD_ROOT="${ZAURUS_CARD_ROOT:-$PIKO_CARD_MNT/.zaurus}"
+
+unset _arg _rest _pikoroot
