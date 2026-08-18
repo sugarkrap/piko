@@ -1,30 +1,34 @@
 #!/bin/sh
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sysfs /sys 2>/dev/null
 
-for bl in /sys/class/backlight/*/; do
-	if test -f "$bl/max_brightness"; then
-		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
-		echo 0 > "$bl/bl_power" 2>/dev/null
-	fi
-done
-
-/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
-SPLASH_RC=$?
-
-mount -t proc proc /proc
-
-BOOTLOG=/tmp/bootstrap.log
-exec > "$BOOTLOG" 2>&1
-
-console_fallback() {
+if test -c /dev/tty0; then
 	exec > /dev/tty0 2>&1
-	cat "$BOOTLOG" 2>/dev/null
+fi
+
+say() {
+	echo "$*"
+	echo "$*" > /dev/ttyS0 2>/dev/null
 }
 
-serial_echo() {
-	echo "$1"
-	echo "$1" > /dev/ttyS0 2>/dev/null
+run() {
+	say "+ $*"
+	"$@" 2>&1
+	rc=$?
+	test $rc -eq 0 || say "  rc=$rc"
+	return $rc
+}
+
+rescue() {
+	say ""
+	say "=== bootstrap stopped: $* ==="
+	say "=== dropping to a shell, the board stays up ==="
+	say ""
+	while true; do
+		setsid cttyhack /bin/ash -l
+		sleep 1
+	done
 }
 
 export TERM=linux
@@ -34,71 +38,84 @@ export HOME=/root
 FLAVOR=nand
 test -f /piko-flavor && FLAVOR=$(cat /piko-flavor)
 
+say ""
+say "=== zaurus-refresh bootstrap ($FLAVOR) ==="
+say "kernel: $(uname -r)"
+say "cmdline: $(cat /proc/cmdline 2>/dev/null)"
+
+for bl in /sys/class/backlight/*/; do
+	if test -f "$bl/max_brightness"; then
+		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
+		echo 0 > "$bl/bl_power" 2>/dev/null
+		say "backlight: $bl -> $(cat "$bl/brightness" 2>/dev/null)"
+	fi
+done
+
+/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
+say "fbsplash rc=$? $(cat /tmp/fbsplash.err 2>/dev/null)"
+
 case "$FLAVOR" in
 nand)
-	MEDIUM="the NAND home partition"
-	MEDIUM_MENU="NAND"
+	MEDIUM="NAND"
 	DEVICES="/dev/mtdblock2"
 	FSTYPE=jffs2
 	PAYLOAD_DIR=boot
 	;;
 sd)
-	MEDIUM="the SD card"
-	MEDIUM_MENU="SD"
+	MEDIUM="SD"
 	DEVICES="/dev/mmcblk0p1 /dev/mmcblk0"
 	FSTYPE=vfat
 	PAYLOAD_DIR=.zaurus
 	;;
 cf)
-	MEDIUM="the CF card"
-	MEDIUM_MENU="CF"
+	MEDIUM="CF"
 	DEVICES="/dev/sda1 /dev/sda /dev/hda1 /dev/hda"
 	FSTYPE=vfat
 	PAYLOAD_DIR=.zaurus
 	;;
 *)
-	console_fallback
-	serial_echo "bootstrap built with an unknown flavor: $FLAVOR"
-	exec setsid cttyhack /bin/ash -l
+	rescue "unknown flavor '$FLAVOR'"
 	;;
 esac
 
-serial_echo ""
-serial_echo "=== zaurus-refresh bootstrap ($FLAVOR, kexec into stage 2) ==="
-serial_echo ""
-
+say "looking for $MEDIUM ($FSTYPE) on: $DEVICES"
 mkdir -p /mnt/boot
 
 BOOTDEV=
 tries=0
-while test $tries -lt 60; do
+while test $tries -lt 30; do
 	for d in $DEVICES; do
-		if test -b "$d" && mount -t "$FSTYPE" "$d" /mnt/boot 2>/dev/null; then
+		test -b "$d" || continue
+		say "trying $d"
+		if mount -t "$FSTYPE" "$d" /mnt/boot 2>&1; then
 			BOOTDEV="$d"
 			break
 		fi
 	done
 	test -n "$BOOTDEV" && break
 	tries=$((tries + 1))
+	test $tries = 1 && say "no device yet, waiting up to 30s"
 	sleep 1
 done
 
 if test -z "$BOOTDEV"; then
-	console_fallback
-	serial_echo "$FLAVOR bootstrap: nothing mountable on $MEDIUM"
-	echo "reinstall from the $MEDIUM_MENU recovery entry, or flash the flavor matching your medium"
-	exec setsid cttyhack /bin/ash -l
+	say "block devices present:"
+	say "$(ls -l /dev/mmcblk* /dev/sd* /dev/hd* /dev/mtdblock* 2>/dev/null)"
+	say "partitions:"
+	say "$(cat /proc/partitions 2>/dev/null)"
+	rescue "nothing mountable on $MEDIUM"
 fi
 
-serial_echo "booting from $BOOTDEV ($FSTYPE)"
+say "mounted $BOOTDEV on /mnt/boot"
+say "$(ls -l /mnt/boot/$PAYLOAD_DIR 2>&1)"
 
 KERNEL=/mnt/boot/$PAYLOAD_DIR/zImage-full
 ROOTIMG=$PAYLOAD_DIR/piko-root.img
-APPEND="console=tty0 quiet"
+APPEND="console=ttyS0,115200 console=tty0 loglevel=8"
 
 BOOTCFG=/mnt/boot/$PAYLOAD_DIR/piko-boot.cfg
 if test -f "$BOOTCFG"; then
-	serial_echo "reading $PAYLOAD_DIR/piko-boot.cfg"
+	say "reading $PAYLOAD_DIR/piko-boot.cfg"
 	while read -r key value; do
 		case "$key" in
 		kernel) KERNEL=/mnt/boot/$value ;;
@@ -108,61 +125,28 @@ if test -f "$BOOTCFG"; then
 	done < "$BOOTCFG"
 fi
 
+test -f "$KERNEL" || rescue "no $PAYLOAD_DIR/zImage-full on $BOOTDEV"
+
 if test "$FLAVOR" = nand; then
 	PIKOROOT="mtd:$BOOTDEV"
 else
+	test -f "/mnt/boot/$ROOTIMG" || rescue "no $ROOTIMG on $BOOTDEV"
 	PIKOROOT="img:$BOOTDEV:$ROOTIMG"
-fi
-
-LOG=/mnt/boot/piko-boot.log
-echo "=== boot $(date 2>/dev/null || echo unknown-time) ===" >> "$LOG" 2>/dev/null
-echo "fbsplash rc=$SPLASH_RC" >> "$LOG" 2>/dev/null
-if test -s /tmp/fbsplash.err; then
-	echo "fbsplash stderr:" >> "$LOG" 2>/dev/null
-	cat /tmp/fbsplash.err >> "$LOG" 2>/dev/null
-fi
-
-tries=0
-while test $tries -lt 60; do
-	test -f "$KERNEL" && break
-	tries=$((tries + 1))
-	sleep 1
-done
-
-if test ! -f "$KERNEL"; then
-	console_fallback
-	serial_echo "no $PAYLOAD_DIR/zImage-full on $BOOTDEV"
-	exec setsid cttyhack /bin/ash -l
-fi
-
-if test "$FLAVOR" != nand && test ! -f "/mnt/boot/$ROOTIMG"; then
-	console_fallback
-	serial_echo "no $ROOTIMG on $BOOTDEV"
-	exec setsid cttyhack /bin/ash -l
 fi
 
 KEXEC=/mnt/boot/$PAYLOAD_DIR/kexec
 test -x "$KEXEC" || KEXEC=/mnt/boot/sbin/kexec
+test -x "$KEXEC" || rescue "no kexec binary at $PAYLOAD_DIR/kexec or /sbin/kexec"
 
-echo "--- kexec -d -l output ---"
-"$KEXEC" -d -l "$KERNEL" \
-	--atags \
-	--append="$APPEND pikoroot=$PIKOROOT" \
-	> /tmp/kexec-l.out 2>&1
-KEXEC_LOAD_RC=$?
-cat /tmp/kexec-l.out
-cat /tmp/kexec-l.out >> "$LOG" 2>/dev/null
-echo "--- kexec -l exit code: $KEXEC_LOAD_RC ---"
-echo "kexec -l exit code: $KEXEC_LOAD_RC" >> "$LOG" 2>/dev/null
+say "kernel:  $KERNEL ($(wc -c < "$KERNEL" 2>/dev/null) bytes)"
+say "pikoroot: $PIKOROOT"
+say "kexec:   $KEXEC"
 
-if test "$KEXEC_LOAD_RC" -eq 0; then
-	echo "kexec -l ok, jumping to stage 2..."
-	sync
-	exec "$KEXEC" -e
-fi
+run "$KEXEC" -d -l "$KERNEL" --atags --append="$APPEND pikoroot=$PIKOROOT" \
+	|| rescue "kexec -l failed"
 
-console_fallback
-echo "kexec load failed -- dropping to bootstrap shell"
-echo "kexec load failed" >> "$LOG" 2>/dev/null
+say "kexec -l ok, syncing and jumping to stage 2"
+sync
 
-exec setsid cttyhack /bin/ash -l
+"$KEXEC" -e 2>&1
+rescue "kexec -e returned instead of booting stage 2"
