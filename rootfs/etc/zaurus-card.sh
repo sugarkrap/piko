@@ -1,6 +1,6 @@
 
-. /etc/piko-media
-ZAURUS_CARD_ROOT="$PIKO_CARD_ROOT"
+test -r /etc/piko-media && . /etc/piko-media
+ZAURUS_CARD_ROOT="${PIKO_CARD_ROOT:-/mnt/card/.zaurus}"
 export ZAURUS_CARD_ROOT
 
 case ":$PATH:" in

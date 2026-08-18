@@ -1,20 +1,21 @@
 #!/bin/sh
 set -eu
 
-. /etc/piko-media
-CARD_ROOT="$PIKO_CARD_ROOT"
+test -r /etc/piko-media && . /etc/piko-media
+CARD_MNT="${PIKO_CARD_MNT:-/mnt/card}"
+CARD_ROOT="${PIKO_CARD_ROOT:-$CARD_MNT/.zaurus}"
 CARD_BIN="$CARD_ROOT/usr/bin"
 
-if ! grep -q " $PIKO_CARD_MNT " /proc/mounts 2>/dev/null; then
-    echo "No SD card mounted at $PIKO_CARD_MNT."
+if ! grep -q " $CARD_MNT " /proc/mounts 2>/dev/null; then
+    echo "No SD card mounted at $CARD_MNT."
     echo
-    echo "If a card IS inserted, mount it with:  mount $PIKO_CARD_MNT"
+    echo "If a card IS inserted, mount it with:  mount $CARD_MNT"
     echo "(Corgi's card-detect does not reliably signal insertion, so the"
     echo " automatic mdev hook sometimes misses it -- see /usr/sbin/sdcard.)"
     exit 0
 fi
 
-echo "SD card mounted at $PIKO_CARD_MNT."
+echo "SD card mounted at $CARD_MNT."
 
 if [ ! -d "$CARD_BIN" ]; then
     echo "No software directory on this card ($CARD_BIN not present)."

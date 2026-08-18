@@ -2,9 +2,9 @@
 
 OPKG=/usr/bin/opkg
 CONF=/etc/opkg/opkg.conf
-. /etc/piko-media
-CARD_ROOT="$PIKO_CARD_ROOT"
-CARD_MNT="$PIKO_CARD_MNT"
+test -r /etc/piko-media && . /etc/piko-media
+CARD_ROOT="${PIKO_CARD_ROOT:-/mnt/card/.zaurus}"
+CARD_MNT="${PIKO_CARD_MNT:-/mnt/card}"
 
 if [ ! -x "$OPKG" ]; then
     echo "pkgdel: $OPKG is missing -- opkg is not installed on this device."
