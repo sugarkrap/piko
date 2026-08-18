@@ -21,6 +21,16 @@ jobs:
           lfs: true
           submodules: recursive
 
+      - name: compute cache keys
+        run: |
+          modules_hash="$(find modules -path 'modules/initramfs*' -prune -o -type f -print0 \
+              | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-40)"
+          echo "MODULES_HASH=$modules_hash" >> "$GITHUB_ENV"
+          stage_hash="$( { git submodule status --recursive; \
+              find tools/userspace tools/toolchain -type f -print0 | sort -z | xargs -0 sha256sum; \
+            } | sha256sum | cut -c1-40)"
+          echo "STAGE_HASH=$stage_hash" >> "$GITHUB_ENV"
+
       - name: install build deps
         run: |
           sudo apt-get update -qq
@@ -53,13 +63,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel-src-bootstrap
-          key: kernel-src-bootstrap-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4-minimal', 'modules/**', 'drivers/**', 'tools/kernel/setup-kernel-src.sh') }}
+          key: kernel-src-bootstrap-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4-minimal', 'tools/kernel/setup-kernel-src.sh') }}-${{ env.MODULES_HASH }}
 
       - name: cache stage-2 kernel-src
         uses: actions/cache@v4
         with:
           path: kernel-src
-          key: kernel-src-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4', 'modules/**', 'drivers/**', 'tools/kernel/setup-kernel-src.sh') }}
+          key: kernel-src-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4', 'tools/kernel/setup-kernel-src.sh') }}-${{ env.MODULES_HASH }}
+
+      - name: cache the cross-built x11 and third-party prefix
+        uses: actions/cache@v4
+        with:
+          path: userspace/stage-target
+          key: stage-target-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
 
       - name: cache third-party x11 source downloads
         uses: actions/cache@v4
