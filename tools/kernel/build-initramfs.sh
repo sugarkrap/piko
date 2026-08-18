@@ -48,7 +48,7 @@ fi
 
 if [ ! -f "$BUSYBOX_TARBALL" ]; then
     echo "==> downloading $BUSYBOX_URL"
-    curl -fL -o "$BUSYBOX_TARBALL.partial" "$BUSYBOX_URL"
+    curl -fL --retry 6 --retry-delay 5 --retry-all-errors -C - -o "$BUSYBOX_TARBALL.partial" "$BUSYBOX_URL"
     mv "$BUSYBOX_TARBALL.partial" "$BUSYBOX_TARBALL"
 else
     echo "==> reusing cached $BUSYBOX_TARBALL"
