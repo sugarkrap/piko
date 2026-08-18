@@ -135,8 +135,8 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           for flavor in nand sd; do
               sz="$(stat -c '%s' "flash/zImage-$flavor")"
-              printf '%-5s %8s bytes  %3d%%\n' \
-                  "$flavor" "$sz" "$((sz * 100 / 1294336))" >> "$GITHUB_STEP_SUMMARY"
+              printf '%-5s %8s bytes  %3d%% of slot\n' \
+                  "$flavor" "$sz" "$((sz * 100 / 1294336))" | tee -a "$GITHUB_STEP_SUMMARY"
           done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "### pikostore ipk" >> "$GITHUB_STEP_SUMMARY"
