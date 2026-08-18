@@ -51,6 +51,7 @@ done
 
 WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
 $SD_MODULES
+$NAND_MODULES
 $CPUFREQ_MODULES"
 for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"

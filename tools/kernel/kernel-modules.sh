@@ -30,6 +30,11 @@ kernel/lib/crypto/libarc4.ko
 
 SD_MODULES=""
 
+NAND_MODULES="
+kernel/drivers/mtd/parsers/sharpslpart.ko
+kernel/drivers/mtd/nand/raw/sharpsl.ko
+"
+
 CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
 "
