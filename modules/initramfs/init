@@ -12,19 +12,8 @@ say() {
 	echo "$*" > /dev/ttyS0 2>/dev/null
 }
 
-run() {
-	say "+ $*"
-	"$@" 2>&1
-	rc=$?
-	test $rc -eq 0 || say "  rc=$rc"
-	return $rc
-}
-
 rescue() {
-	say ""
-	say "=== bootstrap stopped: $* ==="
-	say "=== dropping to a shell, the board stays up ==="
-	say ""
+	say "bootstrap stopped: $*"
 	while true; do
 		setsid cttyhack /bin/ash -l
 		sleep 1
@@ -38,37 +27,27 @@ export HOME=/root
 FLAVOR=nand
 test -f /piko-flavor && FLAVOR=$(cat /piko-flavor)
 
-say ""
-say "=== zaurus-refresh bootstrap ($FLAVOR) ==="
-say "kernel: $(uname -r)"
-say "cmdline: $(cat /proc/cmdline 2>/dev/null)"
-
 for bl in /sys/class/backlight/*/; do
 	if test -f "$bl/max_brightness"; then
 		cat "$bl/max_brightness" > "$bl/brightness" 2>/dev/null
 		echo 0 > "$bl/bl_power" 2>/dev/null
-		say "backlight: $bl -> $(cat "$bl/brightness" 2>/dev/null)"
 	fi
 done
 
-/bin/fbsplash -s /splash.ppm 2>/tmp/fbsplash.err
-say "fbsplash rc=$? $(cat /tmp/fbsplash.err 2>/dev/null)"
+/bin/fbsplash -s /splash.ppm 2>/dev/null
 
 case "$FLAVOR" in
 nand)
-	MEDIUM="NAND"
 	DEVICES="/dev/mtdblock2"
 	FSTYPE=jffs2
 	PAYLOAD_DIR=boot
 	;;
 sd)
-	MEDIUM="SD"
 	DEVICES="/dev/mmcblk0p1 /dev/mmcblk0"
 	FSTYPE=vfat
 	PAYLOAD_DIR=.zaurus
 	;;
 cf)
-	MEDIUM="CF"
 	DEVICES="/dev/sda1 /dev/sda /dev/hda1 /dev/hda"
 	FSTYPE=vfat
 	PAYLOAD_DIR=.zaurus
@@ -78,44 +57,33 @@ cf)
 	;;
 esac
 
-say "looking for $MEDIUM ($FSTYPE) on: $DEVICES"
 mkdir -p /mnt/boot
 
 BOOTDEV=
 for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
 	for d in $DEVICES; do
 		test -b "$d" || continue
-		say "trying $d"
-		if mount -t "$FSTYPE" "$d" /mnt/boot 2>&1; then
+		if mount -t "$FSTYPE" "$d" /mnt/boot 2>/dev/null; then
 			BOOTDEV="$d"
 			break
 		fi
 	done
 	test -n "$BOOTDEV" && break
-	test "$try" = 1 && say "no device yet, waiting up to 30s"
 	sleep 1
 done
 
 if test -z "$BOOTDEV"; then
-	say "block devices present:"
-	say "$(ls -l /dev/mmcblk* /dev/sd* /dev/hd* /dev/mtdblock* 2>/dev/null)"
-	say "partitions:"
 	say "$(cat /proc/partitions 2>/dev/null)"
-	say "kernel messages:"
-	say "$(dmesg | tail -40)"
-	rescue "nothing mountable on $MEDIUM"
+	say "$(dmesg | tail -20)"
+	rescue "no $FSTYPE on $DEVICES"
 fi
-
-say "mounted $BOOTDEV on /mnt/boot"
-say "$(ls -l /mnt/boot/$PAYLOAD_DIR 2>&1)"
 
 KERNEL=/mnt/boot/$PAYLOAD_DIR/zImage-full
 ROOTIMG=$PAYLOAD_DIR/piko-root.img
-APPEND="console=ttyS0,115200 console=tty0 loglevel=8"
+APPEND="console=ttyS0,115200 console=tty0"
 
 BOOTCFG=/mnt/boot/$PAYLOAD_DIR/piko-boot.cfg
 if test -f "$BOOTCFG"; then
-	say "reading $PAYLOAD_DIR/piko-boot.cfg"
 	while read -r key value; do
 		case "$key" in
 		kernel) KERNEL=/mnt/boot/$value ;;
@@ -136,17 +104,11 @@ fi
 
 KEXEC=/mnt/boot/$PAYLOAD_DIR/kexec
 test -x "$KEXEC" || KEXEC=/mnt/boot/sbin/kexec
-test -x "$KEXEC" || rescue "no kexec binary at $PAYLOAD_DIR/kexec or /sbin/kexec"
+test -x "$KEXEC" || rescue "no kexec at $PAYLOAD_DIR/kexec or /sbin/kexec"
 
-say "kernel:  $KERNEL ($(wc -c < "$KERNEL" 2>/dev/null) bytes)"
-say "pikoroot: $PIKOROOT"
-say "kexec:   $KEXEC"
-
-run "$KEXEC" -d -l "$KERNEL" --atags --append="$APPEND pikoroot=$PIKOROOT" \
+"$KEXEC" -l "$KERNEL" --atags --append="$APPEND pikoroot=$PIKOROOT" \
 	|| rescue "kexec -l failed"
 
-say "kexec -l ok, syncing and jumping to stage 2"
 sync
-
-"$KEXEC" -e 2>&1
+"$KEXEC" -e
 rescue "kexec -e returned instead of booting stage 2"
