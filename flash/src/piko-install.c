@@ -154,6 +154,10 @@ static char cfg_copy_dst[MAX_CFG_COPIES][CFG_PATH_LEN];
 static int  cfg_copy_count = 0;
 static char cfg_medium[CFG_PATH_LEN];
 
+#define MAX_CFG_REMOVES 8
+static char cfg_removes[MAX_CFG_REMOVES][CFG_PATH_LEN];
+static int  cfg_remove_count = 0;
+
 static void skip_ws(const char **p, const char *end)
 {
     while (*p < end && (**p == ' ' || **p == '\t')) (*p)++;
@@ -233,6 +237,16 @@ static void parse_config(const char *buf, long len)
             lp += 6;
             if (parse_str_field(&lp, nl, cfg_medium, CFG_PATH_LEN) != 0)
                 puts_("Piko Install: warning: malformed medium line in " CFG_FILE "\n");
+        } else if (lp < nl && *lp != '#' && startswith(lp, nl, "remove")) {
+            lp += 6;
+            if (cfg_remove_count < MAX_CFG_REMOVES) {
+                if (parse_str_field(&lp, nl, cfg_removes[cfg_remove_count], CFG_PATH_LEN) == 0)
+                    cfg_remove_count++;
+                else
+                    puts_("Piko Install: warning: malformed remove line in " CFG_FILE "\n");
+            } else {
+                puts_("Piko Install: warning: too many removes in " CFG_FILE ", ignoring extras\n");
+            }
         } else if (lp < nl && *lp != '#' && startswith(lp, nl, "copy")) {
             lp += 4;
             if (cfg_copy_count < MAX_CFG_COPIES) {
@@ -1185,6 +1199,14 @@ int main(int argc, char *argv[])
         putnum(failures);
         puts_(" failure(s). Check piko-log.txt.\n");
         _exit_(1);
+    }
+
+    for (i = 0; i < cfg_remove_count; i++) {
+        if (sys_unlink((long)cfg_removes[i]) == 0) {
+            puts_("Piko Install: removed ");
+            puts_(cfg_removes[i]);
+            puts_("\n");
+        }
     }
 
     puts_("Piko Install: ALL TARGETS FLASHED AND VERIFIED. Power off and reboot.\n");
