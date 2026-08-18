@@ -101,6 +101,8 @@ fi
 umount /sys 2>/dev/null
 umount /proc 2>/dev/null
 
+test -x /sbin/switch_root || bail "no switch_root applet in the initramfs"
+mountpoint -q /newroot || bail "/newroot is not a mount point, switch_root would refuse"
+
 serial_echo "stage 2: handing over to $REALINIT"
-switch_root /newroot "$REALINIT"
-bail "switch_root failed, $REALINIT did not take over"
+exec switch_root /newroot "$REALINIT"
