@@ -82,9 +82,9 @@ esac
 
 serial_echo "stage 2: root mounted, $(ls /newroot | tr '\n' ' ')"
 
-for n in console null tty; do
-	test -e "/newroot/dev/$n" || serial_echo "stage 2: /dev/$n missing in the root image"
-done
+mkdir -p /newroot/dev
+mount -t devtmpfs devtmpfs /newroot/dev \
+	|| serial_echo "stage 2: no devtmpfs on /newroot/dev, init will have no console"
 
 REALINIT=
 for c in /sbin/init /init /bin/init; do

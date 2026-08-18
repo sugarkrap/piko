@@ -286,20 +286,6 @@ sudo "$REPO/tools/scripts/jffs2-mount-extract.sh" "$BASE_JFFS2" "$MERGED"
 echo "==> overlaying kernel + modules + rootfs/ on top of the unpacked base"
 cp -a "$OVERLAY/." "$MERGED/"
 
-echo "==> verifying the merged tree carries the device nodes init needs"
-devmissing=0
-for n in console null tty zero; do
-    if [ ! -c "$MERGED/dev/$n" ]; then
-        echo "build-rootfs: $MERGED/dev/$n is not a character device" >&2
-        devmissing=1
-    fi
-done
-if [ "$devmissing" -ne 0 ]; then
-    echo "  without /dev/console the kernel gives init no stdio and every boot message vanishes" >&2
-    exit 1
-fi
-echo "    /dev/console, null, tty and zero are present"
-
 echo "==> verifying the merged tree provides what its own boot scripts call"
 REFS="$(cat "$REPO/rootfs/etc/init.d/rcS" "$REPO/rootfs/etc/init.d/xsession" \
              "$REPO/rootfs/etc/mdev.conf" "$REPO/rootfs/etc/inittab" \
