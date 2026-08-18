@@ -62,10 +62,8 @@ img)
 	;;
 esac
 
-tries=0
-while test $tries -lt 60; do
+for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
 	test -b "$wait_for" && break
-	tries=$((tries + 1))
 	sleep 1
 done
 test -b "$wait_for" || bail "$wait_for never appeared"
@@ -93,7 +91,7 @@ test -n "$REALINIT" || bail "no /sbin/init or /init inside the root filesystem"
 
 if test "$KIND" = img; then
 	mkdir -p /newroot/media/boot
-	mount --move /media /newroot/media/boot 2>/dev/null
+	mount -t vfat "$DEV" /newroot/media/boot || serial_echo "stage 2: $DEV not remounted under /media/boot"
 fi
 
 umount /sys 2>/dev/null

@@ -82,8 +82,7 @@ say "looking for $MEDIUM ($FSTYPE) on: $DEVICES"
 mkdir -p /mnt/boot
 
 BOOTDEV=
-tries=0
-while test $tries -lt 30; do
+for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
 	for d in $DEVICES; do
 		test -b "$d" || continue
 		say "trying $d"
@@ -93,8 +92,7 @@ while test $tries -lt 30; do
 		fi
 	done
 	test -n "$BOOTDEV" && break
-	tries=$((tries + 1))
-	test $tries = 1 && say "no device yet, waiting up to 30s"
+	test "$try" = 1 && say "no device yet, waiting up to 30s"
 	sleep 1
 done
 
