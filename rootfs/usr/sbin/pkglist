@@ -26,7 +26,7 @@ if [ $# -gt 0 ]; then
     exit $?
 fi
 
-echo "=== installed on the NAND root ==="
+echo "=== installed on the root ==="
 "$OPKG" --conf "$CONF" list-installed 2>/dev/null | sed 's/^/  /'
 
 echo
