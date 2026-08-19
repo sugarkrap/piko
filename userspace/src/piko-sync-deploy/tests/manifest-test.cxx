@@ -1,4 +1,3 @@
-
 #include "../manifest.h"
 
 #include <stdio.h>
@@ -265,11 +264,27 @@ static void test_kernel_only_stops_after_kernel()
 
     std::vector<Step> steps;
     check(build_plan(sections, which, ctx, steps, error), "plan builds: " + error);
-    check(steps.size() == 1, "exactly one step");
-    if (steps.size() == 1) {
-        check(steps[0].type == STEP_PUT_FILE, "it's a put_file");
-        check_str(steps[0].remote_path, "/boot/zImage-full", "kernel destination");
-        check_str(steps[0].local_path, ctx.kernel_dir + "/arch/arm/boot/zImage", "kernel source");
+    check(steps.size() == 2, "a mkdir and a put_file");
+    if (steps.size() == 2) {
+        check(steps[0].type == STEP_MKDIR, "the boot directory is created first");
+        check_str(steps[0].remote_path, "/boot", "boot directory");
+        check(steps[1].type == STEP_PUT_FILE, "it's a put_file");
+        check_str(steps[1].remote_path, "/boot/zImage-full", "kernel destination defaults to nand");
+        check_str(steps[1].local_path, ctx.kernel_dir + "/arch/arm/boot/zImage", "kernel source");
+    }
+
+    DeployContext sd = make_fixture_context();
+    seed_minimal_repo(sd);
+    sd.flags.kernel_only = true;
+    sd.piko_kernel = "/media/boot/.zaurus/zImage-full";
+    sd.piko_card_root = "/mnt/card/.zaurus";
+    std::vector<Step> sd_steps;
+    check(build_plan(sections, which, sd, sd_steps, error), "sd plan builds: " + error);
+    check(sd_steps.size() == 2, "sd plan is a mkdir and a put_file");
+    if (sd_steps.size() == 2) {
+        check_str(sd_steps[0].remote_path, "/media/boot/.zaurus", "sd boot directory");
+        check_str(sd_steps[1].remote_path, "/media/boot/.zaurus/zImage-full",
+                  "kernel follows the medium the device reported");
     }
 }
 

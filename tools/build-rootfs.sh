@@ -24,15 +24,11 @@ fi
 
 if [ -n "${ROOT_IMG_OUT:-}" ] && ! command -v fakeroot >/dev/null 2>&1; then
     echo "build-rootfs: fakeroot not found (apt install fakeroot)" >&2
-    echo "  mke2fs -d records the uid of whoever staged the tree, so without it every" >&2
-    echo "  file in the image belongs to the build account instead of root, and dropbear" >&2
-    echo "  refuses /root/.ssh/authorized_keys on the installed board" >&2
     exit 1
 fi
 
 if [ ! -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
-    echo "build-rootfs: $KERNEL_DIR has no built zImage -- build it first:" >&2
-    echo "  cd $KERNEL_DIR && ARCH=arm CROSS_COMPILE=... make zImage modules" >&2
+    echo "build-rootfs: $KERNEL_DIR has no built zImage" >&2
     exit 1
 fi
 KVER="$(cat "$KERNEL_DIR/include/config/kernel.release" 2>/dev/null || true)"
@@ -44,9 +40,8 @@ fi
 if command -v git >/dev/null 2>&1 && [ -d "$REPO/.git" ]; then
     IGNORED="$(cd "$REPO" && git ls-files --others --ignored --exclude-standard rootfs/ 2>/dev/null || true)"
     if [ -n "$IGNORED" ]; then
-        echo "build-rootfs: these rootfs files are git-ignored, so a clean checkout would not have them:" >&2
+        echo "build-rootfs: these rootfs files are git-ignored:" >&2
         echo "$IGNORED" | sed 's/^/  /' >&2
-        echo "  add a !negation to .gitignore, or delete them" >&2
         exit 1
     fi
 fi
@@ -103,8 +98,7 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
 
     PIKO_SYNC_BIN="$REPO/userspace/src/piko-sync/piko-sync-server"
     if [ ! -f "$PIKO_SYNC_BIN" ]; then
-        echo "build-rootfs: build-piko-sync.sh reported success but there is no" >&2
-        echo "  $PIKO_SYNC_BIN -- refusing to ship a launcher with no binary" >&2
+        echo "build-rootfs: build-piko-sync.sh succeeded but there is no $PIKO_SYNC_BIN" >&2
         exit 1
     fi
     mkdir -p "$OVERLAY/usr/bin" "$OVERLAY/usr/share/applications" "$OVERLAY/usr/share/pixmaps"
@@ -141,7 +135,6 @@ $SSH_PAYLOAD_SERVER"
         rel="${rest%%:*}"
         if [ ! -f "$src" ]; then
             echo "build-rootfs: $SSH_STAGE exists but $src is missing" >&2
-            echo "  rerun tools/userspace/build-ssh.sh -- refusing to ship a half payload" >&2
             exit 1
         fi
         dst="$OVERLAY/$rel"
@@ -151,15 +144,12 @@ $SSH_PAYLOAD_SERVER"
         echo "    ssh payload: /$rel"
     done
 else
-    echo "build-rootfs: WARNING -- no $SSH_STAGE, this image will have no" >&2
-    echo "  scp/sftp-server. Run tools/userspace/build-ssh.sh first if that is not intended." >&2
+    echo "build-rootfs: WARNING -- no $SSH_STAGE, no scp/sftp-server in this image" >&2
 fi
 
 KEXEC_STAGE="${KEXEC_STAGE:-$REPO/userspace/stage-kexec}"
 if [ ! -f "$KEXEC_STAGE/sbin/kexec" ]; then
     echo "build-rootfs: no $KEXEC_STAGE/sbin/kexec -- run tools/userspace/build-kexec.sh first" >&2
-    echo "  the bootstrap initramfs waits forever for /sbin/kexec on this image; refusing" >&2
-    echo "  to ship one without it" >&2
     exit 1
 fi
 mkdir -p "$OVERLAY/sbin"
@@ -185,8 +175,6 @@ for entry in $SRC_TOOLS; do
     rel="${entry#*:}"
     if [ ! -f "$src" ]; then
         echo "build-rootfs: missing $src -- run tools/userspace/build-userspace.sh first" >&2
-        echo "  rootfs/etc/init.d/rcS and rootfs/etc/mdev.conf silently skip these when absent," >&2
-        echo "  which ships a board with no swap/backlight/rotation/clock; refusing" >&2
         exit 1
     fi
     dst="$OVERLAY/$rel"
@@ -243,8 +231,7 @@ if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
     "$REPO/tools/userspace/build-phoneme.sh"
 fi
 if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
-    echo "build-rootfs: build-phoneme.sh reported success but there is no" >&2
-    echo "  $PHONEME_HOME/bin/runMidlet -- refusing to ship a J2ME-less image" >&2
+    echo "build-rootfs: build-phoneme.sh succeeded but there is no $PHONEME_HOME/bin/runMidlet" >&2
     exit 1
 fi
 mkdir -p "$OVERLAY/usr/local/lib/phoneme"
@@ -254,8 +241,6 @@ echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
 
 if [ ! -f "$OVERLAY/etc/zaurus/parts.cfg" ]; then
     echo "build-rootfs: rootfs/etc/zaurus/parts.cfg did not reach the overlay" >&2
-    echo "  without the software-part catalog matchbox-apprun refuses to launch" >&2
-    echo "  anything that declares X-Piko-Parts" >&2
     exit 1
 fi
 echo "    parts: /etc/zaurus/parts.cfg ($(grep -c . "$OVERLAY/etc/zaurus/parts.cfg") entries)"
@@ -273,8 +258,7 @@ if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
         fi
     done
 else
-    echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume will fail to" >&2
-    echo "  open the mixer (statically linked libasound still reads /usr/share/alsa/alsa.conf)" >&2
+    echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume gets no mixer" >&2
 fi
 
 OPKG_BIN="${OPKG_BIN:-$REPO/userspace/stage-target/usr/bin/opkg}"
@@ -313,8 +297,6 @@ for r in $REFS $DESKTOP_REFS; do
     refmissing=1
 done
 if [ "$refmissing" -ne 0 ]; then
-    echo "  these are all test -x / [ -x ] guarded, so the board would boot and silently" >&2
-    echo "  skip the feature instead of failing -- refusing to ship that" >&2
     exit 1
 fi
 echo "    every binary referenced by boot scripts and .desktop launchers is present"
@@ -326,8 +308,6 @@ for l in $(find "$MERGED/lib" "$MERGED/usr/lib" -type l -name '*.so*' 2>/dev/nul
     badlink=1
 done
 if [ "$badlink" -ne 0 ]; then
-    echo "  a self-referential or broken soname link makes every dependent binary fail" >&2
-    echo "  with a misleading \"not found\" -- refusing to ship that" >&2
     exit 1
 fi
 echo "    no dangling library symlinks"

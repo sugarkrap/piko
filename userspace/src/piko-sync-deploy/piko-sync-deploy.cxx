@@ -1,4 +1,3 @@
-
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -108,7 +107,7 @@ static bool recv_frame_blocking(int fd, FrameReader &reader, uint32_t &type, std
     }
 }
 
-static bool do_hello(int fd, FrameReader &reader, std::string &error)
+static bool do_hello(int fd, FrameReader &reader, std::string &error, HelloAckMsg *media = 0)
 {
     HelloMsg h;
     h.version = PROTO_VERSION;
@@ -124,11 +123,13 @@ static bool do_hello(int fd, FrameReader &reader, std::string &error)
         return false;
     }
     if (type != MSG_HELLO_ACK) { error = "unexpected reply to HELLO"; return false; }
-    HelloMsg ack;
-    if (!decode_hello(payload, ack) || ack.version != PROTO_VERSION) {
+    HelloAckMsg ack;
+    if (!decode_hello_ack(payload, ack) || ack.version != PROTO_VERSION) {
         error = "protocol version mismatch";
         return false;
     }
+    if (media)
+        *media = ack;
     return true;
 }
 
@@ -468,39 +469,43 @@ static std::vector<AdHocPut> g_ad_hoc_puts;
 static void usage()
 {
     fprintf(stderr,
-        "Usage: piko-sync-deploy [--adapter IFACE] [--kernel-only] [--no-userspace]\n"
-        "                   [--create-backup-files] [--replace-dropbear]\n"
-        "                   [--staging nand|sd|cf] [--dry-run] [--probe]\n"
-        "                   [--put LOCAL:REMOTE[:MODE] ...] [user@host]\n"
+        "Usage: piko-sync-deploy [OPTIONS] [user@host]\n"
         "\n"
-        "--put LOCAL:REMOTE[:MODE] ships exactly that one file to that one\n"
-        "absolute path, bypassing manifest.yaml entirely -- repeat --put for more\n"
-        "than one file in the same run. MODE is an octal permission string, e.g.\n"
-        "0755; omit it to keep LOCAL's own permission bits. Still goes through\n"
-        "the resilient PUT_OFFER protocol (resume, CRC verify, --staging,\n"
-        "--create-backup-files all apply), just without needing a manifest entry\n"
-        "or a full deploy plan for a one-off file.\n"
-        "\n"
-        "--staging chooses where piko-sync-server stages each file's .part while\n"
-        "it's being received -- NOT where it ends up (that's each file's own\n"
-        "destination, from manifest.yaml). Default sd: most deploy destinations\n"
-        "live on the ~68 MiB NAND root, so staging there too would risk the exact\n"
-        "ENOSPC problem chunked-deploy.sh's REMOTE_STAGE fix solved, just for\n"
-        "deploy instead of plain transfer. nand always works (/tmp); sd needs a\n"
-        "mounted card (/mnt/card/.zaurus/tmp, autocleaned by the ROM on boot); cf\n"
-        "is refused today -- real CF mounting does not exist in this ROM yet.\n"
-        "\n"
-        "--dry-run builds and prints the deploy plan (every put_file/mkdir/symlink/\n"
-        "run step, in order) without connecting to the device at all -- useful to\n"
-        "preview what a run would do, and needs no piko-sync-server open anywhere.\n"
-        "\n"
-        "--probe just connects and does the HELLO handshake, then exits 0 or 1 --\n"
-        "no manifest, no repo tree needed. build-and-deploy.sh uses this to fail\n"
-        "fast, before spending time building, if piko-sync-server isn't open on\n"
-        "the device.\n");
+        "  --adapter IFACE\n"
+        "  --kernel-only\n"
+        "  --no-userspace\n"
+        "  --create-backup-files\n"
+        "  --replace-dropbear\n"
+        "  --staging nand|sd|cf       stage .part files there (default sd)\n"
+        "  --dry-run                  print the plan, send nothing\n"
+        "  --probe                    handshake only, exit 0 or 1\n"
+        "  --put LOCAL:REMOTE[:MODE]  ship one file, repeatable\n");
 }
 
 static const int PROBE_ATTEMPTS = 4;
+
+static bool resolve_media(DeployContext &ctx, std::string &error)
+{
+    int fd = connect_blocking(error);
+    if (fd < 0)
+        return false;
+    FrameReader reader;
+    HelloAckMsg media;
+    bool ok = do_hello(fd, reader, error, &media);
+    close(fd);
+    if (!ok)
+        return false;
+    if (media.kernel.empty()) {
+        error = "the device reports no medium: its piko-sync-server predates the\n"
+                "media handshake, so the kernel would go to " + ctx.piko_kernel;
+        return false;
+    }
+    ctx.piko_kernel = media.kernel;
+    ctx.piko_boot_mnt = media.boot_mnt;
+    if (!media.card_mnt.empty()) ctx.piko_card_mnt = media.card_mnt;
+    if (!media.card_root.empty()) ctx.piko_card_root = media.card_root;
+    return true;
+}
 
 static int run_probe()
 {
@@ -520,13 +525,22 @@ static int run_probe()
         return 1;
     }
     FrameReader reader;
-    if (!do_hello(fd, reader, error)) {
+    HelloAckMsg media;
+    if (!do_hello(fd, reader, error, &media)) {
         fprintf(stderr, "FAILED: %s\n", error.c_str());
         close(fd);
         return 1;
     }
     close(fd);
     printf("%s:%d is reachable and speaking the piko-sync protocol.\n", g_host.c_str(), g_port);
+    if (media.kernel.empty()) {
+        printf("  it reports no medium -- an older server, deploys would assume nand\n");
+    } else {
+        printf("  kernel    %s\n", media.kernel.c_str());
+        printf("  boot mnt  %s\n", media.boot_mnt.empty() ? "(none)" : media.boot_mnt.c_str());
+        printf("  card mnt  %s\n", media.card_mnt.c_str());
+        printf("  card root %s\n", media.card_root.c_str());
+    }
     return 0;
 }
 
@@ -654,7 +668,6 @@ int main(int argc, char **argv)
     if (const char *xp = getenv("X11_PAYLOAD"))
         if (*xp) ctx.x11_payload = xp;
 
-
     std::string kver_path = ctx.kernel_dir + "/include/config/kernel.release";
     std::string kver_text;
     if (read_whole_file(kver_path, kver_text)) {
@@ -681,6 +694,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (!resolve_media(ctx, error)) {
+        if (!g_dry_run) {
+            fprintf(stderr, "piko-sync-deploy: %s\n", error.c_str());
+            return 1;
+        }
+        printf("(dry run: %s)\n", error.c_str());
+        printf("(dry run: showing %s, which is only where a nand root boots)\n",
+               ctx.piko_kernel.c_str());
+    } else {
+        printf("==> this device boots %s and keeps its card payload in %s\n",
+               ctx.piko_kernel.c_str(), ctx.piko_card_root.c_str());
+    }
+
     std::vector<std::string> which = select_sections(ctx.flags);
     std::vector<Step> plan;
     if (!build_plan(sections, which, ctx, plan, error)) {
@@ -699,7 +725,7 @@ int main(int argc, char **argv)
     const char *staging_name = g_staging == STAGE_SD ? "sd" : g_staging == STAGE_CF ? "cf" : "nand";
 
     if (g_dry_run) {
-        printf("%zu steps (dry run -- not connecting to %s:%d, staging=%s)\n",
+        printf("%zu steps (dry run -- nothing is sent to %s:%d, staging=%s)\n",
                plan.size(), g_host.c_str(), g_port, staging_name);
         printf("(MPlayer/SDL's card-mount-verified steps need a live connection to\n"
                " compute and are not shown here -- see append_mplayer_and_sdl_steps)\n\n");

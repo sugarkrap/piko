@@ -1,51 +1,11 @@
-# piko-sync-deploy's manifest -- the file list that used to live inline in
-# tools/chunked-deploy.sh, now data instead of shell control flow so it can
-# be edited without touching (or recompiling) any code. Parsed by
-# yaml_lite.h into sections; manifest.cxx decides which sections run for a
-# given set of CLI flags and executes each section's entries in order.
-#
-# ${VAR} placeholders are substituted by manifest.cxx before use -- REPO,
-# KERNEL_DIR, KVER, SSH_STAGE, ALSA_STAGE, MPLAYER_STAGE, SDL_STAGE, TCROOT
-# are the same values chunked-deploy.sh computes today.
-#
-# Entry fields, all optional except the ones a `type` needs to do anything:
-#   type       put_file | put_tree_from_list | put_tree_from_dir | mkdir |
-#              symlink | run  (see manifest.h for exactly what each does)
-#   mode       octal permission string, e.g. "0755" (put_* only)
-#   policy     always (default) | if_missing -- if_missing leaves an
-#              existing destination alone regardless of content, matching
-#              /etc/TZ and touchscreen.cfg's current behavior
-#   backup     always -- copies the existing destination aside before
-#              overwriting even when --create-backup-files was not passed.
-#              Only dropbear uses this; everything else's backup follows
-#              the CLI flag.
-#   if_exists  skip this entry if the given local path does not exist --
-#              chunked-deploy.sh's "only if built" guards (brightd, mhz,
-#              flipd, cardswap, pkillx, kill, and the opkg/ALSA/SDL/SSH
-#              staged trees)
-#   if_flag    skip this entry unless the named CLI flag was passed
-#              (only "replace_dropbear" today)
-#
-# What's deliberately NOT here, and why: MPlayer's card-only destination
-# (verified SD mount, not just "assumed"), the ALSA/SDL/MPlayer preflight
-# free-space check, SDL's version-suffixed .so (glob-resolved), and the
-# whole X11/Matchbox payload (extracted from the tar
-# tools/userspace/build-matchbox-payload.sh still builds, then sent file-by-file) are
-# genuinely dynamic -- computed in manifest.cxx, not static data. See its
-# header comment.
-
 kernel:
+  - type: mkdir
+    remote: "${PIKO_BOOT_DIR}"
   - type: put_file
     local: "${KERNEL_DIR}/arch/arm/boot/zImage"
-    remote: /boot/zImage-full
+    remote: "${PIKO_KERNEL}"
     mode: "0644"
 
-# The module lists themselves are NOT duplicated here -- they already have
-# exactly one source of truth, tools/kernel/kernel-modules.sh, shared with the
-# offline update-package and mtd3 image builders. Re-listing them a fourth
-# time here is exactly the staleness risk that file's own header warns
-# about. manifest.cxx reads AUDIO_MODULES/WIFI_MODULES/SD_MODULES from it
-# directly and expands each into a put_file step.
 sound_modules:
   - type: mkdir
     remote: "/lib/modules/${KVER}/zaurus-audio"
@@ -269,11 +229,6 @@ ssh_payload:
     remote: /usr/bin/dropbearkey
     mode: "0755"
     if_exists: "${SSH_STAGE}"
-  # dropbear itself is opt-in (--replace-dropbear) and always backed up
-  # first regardless of --create-backup-files -- it is the one binary
-  # that can strand this board with no serial console and no USB.
-  # The existing copy lands at /usr/sbin/dropbear.bak; the
-  # new one takes effect on the next reboot.
   - type: put_file
     if_flag: replace_dropbear
     local: "${SSH_STAGE}/usr/sbin/dropbear"
@@ -343,10 +298,6 @@ panel_actions:
     mode: "0755"
     if_exists: "${REPO}/userspace/src/pkillx"
 
-# ALSA + the static bootstrap libs are static data; MPlayer's destination
-# (card-only, verified-mount) and SDL's version-suffixed .so are computed
-# in manifest.cxx and injected into this section's plan at runtime -- see
-# this file's header.
 userspace_media:
   - type: mkdir
     remote: /usr/share/alsa/cards
@@ -439,11 +390,6 @@ userspace_media:
     policy: if_missing
     if_exists: "${REPO}/rootfs/etc/piko/touchscreen.cfg"
 
-# Extracted from the tar tools/userspace/build-matchbox-payload.sh still assembles
-# (that script's own curation of exactly which runtime files belong is
-# unchanged and reused as-is) and sent file-by-file instead of unpacked
-# on-device -- see manifest.h's header for why that also removes the need
-# to stop the graphical session first.
 x11_matchbox:
   - type: put_tar_tree
     local_tar: "${X11_PAYLOAD}"

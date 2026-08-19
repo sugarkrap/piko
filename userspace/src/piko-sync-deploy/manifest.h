@@ -1,4 +1,3 @@
-
 #ifndef PIKO_SYNC_DEPLOY_MANIFEST_H
 #define PIKO_SYNC_DEPLOY_MANIFEST_H
 
@@ -38,7 +37,15 @@ struct DeployContext {
     std::string sdl_stage;
     std::string tcroot;
     std::string x11_payload;
+    std::string piko_kernel;
+    std::string piko_boot_mnt;
+    std::string piko_card_mnt;
+    std::string piko_card_root;
     DeployFlags flags;
+
+    DeployContext()
+        : piko_kernel("/boot/zImage-full"), piko_card_mnt("/mnt/card"),
+          piko_card_root("/mnt/card/.zaurus") {}
 
     std::string get(const std::string &name) const
     {
@@ -51,6 +58,15 @@ struct DeployContext {
         if (name == "SDL_STAGE") return sdl_stage;
         if (name == "TCROOT") return tcroot;
         if (name == "X11_PAYLOAD") return x11_payload;
+        if (name == "PIKO_KERNEL") return piko_kernel;
+        if (name == "PIKO_BOOT_DIR") {
+            size_t sl = piko_kernel.rfind('/');
+            return (sl == std::string::npos || sl == 0) ? std::string("/")
+                                                        : piko_kernel.substr(0, sl);
+        }
+        if (name == "PIKO_BOOT_MNT") return piko_boot_mnt;
+        if (name == "PIKO_CARD_MNT") return piko_card_mnt;
+        if (name == "PIKO_CARD_ROOT") return piko_card_root;
         return std::string();
     }
 };

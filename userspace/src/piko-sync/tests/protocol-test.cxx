@@ -1,4 +1,3 @@
-
 #include "../protocol.h"
 #include "../rom_detect.h"
 #include "../emulation_db.h"
@@ -520,8 +519,6 @@ static void test_file_offer_dest_dir_optional()
     check(d.name == "shot.png" && d.total_size == 1234, "name/size survive");
     check(d.dest_dir == "/mnt/card/Docs", "dest_dir survives");
 
-    // An offer with no destination must encode exactly as it always did, so
-    // an older server still parses it.
     FileOfferMsg plain;
     plain.name = "shot.png"; plain.total_size = 1234;
     check(encode(plain).size() == 2 + 8 + 8, "no dest_dir means no extra bytes on the wire");
@@ -606,8 +603,43 @@ static void test_rom_detection()
     remove("/tmp/pst_cop.smc"); remove("/tmp/pst_zero.bin");
 }
 
+static void test_hello_ack_carries_the_medium()
+{
+    printf("hello ack: the medium round-trips, and an old ack still decodes\n");
+
+    HelloAckMsg a;
+    a.version = PROTO_VERSION;
+    a.kernel = "/media/boot/.zaurus/zImage-full";
+    a.boot_mnt = "/media/boot";
+    a.card_mnt = "/mnt/card";
+    a.card_root = "/mnt/card/.zaurus";
+    HelloAckMsg b;
+    check(decode_hello_ack(encode(a), b), "hello ack decodes");
+    check(b.version == PROTO_VERSION, "hello ack version");
+    check_str(b.kernel, a.kernel, "hello ack kernel");
+    check_str(b.boot_mnt, a.boot_mnt, "hello ack boot mount");
+    check_str(b.card_mnt, a.card_mnt, "hello ack card mount");
+    check_str(b.card_root, a.card_root, "hello ack card root");
+
+    HelloMsg old;
+    old.version = PROTO_VERSION;
+    HelloAckMsg from_old;
+    check(decode_hello_ack(encode(old), from_old), "a version-only ack still decodes");
+    check(from_old.version == PROTO_VERSION, "old ack version");
+    check(from_old.kernel.empty(), "an old server reports no medium");
+
+    HelloMsg new_seen_by_old;
+    check(decode_hello(encode(a), new_seen_by_old), "an old client ignores the extra fields");
+    check(new_seen_by_old.version == PROTO_VERSION, "old client still reads the version");
+
+    HelloAckMsg bare;
+    bare.version = PROTO_VERSION;
+    check(encode(bare).size() == 4, "no medium means no trailing bytes on the wire");
+}
+
 int main()
 {
+    test_hello_ack_carries_the_medium();
     test_message_roundtrips();
     test_deploy_message_roundtrips();
     test_decode_rejects_truncated();

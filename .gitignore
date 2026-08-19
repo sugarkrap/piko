@@ -110,6 +110,10 @@ userspace/stage-ssh/
 userspace/stage-kexec/
 userspace/src/MPlayer-*/
 userspace/stage-mplayer/
+userspace/src/curl-*/
+userspace/src/openssl-*/
+userspace/src/netsurf-all-*/
+userspace/src/xcb-util-*/
 userspace/src/SDL-*/
 userspace/src/SDL2-*/
 userspace/src/SDL_image-*/
@@ -138,6 +142,9 @@ userspace/src/cardswap
 userspace/src/zramswap
 userspace/src/piko-splash
 userspace/src/toasters
+userspace/src/pkillx
+userspace/src/untar
+userspace/src/vol
 userspace/src/xsha1-compat/*.o
 userspace/src/xsha1-compat/libmd.*
 

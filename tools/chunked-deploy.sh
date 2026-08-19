@@ -7,6 +7,7 @@ KERNEL_ONLY=0
 NO_USERSPACE=0
 CREATE_BACKUP_FILES=0
 REPLACE_DROPBEAR=0
+VERIFY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --adapter)
@@ -41,8 +42,20 @@ while [ $# -gt 0 ]; do
             REPLACE_DROPBEAR=1
             shift
             ;;
+        --verify)
+            VERIFY=1
+            shift
+            ;;
         --help|-h)
-            echo "Usage: tools/chunked-deploy.sh [--adapter IFACE] [--target user@host] [--kernel-only] [--no-userspace] [--create-backup-files] [--replace-dropbear] [user@host]"
+            echo "Usage: tools/chunked-deploy.sh [OPTIONS] [user@host]"
+            echo ""
+            echo "  --adapter IFACE"
+            echo "  --target user@host"
+            echo "  --kernel-only"
+            echo "  --no-userspace"
+            echo "  --create-backup-files"
+            echo "  --replace-dropbear"
+            echo "  --verify                re-hash on the device, ignore /var/lib/piko/deploy-manifest"
             exit 0
             ;;
         --*)
@@ -93,10 +106,7 @@ REMOTE_STAGE="/tmp/chunked-deploy-stage"
 LOCKFILE="/tmp/zaurus-chunked-deploy.lock"
 exec 9>"$LOCKFILE"
 if ! flock -n 9; then
-    echo "FAILED: another tools/chunked-deploy.sh appears to already be running" >&2
-    echo "        (lock held on $LOCKFILE) -- refusing to start a second," >&2
-    echo "        overlapping deploy against the same device. Confirm no" >&2
-    echo "        other instance is active before retrying." >&2
+    echo "FAILED: another deploy holds $LOCKFILE" >&2
     exit 1
 fi
 
@@ -106,7 +116,8 @@ trap cleanup EXIT
 ssh_do() {
     ssh_do_attempt=1
     while :; do
-        if ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1"; then
+        if ssh $SSH_OPTS -i "$KEY" "$TARGET" "$1" > "$STAGE/.ssh_do.out"; then
+            cat "$STAGE/.ssh_do.out"
             return 0
         fi
         if [ "$ssh_do_attempt" -ge "$MAX_ATTEMPTS" ]; then
@@ -138,6 +149,33 @@ remote_md5() {
     ssh_do "if [ -f '$1' ]; then set -- \$(/usr/bin/md5sum '$1'); echo \"\$1\"; else echo MISSING; fi"
 }
 
+DEPLOY_MANIFEST="${DEPLOY_MANIFEST:-/var/lib/piko/deploy-manifest}"
+MANIFEST_LOCAL="$STAGE/deploy-manifest"
+MANIFEST_DIRTY=0
+: > "$MANIFEST_LOCAL"
+
+manifest_lookup() {
+    awk -v p="$1" '$2 == p { print $1; exit }' "$MANIFEST_LOCAL" 2>/dev/null
+}
+
+manifest_record() {
+    awk -v p="$1" '$2 != p' "$MANIFEST_LOCAL" > "$MANIFEST_LOCAL.tmp" 2>/dev/null || : > "$MANIFEST_LOCAL.tmp"
+    mv "$MANIFEST_LOCAL.tmp" "$MANIFEST_LOCAL"
+    echo "$2 $1" >> "$MANIFEST_LOCAL"
+    MANIFEST_DIRTY=1
+}
+
+manifest_push() {
+    [ "$MANIFEST_DIRTY" -eq 1 ] || return 0
+    ssh_do "mkdir -p '$(dirname "$DEPLOY_MANIFEST")'"
+    if cat "$MANIFEST_LOCAL" | ssh $SSH_OPTS -i "$KEY" "$TARGET" "cat > '$DEPLOY_MANIFEST'"; then
+        echo "==> recorded $(wc -l < "$MANIFEST_LOCAL") hashes in $DEPLOY_MANIFEST"
+        MANIFEST_DIRTY=0
+    else
+        echo "==> could not write $DEPLOY_MANIFEST -- the next run will re-hash everything" >&2
+    fi
+}
+
 send_file() {
     local_path="$1"
     remote_path="$2"
@@ -146,12 +184,21 @@ send_file() {
     chunk_dir="$STAGE/$name.chunks"
     remote_chunk_dir="$REMOTE_STAGE/$name.chunks"
     file_attempt=1
+    wanted=""
 
     already="$(remote_size "$remote_path")"
     if [ "$already" = "$local_size" ]; then
+        if [ -n "$MD5SUM_LOCAL" ]; then
+            wanted="$(local_md5 "$local_path")"
+            if [ "$VERIFY" -eq 0 ] && [ "$(manifest_lookup "$remote_path")" = "$wanted" ]; then
+                echo "==> $name: unchanged since the last deploy ($local_size bytes), skipping"
+                return
+            fi
+        fi
         if [ "$HAVE_REMOTE_MD5" = 1 ] && [ -n "$MD5SUM_LOCAL" ]; then
-            if [ "$(remote_md5 "$remote_path")" = "$(local_md5 "$local_path")" ]; then
+            if [ "$(remote_md5 "$remote_path")" = "$wanted" ]; then
                 echo "==> $name: already deployed ($local_size bytes, md5 verified), skipping"
+                manifest_record "$remote_path" "$wanted"
                 return
             fi
             echo "==> $name: size matches but md5 differs, redeploying"
@@ -244,6 +291,8 @@ send_file() {
         "
         echo "==> $name: deployed to $remote_path"
     fi
+    [ -n "$MD5SUM_LOCAL" ] && manifest_record "$remote_path" "$(local_md5 "$local_path")"
+    return 0
 }
 
 echo "Target: $TARGET"
@@ -266,12 +315,22 @@ if ssh_do "grep -q ' $CARD_MNT ' /proc/mounts && echo yes || echo no" | grep -q 
     echo "==> staging transfers on the card ($REMOTE_STAGE)"
 else
     X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-/tmp/x11-payload.tar}"
-    echo "==> no card at $CARD_MNT -- staging transfers on the root filesystem ($REMOTE_STAGE)" >&2
-    echo "    (every file below is being written there too --" >&2
-    echo "    insert a card if a transfer fails with ENOSPC)" >&2
+    echo "==> no card at $CARD_MNT -- staging on the root ($REMOTE_STAGE)" >&2
 fi
 
 ssh_do "mkdir -p '$REMOTE_STAGE'"
+
+if [ "$VERIFY" -eq 1 ]; then
+    echo "==> --verify: re-hashing every destination, ignoring $DEPLOY_MANIFEST"
+else
+    ssh_do "cat '$DEPLOY_MANIFEST' 2>/dev/null || true" > "$MANIFEST_LOCAL"
+    manifest_lines="$(wc -l < "$MANIFEST_LOCAL")"
+    if [ "$manifest_lines" -gt 0 ]; then
+        echo "==> $DEPLOY_MANIFEST has $manifest_lines hashes from the last deploy"
+    else
+        echo "==> no $DEPLOY_MANIFEST yet -- this run hashes on the device and writes one"
+    fi
+fi
 
 MD5SUM_BIN="$REPO/userspace/src/md5sum"
 if [ -f "$MD5SUM_BIN" ] && [ -n "$MD5SUM_LOCAL" ]; then
@@ -291,6 +350,7 @@ send_file "$KERNEL_DIR/arch/arm/boot/zImage" "$KERNEL_DEST"
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> --kernel-only: skipping module/script/helper deployment"
     ssh_do "rm -rf '$REMOTE_STAGE'"
+    manifest_push
     echo "==> done (kernel only)"
     exit 0
 fi
@@ -438,10 +498,7 @@ usr/bin/dropbearkey:usr/bin/dropbearkey:755"
         ssh_do "if [ -f '$srv_dest' ]; then mv -f '$srv_dest' '$srv_dest.prev'; fi"
         send_file "$srv_src" "$srv_dest"
         ssh_do "chmod 0${srv_rest#*:} '$srv_dest'"
-        echo "    previous server kept at /usr/sbin/dropbear.prev"
-        echo "    takes effect on the next softreboot -- if SSH does not come"
-        echo "    back, log in on the device console and run:"
-        echo "      mv /usr/sbin/dropbear.prev /usr/sbin/dropbear"
+        echo "    old server at /usr/sbin/dropbear.prev, effective next boot"
     fi
 elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/userspace/build-ssh.sh)"
@@ -516,12 +573,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
 
     echo "==> userspace payload: needs ~${need_kb} KiB, device has ${avail_kb} KiB free on /"
     if [ "$avail_kb" -gt 0 ] && [ "$need_kb" -gt "$((avail_kb - 4096))" ]; then
-        echo "SKIPPING userspace payload: not enough free space." >&2
-        echo "  Leaving at least 4 MiB headroom on the root is deliberate -- a full" >&2
-        echo "  root is not something you can recover from over SSH on this board." >&2
-        echo "  Free space first, or stage MPlayer on the card instead:" >&2
-        echo "    ssh $TARGET 'mount $CARD_MNT'" >&2
-        echo "    ssh $TARGET 'cat > $CARD_MNT/mplayer' < $MPLAYER_STAGE/usr/bin/mplayer" >&2
+        echo "SKIPPING userspace payload: needs ${need_kb} KiB, ${avail_kb} KiB free, 4 MiB reserved" >&2
     else
         if [ -d "$ALSA_STAGE" ]; then
             ssh_do "mkdir -p /usr/share/alsa/cards /usr/share/alsa/pcm /usr/share/alsa/ctl /var/lib/alsa"
@@ -559,9 +611,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                     ln -sf libuClibc-1.0.54.so /lib/libc.so.1
                 "
             else
-                echo "==> WARNING: toolchain sysroot runtime libs missing under $TCROOT/lib" >&2
-                echo "    -- cannot bootstrap dynamic linking; SDL will only run if a" >&2
-                echo "    previous deploy already put ld-uClibc/libc.so on the device." >&2
+                echo "==> WARNING: no ld-uClibc/libc.so under $TCROOT/lib" >&2
             fi
             send_file "$SDL_STAGE/usr/lib/$SDL_SO_REAL" "/lib/$SDL_SO_REAL"
             ssh_do "ln -sf '$SDL_SO_REAL' /lib/libSDL-1.2.so.0"
@@ -604,10 +654,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                     send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
                     ssh_do "chmod 0755 '$MPLAYER_DEST'"
                 else
-                    echo "==> no card mounted at $CARD_MNT -- SKIPPING heavy apps (MPlayer)."
-                    echo "    Heavy software is card-only by design; the root has no"
-                    echo "    room for it. Insert a card and re-run, or set"
-                    echo "    MPLAYER_DEST=/usr/bin/mplayer to force it onto the root."
+                    echo "==> no card at $CARD_MNT -- SKIPPING MPlayer (set MPLAYER_DEST to force)"
                 fi
                 ;;
             *)
@@ -625,9 +672,7 @@ X11_PAYLOAD="${X11_PAYLOAD:-/tmp/matchbox-payload.tar}"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
     echo "==> X11/Matchbox payload ($(wc -c < "$X11_PAYLOAD") bytes)"
     if [ "$(ssh_do "if [ -x /usr/local/bin/untar ]; then echo 1; else echo 0; fi")" != "1" ]; then
-        echo "FAILED: /usr/local/bin/untar missing on the device." >&2
-        echo "Build it and push it first:" >&2
-        echo "  \$GCC -march=armv5te -O2 -static -o untar userspace/src/untar.c" >&2
+        echo "FAILED: no /usr/local/bin/untar on the device" >&2
         exit 1
     fi
     send_file "$X11_PAYLOAD" "$X11_PAYLOAD_REMOTE"
@@ -635,51 +680,12 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
     ssh_do "for p in \$(ps | grep -E 'matchbox|xev|toasters' | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "for p in \$(ps | grep Xfbdev | grep -v grep | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 2" || true
     ssh_do "/usr/local/bin/untar '$X11_PAYLOAD_REMOTE' / && rm -f '$X11_PAYLOAD_REMOTE'"
-    echo "==> X11/Matchbox stack unpacked"
-    echo "    (session stopped for the update; it restarts on reboot,"
-    echo "     or run: DISPLAY=:0 matchbox-session &)"
+    echo "==> X11/Matchbox stack unpacked, session restarts on reboot"
 elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no X11 payload at $X11_PAYLOAD -- skipping"
-    echo "    (build it with tools/userspace/build-matchbox-payload.sh)"
 fi
 
+manifest_push
+
 echo ""
-echo "All files deployed and size-verified. NOT rebooted yet."
-echo "Kernel panic fix + sound modules are staged at:"
-if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
-    echo "  $KERNEL_DEST (old copy at $KERNEL_DEST.bak)"
-else
-    echo "  $KERNEL_DEST (no .bak kept -- pass --create-backup-files for one)"
-fi
-echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
-echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
-echo "  /usr/sbin/bright, /usr/sbin/brightd (backlight; brightd starts from rcS)"
-echo "  /usr/sbin/flip, /usr/sbin/flipd     (screen rotation; flipd starts from rcS)"
-echo "  /usr/sbin/suspend, /usr/sbin/gototty, /usr/sbin/softreboot (panel menu actions)"
-if [ -x "$REPO/userspace/src/pkillx" ]; then
-    echo "  /usr/sbin/pkillx         (gototty needs it)"
-fi
-echo "  /usr/sbin/sdcard         (mdev hook: mounts the card, and its swapfile)"
-if [ -x "$REPO/userspace/src/vol" ]; then
-    echo "  /usr/sbin/vol            (volume: vol up / vol down / vol mute)"
-fi
-if [ -x "$REPO/userspace/src/cardswap" ]; then
-    echo "  /usr/sbin/cardswap       (256 MiB swap at $CARD_ROOT/swap)"
-fi
-if [ -x "$REPO/userspace/src/zramswap" ]; then
-    echo "  /usr/sbin/zramswap       (32 MiB compressed RAM swap; zramswap starts from rcS)"
-fi
-if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
-    echo "  /usr/bin/scp, /usr/libexec/sftp-server, /usr/bin/dbclient, /usr/bin/dropbearkey"
-    if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
-        echo "  /usr/sbin/dropbear       (old copy at /usr/sbin/dropbear.prev; new one runs after the next boot)"
-    fi
-fi
-if [ "$NO_USERSPACE" -eq 0 ] && [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
-    echo "  $MPLAYER_DEST + /usr/share/alsa + aplay/amixer/alsactl (if space allowed)"
-fi
-if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$SDL_STAGE/usr/lib" ]; then
-    echo "  /usr/lib/libSDL-1.2.so.0 + /usr/bin/sdltest + /usr/bin/pikalibrate (if staged)"
-fi
-echo ""
-echo "Reboot manually when ready: ssh -i $KEY $TARGET reboot"
+echo "deployed, not rebooted: ssh -i $KEY $TARGET reboot"

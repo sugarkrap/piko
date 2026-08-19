@@ -1,4 +1,3 @@
-
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Double_Window.H>
@@ -259,6 +258,33 @@ static bool write_desktop_file(const RomEntry &e, std::string &err)
     bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
     close(fd);
     if (!ok) { err = dpath + " is truncated"; return false; }
+    return true;
+}
+
+static bool piko_media(HelloAckMsg &out)
+{
+    FILE *f = popen(". /etc/piko-media 2>/dev/null || exit 1\n"
+                    "echo \"$PIKO_KERNEL\"\n"
+                    "echo \"$PIKO_BOOT_MNT\"\n"
+                    "echo \"$PIKO_CARD_MNT\"\n"
+                    "echo \"$PIKO_CARD_ROOT\"", "r");
+    if (!f)
+        return false;
+    std::string fields[4];
+    int got = 0;
+    char line[512];
+    while (got < 4 && fgets(line, sizeof(line), f)) {
+        size_t n = strlen(line);
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+            line[--n] = '\0';
+        fields[got++] = line;
+    }
+    if (pclose(f) != 0 || got < 4)
+        return false;
+    out.kernel = fields[0];
+    out.boot_mnt = fields[1];
+    out.card_mnt = fields[2];
+    out.card_root = fields[3];
     return true;
 }
 
@@ -609,7 +635,8 @@ void Connection::handle_hello(const std::string &payload)
         return;
     }
 
-    HelloMsg ack; ack.version = PROTO_VERSION;
+    HelloAckMsg ack; ack.version = PROTO_VERSION;
+    piko_media(ack);
     if (!send(MSG_HELLO_ACK, encode(ack)))
         return;
     phase_ = WAIT_OFFER;
@@ -844,7 +871,6 @@ void Connection::handle_complete(const std::string &payload)
     close_connection();
 }
 
-
 void Connection::register_rom(const std::string &rom_path)
 {
     RomEntry e;
@@ -960,7 +986,6 @@ void Connection::handle_rom_delete(const std::string &payload)
     send(MSG_ROM_DELETE_ACK, encode(ack));
     close_connection();
 }
-
 
 static bool part_path_is_safe(const std::string &path)
 {

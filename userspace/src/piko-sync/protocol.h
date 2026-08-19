@@ -1,4 +1,3 @@
-
 #ifndef PIKO_SYNC_PROTOCOL_H
 #define PIKO_SYNC_PROTOCOL_H
 
@@ -243,6 +242,42 @@ inline bool decode_hello(const std::string &p, HelloMsg &m)
 {
     size_t pos = 0;
     return get_u32(p, pos, m.version);
+}
+
+struct HelloAckMsg {
+    uint32_t version;
+    std::string kernel;
+    std::string boot_mnt;
+    std::string card_mnt;
+    std::string card_root;
+    HelloAckMsg() : version(0) {}
+};
+inline std::string encode(const HelloAckMsg &m)
+{
+    std::string p;
+    put_u32(p, m.version);
+    if (!m.kernel.empty() || !m.boot_mnt.empty() || !m.card_mnt.empty() || !m.card_root.empty()) {
+        put_str16(p, m.kernel);
+        put_str16(p, m.boot_mnt);
+        put_str16(p, m.card_mnt);
+        put_str16(p, m.card_root);
+    }
+    return p;
+}
+inline bool decode_hello_ack(const std::string &p, HelloAckMsg &m)
+{
+    size_t pos = 0;
+    if (!get_u32(p, pos, m.version))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.kernel))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.boot_mnt))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.card_mnt))
+        return false;
+    if (pos < p.size() && !get_str16(p, pos, m.card_root))
+        return false;
+    return true;
 }
 
 struct FileOfferMsg {

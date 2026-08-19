@@ -1,4 +1,3 @@
-
 #include <SDL.h>
 #include <dirent.h>
 #include <errno.h>
@@ -797,6 +796,8 @@ main (void)
     int   ts_fd, kbd_fd;
     int   using_x;
     SDL_Surface *screen;
+
+    setenv ("SDL_VIDEODRIVER", "fbcon", 1);
 
     ts_path  = find_input_device (TOUCHSCREEN_NAME, FALLBACK_TOUCH);
     kbd_path = find_input_device (KEYBOARD_NAME, FALLBACK_KEYS);
