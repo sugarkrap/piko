@@ -73,9 +73,6 @@ ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
 SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
 HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TCROOT="${TCROOT:-$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot}"
-CARD_ROOT="${CARD_ROOT:-/mnt/card/.zaurus}"
-MPLAYER_DEST="${MPLAYER_DEST:-$CARD_ROOT/usr/bin/mplayer}"
-CARD_TMP="${CARD_TMP:-$CARD_ROOT/tmp}"
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
 
 if [ ! -d "$REPO" ]; then
@@ -251,15 +248,26 @@ send_file() {
 
 echo "Target: $TARGET"
 
-ssh_do "mount /mnt/card 2>/dev/null || true"
-if ssh_do "grep -q ' /mnt/card ' /proc/mounts && echo yes || echo no" | grep -q yes; then
+DEV_MEDIA="$(ssh_do '. /etc/piko-media 2>/dev/null
+echo "${PIKO_KERNEL:-/boot/zImage-full}"
+echo "${PIKO_CARD_ROOT:-/mnt/card/.zaurus}"
+echo "${PIKO_CARD_MNT:-/mnt/card}"')"
+KERNEL_DEST="${KERNEL_DEST:-$(echo "$DEV_MEDIA" | sed -n 1p)}"
+CARD_ROOT="${CARD_ROOT:-$(echo "$DEV_MEDIA" | sed -n 2p)}"
+CARD_MNT="${CARD_MNT:-$(echo "$DEV_MEDIA" | sed -n 3p)}"
+CARD_TMP="${CARD_TMP:-$CARD_ROOT/tmp}"
+MPLAYER_DEST="${MPLAYER_DEST:-$CARD_ROOT/usr/bin/mplayer}"
+echo "==> this device boots $KERNEL_DEST and keeps its card payload in $CARD_ROOT"
+
+ssh_do "mount '$CARD_MNT' 2>/dev/null || true"
+if ssh_do "grep -q ' $CARD_MNT ' /proc/mounts && echo yes || echo no" | grep -q yes; then
     REMOTE_STAGE="$CARD_TMP"
     X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-$CARD_TMP/x11-payload.tar}"
-    echo "==> staging transfers on the SD card ($REMOTE_STAGE)"
+    echo "==> staging transfers on the card ($REMOTE_STAGE)"
 else
     X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-/tmp/x11-payload.tar}"
-    echo "==> no SD card mounted -- staging transfers on the root jffs2 ($REMOTE_STAGE)" >&2
-    echo "    (this is the ~68 MiB partition every file above is being written to --" >&2
+    echo "==> no card at $CARD_MNT -- staging transfers on the root filesystem ($REMOTE_STAGE)" >&2
+    echo "    (every file below is being written there too --" >&2
     echo "    insert a card if a transfer fails with ENOSPC)" >&2
 fi
 
@@ -277,7 +285,8 @@ else
     echo "==> remote md5sum NOT available -- falling back to size-only verification"
 fi
 
-send_file "$KERNEL_DIR/arch/arm/boot/zImage" "/boot/zImage-full"
+ssh_do "mkdir -p '$(dirname "$KERNEL_DEST")'"
+send_file "$KERNEL_DIR/arch/arm/boot/zImage" "$KERNEL_DEST"
 
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> --kernel-only: skipping module/script/helper deployment"
@@ -332,27 +341,27 @@ for relpath in $SD_MODULES $NAND_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-send_file "$REPO/rootfs/etc/init.d/rcS" "/etc/init.d/rcS"
-ssh_do "chmod 0755 /etc/init.d/rcS"
+KEEP_EXISTING="etc/TZ
+etc/piko/touchscreen.cfg
+etc/piko/phoneme.cfg
+etc/wpa_supplicant/wpa_supplicant.conf"
 
-send_file "$REPO/rootfs/etc/init.d/xsession" "/etc/init.d/xsession"
-ssh_do "chmod 0755 /etc/init.d/xsession"
-send_file "$REPO/rootfs/etc/inittab" "/etc/inittab"
+echo "==> rootfs overlay ($(cd "$REPO/rootfs" && find . -type f | wc -l) tracked files)"
+ssh_do "mkdir -p $(cd "$REPO/rootfs" && find . -mindepth 1 -type d | sed 's#^\.##' | tr '\n' ' ')"
+for rel in $(cd "$REPO/rootfs" && find . -type f | sed 's#^\./##' | sort); do
+    keep=0
+    for k in $KEEP_EXISTING; do
+        [ "$rel" = "$k" ] && keep=1
+    done
+    if [ "$keep" -eq 1 ] && [ "$(ssh_do "if [ -e /$rel ]; then echo yes; else echo no; fi")" = "yes" ]; then
+        echo "==> /$rel: keeping the device's own copy"
+        continue
+    fi
+    send_file "$REPO/rootfs/$rel" "/$rel"
+done
+ssh_do "chmod 0755 $(cd "$REPO/rootfs" && find . -type f -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
+ssh_do "chmod 0644 $(cd "$REPO/rootfs" && find . -type f ! -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
 
-send_file "$REPO/rootfs/etc/modprobe.d/hostap.conf" "/etc/modprobe.d/hostap.conf"
-
-send_file "$REPO/rootfs/etc/wifi-up.sh" "/etc/wifi-up.sh"
-ssh_do "chmod 0755 /etc/wifi-up.sh"
-
-send_file "$REPO/rootfs/etc/asound.conf" "/etc/asound.conf"
-ssh_do "chmod 0644 /etc/asound.conf"
-
-send_file "$REPO/rootfs/usr/sbin/audioon" "/usr/sbin/audioon"
-send_file "$REPO/rootfs/usr/sbin/audinfo" "/usr/sbin/audinfo"
-ssh_do "chmod 0755 /usr/sbin/audioon /usr/sbin/audinfo"
-
-send_file "$REPO/rootfs/usr/sbin/bright" "/usr/sbin/bright"
-ssh_do "chmod 0755 /usr/sbin/bright"
 if [ -f "$REPO/userspace/src/brightd" ]; then
     send_file "$REPO/userspace/src/brightd" "/usr/sbin/brightd"
     ssh_do "chmod 0755 /usr/sbin/brightd"
@@ -363,8 +372,6 @@ fi
 if [ -f "$REPO/userspace/src/piko-splash" ]; then
     send_file "$REPO/userspace/src/piko-splash" "/usr/sbin/piko-splash"
     ssh_do "chmod 0755 /usr/sbin/piko-splash"
-    ssh_do "mkdir -p /usr/share/piko"
-    send_file "$REPO/rootfs/usr/share/piko/splash.raw" "/usr/share/piko/splash.raw"
 else
     echo "==> skipping piko-splash (not built -- run tools/userspace/build-userspace.sh)"
 fi
@@ -375,29 +382,12 @@ if [ -f "$REPO/userspace/src/mhz" ]; then
 else
     echo "==> skipping mhz (not built -- run tools/userspace/build-userspace.sh)"
 fi
-if [ -f "$REPO/rootfs/etc/zaurus/power-management.cfg" ]; then
-    ssh_do "mkdir -p /etc/zaurus"
-    send_file "$REPO/rootfs/etc/zaurus/power-management.cfg" "/etc/zaurus/power-management.cfg"
-fi
-
-send_file "$REPO/rootfs/usr/sbin/flip" "/usr/sbin/flip"
-ssh_do "chmod 0755 /usr/sbin/flip"
 if [ -f "$REPO/userspace/src/flipd" ]; then
     send_file "$REPO/userspace/src/flipd" "/usr/sbin/flipd"
     ssh_do "chmod 0755 /usr/sbin/flipd"
 else
     echo "==> skipping flipd (not built -- run tools/userspace/build-userspace.sh)"
 fi
-if [ -f "$REPO/rootfs/etc/piko/rotation.cfg" ]; then
-    ssh_do "mkdir -p /etc/piko"
-    send_file "$REPO/rootfs/etc/piko/rotation.cfg" "/etc/piko/rotation.cfg"
-fi
-
-ssh_do "mkdir -p /root/.matchbox && echo img-centered:/usr/share/backgrounds/piko-default.png > /root/.matchbox/wallpaper"
-echo "==> set /root/.matchbox/wallpaper to the shipped default"
-
-send_file "$REPO/rootfs/usr/sbin/settime" "/usr/sbin/settime"
-ssh_do "chmod 0755 /usr/sbin/settime"
 for clock_tool in hwclock ntpsync; do
     if [ -f "$REPO/userspace/src/$clock_tool" ]; then
         send_file "$REPO/userspace/src/$clock_tool" "/usr/sbin/$clock_tool"
@@ -406,24 +396,6 @@ for clock_tool in hwclock ntpsync; do
         echo "==> skipping $clock_tool (not built -- run tools/userspace/build-userspace.sh)"
     fi
 done
-if [ -f "$REPO/rootfs/etc/TZ" ]; then
-    if [ "$(ssh_do "if [ -e /etc/TZ ]; then echo yes; else echo no; fi")" = "no" ]; then
-        send_file "$REPO/rootfs/etc/TZ" "/etc/TZ"
-    else
-        echo "==> keeping the device's existing /etc/TZ"
-    fi
-fi
-
-send_file "$REPO/rootfs/etc/zaurus-card.sh" "/etc/zaurus-card.sh"
-send_file "$REPO/rootfs/etc/profile"        "/etc/profile"
-send_file "$REPO/rootfs/etc/zshrc"          "/etc/zshrc"
-send_file "$REPO/rootfs/usr/sbin/sdapps"  "/usr/sbin/sdapps"
-ssh_do "chmod 0644 /etc/zaurus-card.sh /etc/profile /etc/zshrc"
-ssh_do "chmod 0755 /usr/sbin/sdapps"
-
-send_file "$REPO/rootfs/usr/sbin/sdcard"  "/usr/sbin/sdcard"
-ssh_do "chmod 0755 /usr/sbin/sdcard"
-
 if [ -x "$REPO/userspace/src/cardswap" ]; then
     send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
     ssh_do "chmod 0755 /usr/sbin/cardswap"
@@ -439,9 +411,6 @@ else
     echo "==> no built zramswap -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it the machine falls back to card-only swap"
 fi
-
-send_file "$REPO/rootfs/etc/mdev.conf" "/etc/mdev.conf"
-ssh_do "chmod 0644 /etc/mdev.conf"
 
 SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
@@ -481,13 +450,7 @@ fi
 if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
     ssh_do "mkdir -p /etc/opkg /var/lib/opkg/info /var/cache/opkg"
     send_file "$REPO/userspace/stage-target/usr/bin/opkg" "/usr/bin/opkg"
-    send_file "$REPO/rootfs/etc/opkg/opkg.conf" "/etc/opkg/opkg.conf"
-    send_file "$REPO/rootfs/usr/sbin/pkgadd"   "/usr/sbin/pkgadd"
-    send_file "$REPO/rootfs/usr/sbin/pkgdel"   "/usr/sbin/pkgdel"
-    send_file "$REPO/rootfs/usr/sbin/pkglist"  "/usr/sbin/pkglist"
-    send_file "$REPO/rootfs/usr/sbin/deskscan" "/usr/sbin/deskscan"
-    ssh_do "chmod 0755 /usr/bin/opkg /usr/sbin/pkgadd /usr/sbin/pkgdel /usr/sbin/pkglist /usr/sbin/deskscan"
-    ssh_do "chmod 0644 /etc/opkg/opkg.conf"
+    ssh_do "chmod 0755 /usr/bin/opkg"
 else
     echo "==> no staged opkg -- skipping (build it with tools/userspace/build-opkg.sh)"
 fi
@@ -497,11 +460,6 @@ if [ -x "$REPO/userspace/src/kill" ]; then
     ssh_do "chmod 0755 /usr/bin/kill"
     ssh_do "mkdir -p /usr/local/bin && ln -sf /usr/bin/kill /usr/local/bin/kill"
 fi
-
-send_file "$REPO/rootfs/usr/sbin/suspend"    "/usr/sbin/suspend"
-send_file "$REPO/rootfs/usr/sbin/gototty"    "/usr/sbin/gototty"
-send_file "$REPO/rootfs/usr/sbin/softreboot" "/usr/sbin/softreboot"
-ssh_do "chmod 0755 /usr/sbin/suspend /usr/sbin/gototty /usr/sbin/softreboot"
 
 if [ -x "$REPO/userspace/src/piko-sync/piko-sync-server" ]; then
     echo "==> piko-sync-server (stopping it first -- it cannot replace itself)"
@@ -559,12 +517,11 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
     echo "==> userspace payload: needs ~${need_kb} KiB, device has ${avail_kb} KiB free on /"
     if [ "$avail_kb" -gt 0 ] && [ "$need_kb" -gt "$((avail_kb - 4096))" ]; then
         echo "SKIPPING userspace payload: not enough free space." >&2
-        echo "  Leaving at least 4 MiB headroom on the root jffs2 is deliberate --" >&2
-        echo "  it needs room to garbage-collect, and a full root is not something" >&2
-        echo "  you can recover from over SSH on this board." >&2
-        echo "  Free space first, or stage MPlayer on the SD card instead:" >&2
-        echo "    ssh $TARGET 'mount /mnt/card'" >&2
-        echo "    ssh $TARGET 'cat > /mnt/card/mplayer' < $MPLAYER_STAGE/usr/bin/mplayer" >&2
+        echo "  Leaving at least 4 MiB headroom on the root is deliberate -- a full" >&2
+        echo "  root is not something you can recover from over SSH on this board." >&2
+        echo "  Free space first, or stage MPlayer on the card instead:" >&2
+        echo "    ssh $TARGET 'mount $CARD_MNT'" >&2
+        echo "    ssh $TARGET 'cat > $CARD_MNT/mplayer' < $MPLAYER_STAGE/usr/bin/mplayer" >&2
     else
         if [ -d "$ALSA_STAGE" ]; then
             ssh_do "mkdir -p /usr/share/alsa/cards /usr/share/alsa/pcm /usr/share/alsa/ctl /var/lib/alsa"
@@ -627,16 +584,6 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 ssh_do "/usr/local/bin/untar '$CARD_TMP/phoneme-data.tar' /usr/local/lib/phoneme && rm -f '$CARD_TMP/phoneme-data.tar'"
                 send_file "$REPO/userspace/src/phoneme-run" "/usr/local/bin/phoneme-run"
                 ssh_do "chmod 0755 /usr/local/bin/phoneme-run"
-                if [ -f "$REPO/rootfs/etc/piko/phoneme.cfg" ]; then
-                    ssh_do "mkdir -p /etc/piko"
-                    ssh_do "[ -f /etc/piko/phoneme.cfg ]" 2>/dev/null || \
-                        send_file "$REPO/rootfs/etc/piko/phoneme.cfg" "/etc/piko/phoneme.cfg"
-                fi
-            fi
-
-            if [ -f "$REPO/rootfs/etc/zaurus/parts.cfg" ]; then
-                ssh_do "mkdir -p /etc/zaurus"
-                send_file "$REPO/rootfs/etc/zaurus/parts.cfg" "/etc/zaurus/parts.cfg"
             fi
 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
@@ -647,28 +594,20 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 send_file "$SDL_STAGE/usr/bin/pikalibrate" "/usr/bin/pikalibrate"
                 ssh_do "chmod 0755 /usr/bin/pikalibrate"
             fi
-            if [ -f "$REPO/rootfs/etc/piko/touchscreen.cfg" ]; then
-                if [ "$(ssh_do "test -f /etc/piko/touchscreen.cfg && echo yes || echo no")" = "no" ]; then
-                    ssh_do "mkdir -p /etc/piko"
-                    send_file "$REPO/rootfs/etc/piko/touchscreen.cfg" "/etc/piko/touchscreen.cfg"
-                else
-                    echo "==> /etc/piko/touchscreen.cfg already exists on device, leaving it alone"
-                fi
-            fi
         fi
         if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
             case "$MPLAYER_DEST" in
-            /mnt/card/*)
-                ssh_do "mount /mnt/card 2>/dev/null || true"
-                if ssh_do "grep -q ' /mnt/card ' /proc/mounts && echo yes || echo no" | grep -q yes; then
+            "$CARD_MNT"/*)
+                ssh_do "mount '$CARD_MNT' 2>/dev/null || true"
+                if ssh_do "grep -q ' $CARD_MNT ' /proc/mounts && echo yes || echo no" | grep -q yes; then
                     ssh_do "mkdir -p '$(dirname "$MPLAYER_DEST")'"
                     send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
                     ssh_do "chmod 0755 '$MPLAYER_DEST'"
                 else
-                    echo "==> no SD card mounted -- SKIPPING heavy apps (MPlayer)."
-                    echo "    Heavy software is card-only by design; the root jffs2"
-                    echo "    has no room for it. Insert a card and re-run, or set"
-                    echo "    MPLAYER_DEST=/usr/bin/mplayer to force it onto flash."
+                    echo "==> no card mounted at $CARD_MNT -- SKIPPING heavy apps (MPlayer)."
+                    echo "    Heavy software is card-only by design; the root has no"
+                    echo "    room for it. Insert a card and re-run, or set"
+                    echo "    MPLAYER_DEST=/usr/bin/mplayer to force it onto the root."
                 fi
                 ;;
             *)
@@ -708,9 +647,9 @@ echo ""
 echo "All files deployed and size-verified. NOT rebooted yet."
 echo "Kernel panic fix + sound modules are staged at:"
 if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
-    echo "  /boot/zImage-full        (old copy at /boot/zImage-full.bak)"
+    echo "  $KERNEL_DEST (old copy at $KERNEL_DEST.bak)"
 else
-    echo "  /boot/zImage-full        (no .bak kept -- pass --create-backup-files for one)"
+    echo "  $KERNEL_DEST (no .bak kept -- pass --create-backup-files for one)"
 fi
 echo "  /lib/modules/$KVER_LOCAL/zaurus-audio/*.ko"
 echo "  /usr/sbin/audioon, /usr/sbin/audinfo"
@@ -725,7 +664,7 @@ if [ -x "$REPO/userspace/src/vol" ]; then
     echo "  /usr/sbin/vol            (volume: vol up / vol down / vol mute)"
 fi
 if [ -x "$REPO/userspace/src/cardswap" ]; then
-    echo "  /usr/sbin/cardswap       (256 MiB swap at /mnt/card/.zaurus/swap)"
+    echo "  /usr/sbin/cardswap       (256 MiB swap at $CARD_ROOT/swap)"
 fi
 if [ -x "$REPO/userspace/src/zramswap" ]; then
     echo "  /usr/sbin/zramswap       (32 MiB compressed RAM swap; zramswap starts from rcS)"
