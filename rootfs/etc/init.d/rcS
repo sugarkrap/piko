@@ -1,14 +1,10 @@
 #!/bin/sh
 
-echo ""
-echo "########  STAGE2-BUILD-G  (ash default + editable shell)  ########"
-echo ""
-
 mount -t proc     proc     /proc            2>/dev/null
 mount -t sysfs    sysfs    /sys             2>/dev/null
 mount -t devtmpfs devtmpfs /dev             2>/dev/null
 
-echo "6 4 1 7" > /proc/sys/kernel/printk 2>/dev/null
+echo "3 4 1 3" > /proc/sys/kernel/printk 2>/dev/null
 
 if test -x /usr/sbin/zramswap; then
     /usr/sbin/zramswap on >/tmp/zramswap.log 2>&1 || true
@@ -48,6 +44,10 @@ modprobe hostap 2>/dev/null
 
 mdev -s 2>/dev/null
 
+for u in /sys/bus/pcmcia/devices/*/uevent; do
+	test -w "$u" && echo add > "$u"
+done
+
 test -r /etc/piko-media && . /etc/piko-media
 if test "${PIKO_KIND:-mtd}" = img; then
 	mkdir -p "$PIKO_CARD_MNT"
@@ -55,6 +55,10 @@ if test "${PIKO_KIND:-mtd}" = img; then
 fi
 
 rm -rf "${PIKO_CARD_ROOT:-/mnt/card/.zaurus}/tmp" 2>/dev/null
+
+if test -x /usr/sbin/cardswap; then
+	/usr/sbin/cardswap on >/tmp/cardswap.log 2>&1 &
+fi
 
 if test -x /usr/sbin/audioon; then
 	/usr/sbin/audioon 2>/dev/null

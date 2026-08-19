@@ -12,8 +12,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#define DEFAULT_PATH	"/mnt/card/.zaurus/swap"
-#define DEFAULT_MIB	256
+#define DEFAULT_PATH	"/var/swap"
+#define DEFAULT_MIB	64
 
 #define PROC_SWAPS	"/proc/swaps"
 
@@ -97,45 +97,6 @@ make_parent_dirs (const char *path)
 	mkdir (buf, 0755);
 	*p = '/';
       }
-}
-
-static int
-check_not_on_rootfs (const char *path)
-{
-  struct stat st_root, st_dir;
-  char        dir[512];
-  char       *slash;
-
-  snprintf (dir, sizeof (dir), "%s", path);
-  if ((slash = strrchr (dir, '/')) != NULL && slash != dir)
-    *slash = '\0';
-  else
-    snprintf (dir, sizeof (dir), "/");
-
-  if (stat ("/", &st_root) != 0)
-    return 0;
-
-  while (stat (dir, &st_dir) != 0)
-    {
-      if ((slash = strrchr (dir, '/')) == NULL || slash == dir)
-	{
-	  if (stat ("/", &st_dir) != 0)
-	    return 0;
-	  break;
-	}
-      *slash = '\0';
-    }
-
-  if (st_dir.st_dev == st_root.st_dev)
-    {
-      fprintf (stderr,
-	       "%s: %s is on the root filesystem, not a card -- refusing.\n"
-	       "%s: (is /mnt/card actually mounted?)\n",
-	       Prog, path, Prog);
-      return -1;
-    }
-
-  return 0;
 }
 
 static int
@@ -269,9 +230,6 @@ do_on (const char *path, unsigned long mib)
 
   if (is_swapped_on (path))
     return 0;
-
-  if (check_not_on_rootfs (path) != 0)
-    return 1;
 
   if (stat (path, &st) == 0 && S_ISREG (st.st_mode))
     {
