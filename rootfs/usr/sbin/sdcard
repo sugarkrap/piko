@@ -1,13 +1,18 @@
 #!/bin/sh
+test -r /etc/piko-media && . /etc/piko-media
 CARDSWAP=/usr/sbin/cardswap
+
+if [ -n "${PIKO_BOOT_DEV:-}" ] && [ "/dev/${MDEV:-}" = "$PIKO_BOOT_DEV" ]; then
+	exit 0
+fi
 
 {
 	[ -x "$CARDSWAP" ] && "$CARDSWAP" off >/dev/null 2>&1
 
-	umount -l /mnt/card 2>/dev/null
+	umount -l "${PIKO_CARD_MNT:-/mnt/card}" 2>/dev/null
 
 	if [ "$ACTION" != "remove" ]; then
-		mount /mnt/card 2>/dev/null
+		mount "${PIKO_CARD_MNT:-/mnt/card}" 2>/dev/null
 		[ -x "$CARDSWAP" ] && "$CARDSWAP" on >/tmp/cardswap.log 2>&1
 	fi
 } &

@@ -112,5 +112,5 @@ if [ -f "$IMAGE" ]; then
         echo "    Move something onto SD or CF as a Piko Sync software part." >&2
     fi
 else
-    echo "==> no image at $IMAGE yet -- build one with tools/build-mtd3-jffs2.sh"
+    echo "==> no image at $IMAGE yet -- build one with tools/build-rootfs.sh"
 fi

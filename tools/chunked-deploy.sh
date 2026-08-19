@@ -321,7 +321,7 @@ for relpath in $WIFI_MODULES; do
     send_file "$local_path" "$remote_path"
 done
 
-for relpath in $SD_MODULES; do
+for relpath in $SD_MODULES $NAND_MODULES; do
     local_path="$KERNEL_DIR/$(echo "$relpath" | sed 's#^kernel/##')"
     if [ ! -f "$local_path" ]; then
         echo "missing module: $local_path" >&2

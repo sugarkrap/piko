@@ -1,0 +1,18 @@
+#!/bin/sh
+test -r /etc/piko-media && . /etc/piko-media
+
+test -x /usr/sbin/cardswap \
+	&& /usr/sbin/cardswap off "${PIKO_CARD_ROOT:-/mnt/card/.zaurus}/swap" >/dev/null 2>&1
+
+sync
+
+if [ "${PIKO_KIND:-mtd}" = img ]; then
+	mount -o remount,ro / 2>/dev/null
+	sync
+	mount -o remount,ro "$PIKO_BOOT_MNT" 2>/dev/null
+else
+	umount -l "${PIKO_CARD_MNT:-/mnt/card}" 2>/dev/null
+fi
+
+umount -a -r 2>/dev/null
+exit 0

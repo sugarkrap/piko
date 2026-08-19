@@ -7,14 +7,33 @@ INITRAMFS_DIR="${INITRAMFS_DIR:-$REPO/initramfs}"
 BUSYBOX_SRC_DIR="${BUSYBOX_SRC_DIR:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION}"
 BUSYBOX_TARBALL="${BUSYBOX_TARBALL:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION.tar.bz2}"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"
-ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build}"
-OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built.cpio.gz}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
 FORCE=0
-[ "${1:-}" = "--force" ] && FORCE=1
+FLAVOR=sd
+STAGE2=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force)  FORCE=1; shift ;;
+        --stage2) STAGE2=1; shift ;;
+        --flavor) FLAVOR="$2"; shift 2 ;;
+        *)        echo "tools/kernel/build-initramfs.sh: unknown argument '$1'" >&2; exit 1 ;;
+    esac
+done
+
+if [ "$STAGE2" -eq 1 ]; then
+    ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-stage2}"
+    OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-stage2-built.cpio.gz}"
+else
+    if [ ! -f "$REPO/tools/kernel/flavors/$FLAVOR.conf" ]; then
+        echo "tools/kernel/build-initramfs.sh: unknown flavor '$FLAVOR'" >&2
+        exit 1
+    fi
+    ROOTFS_BUILD_DIR="${ROOTFS_BUILD_DIR:-$INITRAMFS_DIR/rootfs-build-$FLAVOR}"
+    OUT_CPIO="${OUT_CPIO:-$INITRAMFS_DIR/initramfs-minimal-built-$FLAVOR.cpio.gz}"
+fi
 
 mkdir -p "$INITRAMFS_DIR"
 
@@ -29,7 +48,7 @@ fi
 
 if [ ! -f "$BUSYBOX_TARBALL" ]; then
     echo "==> downloading $BUSYBOX_URL"
-    curl -fL -o "$BUSYBOX_TARBALL.partial" "$BUSYBOX_URL"
+    curl -fL --retry 6 --retry-delay 5 --retry-all-errors -C - -o "$BUSYBOX_TARBALL.partial" "$BUSYBOX_URL"
     mv "$BUSYBOX_TARBALL.partial" "$BUSYBOX_TARBALL"
 else
     echo "==> reusing cached $BUSYBOX_TARBALL"
@@ -53,8 +72,12 @@ if [ ! -f "$BUSYBOX_SRC_DIR/Makefile" ]; then
 fi
 
 BB_CONFIG_SRC="$REPO/modules/initramfs/busybox.config"
-INIT_SRC="$REPO/modules/initramfs/init"
 SPLASH_SRC="$REPO/modules/initramfs/splash.ppm.gz"
+if [ "$STAGE2" -eq 1 ]; then
+    INIT_SRC="$REPO/modules/initramfs-stage2/init"
+else
+    INIT_SRC="$REPO/modules/initramfs/init"
+fi
 if [ ! -f "$BB_CONFIG_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $BB_CONFIG_SRC" >&2
     exit 1
@@ -63,23 +86,29 @@ if [ ! -f "$INIT_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $INIT_SRC" >&2
     exit 1
 fi
-if [ ! -f "$SPLASH_SRC" ]; then
+if [ "$STAGE2" -eq 0 ] && [ ! -f "$SPLASH_SRC" ]; then
     echo "tools/kernel/build-initramfs.sh: missing tracked input: $SPLASH_SRC" >&2
     exit 1
 fi
 
 BUILD_DIR="$INITRAMFS_DIR/.build-$BUSYBOX_VERSION"
-echo "==> configuring busybox $BUSYBOX_VERSION (O=$BUILD_DIR)"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config"
+if [ "$FORCE" -eq 0 ] && [ -f "$BUILD_DIR/busybox_unstripped" ] &&
+   cmp -s "$BB_CONFIG_SRC" "$BUILD_DIR/.config.piko-src"; then
+    echo "==> reusing the busybox from an earlier flavor"
+else
+    echo "==> configuring busybox $BUSYBOX_VERSION (O=$BUILD_DIR)"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config"
+    cp "$BB_CONFIG_SRC" "$BUILD_DIR/.config.piko-src"
 
-make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
-    oldconfig </dev/null
+    make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+        oldconfig </dev/null
 
-echo "==> building busybox (static, -j$JOBS)"
-make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
-    -j"$JOBS" busybox
+    echo "==> building busybox (static, -j$JOBS)"
+    make -C "$BUSYBOX_SRC_DIR" O="$BUILD_DIR" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+        -j"$JOBS" busybox
+fi
 
 BB_BIN="$BUILD_DIR/busybox_unstripped"
 if [ ! -f "$BB_BIN" ]; then
@@ -102,13 +131,20 @@ chmod 755 "$ROOTFS_BUILD_DIR/bin/busybox"
 cp "$INIT_SRC" "$ROOTFS_BUILD_DIR/init"
 chmod 755 "$ROOTFS_BUILD_DIR/init"
 
-gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
-chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
+if [ "$STAGE2" -eq 1 ]; then
+    mkdir -p "$ROOTFS_BUILD_DIR/newroot" "$ROOTFS_BUILD_DIR/media"
+else
+    printf '%s\n' "$FLAVOR" > "$ROOTFS_BUILD_DIR/piko-flavor"
+    chmod 644 "$ROOTFS_BUILD_DIR/piko-flavor"
 
-BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync touch umount uname vi"
-SBIN_APPLETS="halt init mdev poweroff reboot switch_root"
-USR_BIN_APPLETS="basename clear dirname env find free hd head hexdump reset setsid tail test tr wc which"
-USR_SBIN_APPLETS="fbset"
+    gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
+    chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"
+fi
+
+BIN_APPLETS="ash cat chmod chown cp cttyhack date dd df dmesg echo fbsplash grep hostname ln ls mkdir mknod mount mountpoint mv ps pwd rm rmdir sed sh sleep stat sync umount uname"
+SBIN_APPLETS="halt init losetup mdev poweroff reboot switch_root"
+USR_BIN_APPLETS="basename dirname find free hd head setsid tail test tr wc which"
+USR_SBIN_APPLETS=""
 
 for a in $BIN_APPLETS; do ln -sf busybox "$ROOTFS_BUILD_DIR/bin/$a"; done
 for a in $SBIN_APPLETS; do ln -sf ../bin/busybox "$ROOTFS_BUILD_DIR/sbin/$a"; done
@@ -124,7 +160,9 @@ echo "==> built $OUT_CPIO"
 ls -la "$OUT_CPIO"
 
 REFERENCE="$INITRAMFS_DIR/initramfs-minimal-v2.cpio.gz"
-if [ -f "$REFERENCE" ]; then
+if [ "$STAGE2" -eq 1 ]; then
+    echo "==> stage 2 initramfs, no reference to compare"
+elif [ -f "$REFERENCE" ]; then
     if cmp -s "$OUT_CPIO" "$REFERENCE"; then
         echo "==> byte-identical to $REFERENCE"
     else

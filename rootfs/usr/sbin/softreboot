@@ -1,12 +1,17 @@
 #!/bin/sh
 set -eu
+test -r /etc/piko-media && . /etc/piko-media
 
-KERNEL=/boot/zImage-full
-CMDLINE="$(cat /proc/cmdline)"
+kexec -l "${PIKO_KERNEL:-/boot/zImage-full}" --atags --append="$(cat /proc/cmdline)"
 
-kexec -l "$KERNEL" --atags --append="$CMDLINE"
-
-umount -l /mnt/card 2>/dev/null || true
+sync
+if [ "${PIKO_KIND:-mtd}" = img ]; then
+	mount -o remount,ro / 2>/dev/null || true
+	sync
+	mount -o remount,ro "$PIKO_BOOT_MNT" 2>/dev/null || true
+else
+	umount -l "${PIKO_CARD_MNT:-/mnt/card}" 2>/dev/null || true
+fi
 
 sync
 exec kexec -e

@@ -202,6 +202,18 @@ core_scripts:
 
 sd_card_overlay:
   - type: put_file
+    local: "${REPO}/rootfs/etc/piko-media"
+    remote: /etc/piko-media
+    mode: "0644"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/piko-shutdown"
+    remote: /usr/sbin/piko-shutdown
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/nandmount"
+    remote: /usr/sbin/nandmount
+    mode: "0755"
+  - type: put_file
     local: "${REPO}/rootfs/etc/zaurus-card.sh"
     remote: /etc/zaurus-card.sh
     mode: "0644"

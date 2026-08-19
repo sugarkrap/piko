@@ -24,7 +24,7 @@ mkdir -p "$KERNEL_SRC_DIR"
 
 if [ ! -f "$TARBALL" ]; then
     echo "==> downloading $KERNEL_URL"
-    curl -fL -o "$TARBALL.partial" "$KERNEL_URL"
+    curl -fL --retry 6 --retry-delay 5 --retry-all-errors -C - -o "$TARBALL.partial" "$KERNEL_URL"
     mv "$TARBALL.partial" "$TARBALL"
 else
     echo "==> reusing cached $TARBALL"

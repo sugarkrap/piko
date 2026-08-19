@@ -1,0 +1,102 @@
+#!/bin/sh
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+
+if test -c /dev/tty0; then
+	exec < /dev/tty0 > /dev/tty0 2>&1
+fi
+
+export TERM=linux
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+serial_echo() {
+	echo "$1"
+	echo "$1" > /dev/ttyS0 2>/dev/null
+}
+
+bail() {
+	serial_echo "stage 2 stopped: $1"
+	while true; do
+		setsid cttyhack /bin/ash -l
+		sleep 1
+	done
+}
+
+PIKOROOT=
+ROOTDEV=
+ROOTTYPE=
+for arg in $(cat /proc/cmdline); do
+	case "$arg" in
+	pikoroot=*) PIKOROOT="${arg#pikoroot=}" ;;
+	root=*)     ROOTDEV="${arg#root=}" ;;
+	rootfstype=*) ROOTTYPE="${arg#rootfstype=}" ;;
+	esac
+done
+
+if test -z "$PIKOROOT"; then
+	test -n "$ROOTDEV" || bail "neither pikoroot= nor root= was passed on the kernel command line"
+	PIKOROOT="dev:$ROOTDEV:${ROOTTYPE:-ext2}"
+fi
+
+mkdir -p /newroot
+
+KIND="${PIKOROOT%%:*}"
+REST="${PIKOROOT#*:}"
+
+case "$KIND" in
+dev)
+	DEV="${REST%%:*}"
+	TYPE="${REST#*:}"
+	wait_for="$DEV"
+	;;
+img)
+	DEV="${REST%%:*}"
+	IMG="${REST#*:}"
+	wait_for="$DEV"
+	;;
+*)
+	bail "unrecognised pikoroot form '$PIKOROOT'"
+	;;
+esac
+
+for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+	test -b "$wait_for" && break
+	sleep 1
+done
+test -b "$wait_for" || bail "$wait_for never appeared"
+
+case "$KIND" in
+dev)
+	mount -t "$TYPE" "$DEV" /newroot || bail "mounting $DEV as $TYPE failed"
+	;;
+img)
+	mkdir -p /media
+	mount -t vfat "$DEV" /media || bail "mounting $DEV as vfat failed"
+	test -f "/media/$IMG" || bail "$IMG is not on $DEV"
+	mount -o loop "/media/$IMG" /newroot || bail "loop-mounting $IMG failed"
+	;;
+esac
+
+mkdir -p /newroot/dev
+mount -t devtmpfs devtmpfs /newroot/dev \
+	|| serial_echo "stage 2: no devtmpfs on /newroot/dev, init will have no console"
+
+REALINIT=
+for c in /sbin/init /init /bin/init; do
+	test -x "/newroot$c" && REALINIT="$c" && break
+done
+test -n "$REALINIT" || bail "no init inside the root filesystem"
+
+if test "$KIND" = img; then
+	mkdir -p /newroot/media/boot
+	mount -t vfat "$DEV" /newroot/media/boot || serial_echo "stage 2: $DEV not remounted under /media/boot"
+fi
+
+umount /sys 2>/dev/null
+umount /proc 2>/dev/null
+
+test -x /sbin/switch_root || bail "no switch_root applet in the initramfs"
+mountpoint -q /newroot || bail "/newroot is not a mount point, switch_root would refuse"
+
+exec switch_root /newroot "$REALINIT"
