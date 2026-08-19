@@ -22,6 +22,14 @@ if [ "${SKIP_JFFS2:-0}" -ne 1 ] && ! command -v mkfs.jffs2 >/dev/null 2>&1; then
     exit 1
 fi
 
+if [ -n "${ROOT_IMG_OUT:-}" ] && ! command -v fakeroot >/dev/null 2>&1; then
+    echo "build-rootfs: fakeroot not found (apt install fakeroot)" >&2
+    echo "  mke2fs -d records the uid of whoever staged the tree, so without it every" >&2
+    echo "  file in the image belongs to the build account instead of root, and dropbear" >&2
+    echo "  refuses /root/.ssh/authorized_keys on the installed board" >&2
+    exit 1
+fi
+
 if [ ! -f "$KERNEL_DIR/arch/arm/boot/zImage" ]; then
     echo "build-rootfs: $KERNEL_DIR has no built zImage -- build it first:" >&2
     echo "  cd $KERNEL_DIR && ARCH=arm CROSS_COMPILE=... make zImage modules" >&2
@@ -344,7 +352,7 @@ if [ -n "${ROOT_IMG_OUT:-}" ]; then
     echo "==> building the ext2 root image (${img_mb}M for a $(( tree_kb / 1024 ))M tree)"
     rm -f "$ROOT_IMG_OUT.partial"
     truncate -s "${img_mb}M" "$ROOT_IMG_OUT.partial"
-    mke2fs -F -q -t ext2 -L pikoroot -d "$MERGED" "$ROOT_IMG_OUT.partial"
+    fakeroot sh -c "chown -R 0:0 '$MERGED' && mke2fs -F -q -t ext2 -L pikoroot -d '$MERGED' '$ROOT_IMG_OUT.partial'"
     mv "$ROOT_IMG_OUT.partial" "$ROOT_IMG_OUT"
     echo "==> done: $ROOT_IMG_OUT ($(stat -c '%s' "$ROOT_IMG_OUT") bytes)"
 fi
