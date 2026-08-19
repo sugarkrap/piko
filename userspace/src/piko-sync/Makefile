@@ -35,6 +35,7 @@ clean:
 	rm -f piko-sync-server piko-sync-client
 
 .PHONY: test
+test: export PIKO_PARTS_CFG = $(CURDIR)/../../../rootfs/etc/zaurus/parts.cfg
 test:
 	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-protocol-test tests/protocol-test.cxx
 	/tmp/piko-sync-protocol-test
