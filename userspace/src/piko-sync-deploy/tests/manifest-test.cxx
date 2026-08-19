@@ -140,10 +140,19 @@ static void test_put_files_from_tree_preserves_mode()
     std::vector<Step> steps;
     std::string error;
     check(put_files_from_tree(tmpdir + "/tree", "/", steps, error), "walks recursively");
-    check(steps.size() == 2, "both files found across subdirectories");
+
+    size_t files = 0, dirs = 0;
+    for (size_t i = 0; i < steps.size(); i++) {
+        if (steps[i].type == STEP_PUT_FILE) files++;
+        if (steps[i].type == STEP_MKDIR) dirs++;
+    }
+    check(files == 2, "both files found across subdirectories");
+    check(dirs == 3, "every subdirectory is created before its files land in it");
 
     bool found_exe = false, found_cfg = false;
     for (size_t i = 0; i < steps.size(); i++) {
+        if (steps[i].type != STEP_PUT_FILE)
+            continue;
         if (steps[i].remote_path == "/usr/bin/thing") {
             found_exe = true;
             check(steps[i].mode == 0755u, "executable's mode preserved as 0755");
@@ -430,6 +439,38 @@ static void test_userspace_media_skipped_by_no_userspace()
     check(!has_media, "userspace_media not selected with --no-userspace");
 }
 
+static void test_root_image_is_staged_only_when_asked()
+{
+    printf("build_plan: the root image ships as .new, and only with --root-image\n");
+
+    DeployContext ctx = make_fixture_context();
+    ctx.piko_kernel = "/media/boot/.zaurus/zImage-full";
+    seed_minimal_repo(ctx);
+    write_fixture("repo/flash/piko-root.img", "pretend-ext4-image");
+
+    std::string text;
+    read_whole_file("../manifest.yaml", text);
+    std::vector<yaml::Section> sections;
+    std::string error;
+    yaml::parse(text, sections, error);
+
+    std::vector<Step> steps;
+    check(build_plan(sections, select_sections(ctx.flags), ctx, steps, error),
+          "plan builds without --root-image: " + error);
+    check(step_with_remote(steps, "/media/boot/.zaurus/piko-root.img.new") == 0,
+          "no root image staged unless --root-image is given");
+
+    ctx.flags.root_image = true;
+    steps.clear();
+    check(build_plan(sections, select_sections(ctx.flags), ctx, steps, error),
+          "plan builds with --root-image: " + error);
+    const Step *img = step_with_remote(steps, "/media/boot/.zaurus/piko-root.img.new");
+    check(img != 0, "root image staged beside the running one, never over it");
+    if (img)
+        check(step_with_remote(steps, "/media/boot/.zaurus/piko-root.img") == 0,
+              "the live image is never a deploy destination");
+}
+
 static void test_x11_section_emits_extract_step()
 {
     printf("build_plan: x11_matchbox emits a STEP_EXTRACT_TAR_TREE when the tar exists\n");
@@ -478,6 +519,7 @@ int main()
     test_wifi_modules_keep_kernel_prefix_on_remote_only();
     test_userspace_media_skipped_by_no_userspace();
     test_x11_section_emits_extract_step();
+    test_root_image_is_staged_only_when_asked();
 
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir.c_str());

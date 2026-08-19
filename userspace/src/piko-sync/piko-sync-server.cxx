@@ -34,7 +34,6 @@
 #include "icon_xpm.h"
 #include "rom_detect.h"
 #include "emulation_db.h"
-#include "parts.h"
 
 using namespace piko_sync;
 
@@ -333,7 +332,6 @@ static int prune_rom_launchers(const std::vector<RomEntry> &db)
 static void migrate_legacy_dbs()
 {
     migrate_legacy_emulation_db();
-    migrate_legacy_parts_db();
 }
 
 static int sync_rom_launchers()
@@ -398,9 +396,6 @@ private:
     void handle_rom_delete(const std::string &payload);
     void handle_rom_set_icon(const std::string &payload);
     void handle_rom_get_icon(const std::string &payload);
-    void handle_part_list(const std::string &payload);
-    void handle_part_set(const std::string &payload);
-    void handle_part_delete(const std::string &payload);
     bool write_desktop_for(const RomEntry &e, std::string &err);
 
     std::string dest_dir_;
@@ -607,9 +602,6 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_ROM_DELETE:       handle_rom_delete(payload); return;
         case MSG_ROM_SET_ICON:     handle_rom_set_icon(payload); return;
         case MSG_ROM_GET_ICON:     handle_rom_get_icon(payload); return;
-        case MSG_PART_LIST:        handle_part_list(payload); return;
-        case MSG_PART_SET:         handle_part_set(payload); return;
-        case MSG_PART_DELETE:      handle_part_delete(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -987,164 +979,6 @@ void Connection::handle_rom_delete(const std::string &payload)
     close_connection();
 }
 
-static bool part_path_is_safe(const std::string &path)
-{
-    if (path.size() < 8 || path[0] != '/')
-        return false;
-    if (path.find("..") != std::string::npos)
-        return false;
-    for (int m = piko_sync::PART_NAND; m <= piko_sync::PART_CF; m++) {
-        std::string base = piko_sync::part_media_base(m);
-        if (path.size() > base.size() + 1
-            && path.compare(0, base.size(), base) == 0
-            && path[base.size()] == '/')
-            return true;
-    }
-    return false;
-}
-
-static bool part_remove_tree(const std::string &path, std::string &err)
-{
-    DIR *d = opendir(path.c_str());
-    if (d == 0) {
-        if (errno == ENOENT)
-            return true;
-        if (errno == ENOTDIR) {
-            if (unlink(path.c_str()) != 0 && errno != ENOENT) {
-                err = "cannot delete " + path + ": " + strerror(errno);
-                return false;
-            }
-            return true;
-        }
-        err = "cannot open " + path + ": " + strerror(errno);
-        return false;
-    }
-
-    struct dirent *ent;
-    while ((ent = readdir(d)) != 0) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-            continue;
-        std::string child = path + "/" + ent->d_name;
-        struct stat st;
-        if (lstat(child.c_str(), &st) != 0)
-            continue;
-        if (S_ISDIR(st.st_mode)) {
-            if (!part_remove_tree(child, err)) { closedir(d); return false; }
-        } else if (unlink(child.c_str()) != 0 && errno != ENOENT) {
-            err = "cannot delete " + child + ": " + strerror(errno);
-            closedir(d);
-            return false;
-        }
-    }
-    closedir(d);
-
-    if (rmdir(path.c_str()) != 0 && errno != ENOENT) {
-        err = "cannot remove " + path + ": " + strerror(errno);
-        return false;
-    }
-    return true;
-}
-
-void Connection::handle_part_list(const std::string &payload)
-{
-    (void)payload;
-    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
-    piko_sync::PartListAckMsg ack;
-    for (size_t i = 0; i < db.size(); i++) {
-        piko_sync::PartEntry e = db[i];
-        const piko_sync::PartSpec *spec = piko_sync::part_spec(e.id);
-        std::string probe = spec ? piko_sync::part_marker_path(*spec, e.path) : e.path;
-        struct stat st;
-        piko_sync::option_set(e.options, "present",
-                              stat(probe.c_str(), &st) == 0 ? "1" : "0");
-        ack.records += piko_sync::encode_part(e) + "\n";
-    }
-    send(MSG_PART_LIST_ACK, encode(ack));
-    close_connection();
-}
-
-void Connection::handle_part_set(const std::string &payload)
-{
-    piko_sync::PartSetMsg m;
-    if (!decode_part_set(payload, m)) { fail("malformed PART_SET"); return; }
-
-    OkReasonMsg ack;
-    piko_sync::PartEntry e;
-    if (!piko_sync::decode_part(m.record, e)) {
-        ack.ok = false;
-        ack.reason = "malformed part record";
-        send(MSG_PART_SET_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
-    piko_sync::set_part(db, e);
-    if (!piko_sync::save_parts(db)) {
-        ack.ok = false;
-        ack.reason = piko_sync::config_cfg_for(e.media) + " is not writable";
-        send(MSG_PART_SET_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    app_->set_status("part registered: " + e.id);
-    ack.ok = true;
-    send(MSG_PART_SET_ACK, encode(ack));
-    close_connection();
-}
-
-void Connection::handle_part_delete(const std::string &payload)
-{
-    piko_sync::PartDeleteMsg m;
-    if (!decode_part_delete(payload, m)) { fail("malformed PART_DELETE"); return; }
-
-    OkReasonMsg ack;
-    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
-    const piko_sync::PartEntry *found = piko_sync::find_part(db, m.id);
-    if (found == 0) {
-        ack.ok = false;
-        ack.reason = "no such part on any mounted media";
-        send(MSG_PART_DELETE_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    std::string path = found->path;
-    int media = found->media;
-    if (m.purge) {
-        if (!part_path_is_safe(path)) {
-            ack.ok = false;
-            ack.reason = "refusing to delete " + path + ": outside the known media paths";
-            send(MSG_PART_DELETE_ACK, encode(ack));
-            close_connection();
-            return;
-        }
-        std::string err;
-        if (!part_remove_tree(path, err)) {
-            ack.ok = false;
-            ack.reason = err;
-            send(MSG_PART_DELETE_ACK, encode(ack));
-            close_connection();
-            return;
-        }
-    }
-
-    piko_sync::remove_part(db, m.id);
-    if (!piko_sync::save_parts(db)) {
-        ack.ok = false;
-        ack.reason = "files removed but " + piko_sync::config_cfg_for(media) + " is not writable";
-        send(MSG_PART_DELETE_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    app_->set_status("part removed: " + m.id);
-    ack.ok = true;
-    send(MSG_PART_DELETE_ACK, encode(ack));
-    close_connection();
-}
-
 bool Connection::write_desktop_for(const RomEntry &e, std::string &err)
 {
     return write_desktop_file(e, err);
@@ -1412,17 +1246,8 @@ void Connection::handle_deploy_complete(const FileCompleteMsg &fc)
             rename(dest.c_str(), (dest + ".bak").c_str());
     }
 
-    struct stat staging_dir_st, dest_dir_st;
-    std::string staging_dir = dirname_of(staging_part_path_);
-    std::string dest_dir = dirname_of(dest);
-    bool same_fs = (stat(staging_dir.c_str(), &staging_dir_st) == 0
-                     && stat(dest_dir.c_str(), &dest_dir_st) == 0
-                     && staging_dir_st.st_dev == dest_dir_st.st_dev);
-
-    bool finalized;
-    if (same_fs) {
-        finalized = (rename_retry(staging_part_path_.c_str(), dest.c_str()) == 0);
-    } else {
+    bool finalized = (rename_retry(staging_part_path_.c_str(), dest.c_str()) == 0);
+    if (!finalized && errno == EXDEV) {
         std::string local_tmp = dest + PART_SUFFIX;
         finalized = copy_file(staging_part_path_, local_tmp)
                  && rename_retry(local_tmp.c_str(), dest.c_str()) == 0;

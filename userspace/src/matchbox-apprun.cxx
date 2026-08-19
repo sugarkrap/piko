@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "piko-sync/parts.h"
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Round_Button.H>
 #include <FL/fl_ask.H>
@@ -898,110 +897,6 @@ static void advanced_cb(Fl_Widget *, void *v)
     ui->win->redraw();
 }
 
-static void parts_close_cb(Fl_Widget *, void *w) { ((Fl_Window *)w)->hide(); }
-
-struct missing_part {
-    std::string label;
-    std::string note;
-};
-
-static bool part_is_present(const std::vector<piko_sync::PartEntry> &db,
-                            const piko_sync::PartSpec &spec, std::string &note)
-{
-    const piko_sync::PartEntry *e = piko_sync::find_part(db, spec.id);
-    struct stat st;
-
-    if (e != 0) {
-        std::string probe = piko_sync::part_marker_path(spec, e->path);
-        if (stat(probe.c_str(), &st) == 0)
-            return true;
-        note = std::string("registered on ") + piko_sync::part_media_name(e->media)
-             + " but missing at " + e->path;
-        if (e->media != piko_sync::PART_NAND)
-            note += " -- is the card inserted?";
-        return false;
-    }
-
-    for (int m = piko_sync::PART_NAND; m <= piko_sync::PART_CF; m++) {
-        std::string probe = piko_sync::part_marker_path(
-            spec, piko_sync::part_install_path(spec, m));
-        if (stat(probe.c_str(), &st) == 0)
-            return true;
-    }
-    note = "not installed";
-    return false;
-}
-
-static int parts_available(const char *csv, const char *app_name)
-{
-    std::vector<piko_sync::PartEntry> db = piko_sync::load_parts();
-    std::vector<missing_part> missing;
-    std::string item;
-    std::string list(csv ? csv : "");
-
-    for (size_t i = 0; i <= list.size(); i++) {
-        char c = (i < list.size()) ? list[i] : ',';
-        if (c == ',' || c == ';' || c == ' ') {
-            if (!item.empty()) {
-                const piko_sync::PartSpec *spec = piko_sync::part_spec(item);
-                if (spec == 0) {
-                    missing_part m;
-                    m.label = item;
-                    m.note = std::string("unknown software part -- ")
-                           + piko_sync::PARTS_CFG + " is missing or out of date";
-                    missing.push_back(m);
-                } else {
-                    std::string note;
-                    if (!part_is_present(db, *spec, note)) {
-                        missing_part m;
-                        m.label = spec->label;
-                        m.note = note;
-                        missing.push_back(m);
-                    }
-                }
-                item.clear();
-            }
-        } else {
-            item += c;
-        }
-    }
-
-    if (missing.empty()) {
-        trace("parts: all required parts present");
-        return 1;
-    }
-
-    std::string text = std::string(app_name)
-                     + " needs software parts that are not installed on this Zaurus:\n\n";
-    for (size_t i = 0; i < missing.size(); i++) {
-        text += "    " + missing[i].label + "\n        " + missing[i].note + "\n";
-        trace("parts: missing %s (%s)", missing[i].label.c_str(), missing[i].note.c_str());
-        fprintf(stderr, "matchbox-apprun: missing part: %s (%s)\n",
-                missing[i].label.c_str(), missing[i].note.c_str());
-    }
-    text += "\nConnect this Zaurus to Piko Sync on your computer and install them\n"
-            "from the Setup tab. They are not flashed with the system so that the\n"
-            "ROM stays small.";
-
-    if (getenv("DISPLAY") && x_is_running()) {
-        Display *dpy = XOpenDisplay(NULL);
-        if (dpy) {
-            XCloseDisplay(dpy);
-            int h = 150 + (int)missing.size() * 34;
-            Fl_Window win(440, h, "Missing software parts");
-            Fl_Box box(10, 10, 420, h - 60, text.c_str());
-            box.align(FL_ALIGN_WRAP | FL_ALIGN_LEFT | FL_ALIGN_TOP | FL_ALIGN_INSIDE);
-            Fl_Return_Button close_btn(440 - 110, h - 40, 100, 30, "Close");
-            close_btn.callback(parts_close_cb, &win);
-            win.end();
-            win.set_modal();
-            win.show();
-            Fl::run();
-        }
-    }
-    return 0;
-}
-
 static int confirm(const char *name, const char *reason, enum video_mode *mode)
 {
     struct advanced_ui ui;
@@ -1117,13 +1012,13 @@ static void usage(void)
 {
     fprintf(stderr,
             "usage: matchbox-apprun [-n NAME] [-r REASON] [-y] [--qvga] "
-            "[--fast-pll] [--drivers=fb;x11] [--video=qvga] [--parts=id,id] "
+            "[--fast-pll] [--drivers=fb;x11] [--video=qvga] "
             "[--] program [args...]\n");
 }
 
 int main(int argc, char **argv)
 {
-    const char *name = NULL, *reason = NULL, *parts = NULL;
+    const char *name = NULL, *reason = NULL;
     int assume_yes = 0;
     int mode_flag_given = 0;
     enum video_mode mode;
@@ -1140,8 +1035,6 @@ int main(int argc, char **argv)
             { fast_pll_requested = 1; mode_flag_given = 1; }
         else if (!strncmp(argv[i], "--drivers=", 10))
             parse_drivers(argv[i] + 10);
-        else if (!strncmp(argv[i], "--parts=", 8))
-            parts = argv[i] + 8;
         else if (!strncmp(argv[i], "--video=", 8))
             qvga_only = !strcmp(argv[i] + 8, "qvga");
         else if (!strcmp(argv[i], "--"))                 { i++; break; }
@@ -1191,11 +1084,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "matchbox-apprun: cannot run %s: %s\n",
                 prog_argv[0], strerror(errno));
         return 127;
-    }
-
-    if (parts && *parts && !parts_available(parts, name)) {
-        trace("main: required software parts are missing, not launching");
-        return 0;
     }
 
     if (!take_lock()) {

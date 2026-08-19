@@ -9,6 +9,8 @@ SKIP_ST=0
 SKIP_X11=0
 BUILD_ONLY=0
 SKIP_BUILD=0
+SKIP_ROOT_IMAGE=0
+DEPLOY_ROOT_IMAGE=0
 CREATE_BACKUP_FILES=0
 TARGET=""
 while [ $# -gt 0 ]; do
@@ -45,6 +47,18 @@ while [ $# -gt 0 ]; do
             SKIP_BUILD=1
             shift
             ;;
+        --skip-root-image)
+            SKIP_ROOT_IMAGE=1
+            shift
+            ;;
+        --deploy-root-image)
+            DEPLOY_ROOT_IMAGE=1
+            shift
+            ;;
+        --staging)
+            echo "FAILED: --staging is gone" >&2
+            exit 1
+            ;;
         --create-backup-files)
             CREATE_BACKUP_FILES=1
             shift
@@ -56,6 +70,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 TARGET="${TARGET:-root@10.43.112.72}"
+
+if [ "$SKIP_ROOT_IMAGE" -eq 1 ] && [ "$DEPLOY_ROOT_IMAGE" -eq 1 ]; then
+    echo "FAILED: --skip-root-image and --deploy-root-image are opposites." >&2
+    exit 1
+fi
 
 if [ "$SKIP_BUILD" -eq 1 ] && [ "$BUILD_ONLY" -eq 1 ]; then
     echo "FAILED: --skip-build and --build-only are opposites (skip the build" >&2
@@ -220,6 +239,26 @@ if [ "$KERNEL_ONLY" -eq 0 ] && [ "$SKIP_X11" -eq 0 ]; then
     echo "==> X11 payload OK ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
 fi
 
+if [ "$KERNEL_ONLY" -eq 1 ]; then
+    echo "==> --kernel-only: skipping the root image"
+elif [ "$SKIP_ROOT_IMAGE" -eq 1 ]; then
+    echo "==> --skip-root-image: not rebuilding flash/piko-root.img"
+else
+    echo "==> building the root image (tools/build-rootfs.sh)..."
+    if KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
+            "$REPO/tools/build-rootfs.sh" > /tmp/rootfs-build.log 2>&1; then
+        UPDATE_DIR="${UPDATE_DIR:-$REPO/sd-card/update/.zaurus}"
+        mkdir -p "$UPDATE_DIR"
+        cp "$KERNEL_DIR/arch/arm/boot/zImage" "$UPDATE_DIR/zImage-full"
+        cp "$REPO/flash/piko-root.img"        "$UPDATE_DIR/piko-root.img"
+        echo "==> root image OK ($(wc -c < "$REPO/flash/piko-root.img") bytes)"
+        echo "    update set refreshed: $UPDATE_DIR"
+    else
+        echo "WARNING: no root image, see /tmp/rootfs-build.log" >&2
+        tail -20 /tmp/rootfs-build.log >&2
+    fi
+fi
+
 fi
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
@@ -231,6 +270,9 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     if [ -f "$X11_PAYLOAD_TAR" ]; then
         echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
+    if [ -f "$REPO/flash/piko-root.img" ]; then
+        echo "    root image:  $REPO/flash/piko-root.img ($(wc -c < "$REPO/flash/piko-root.img") bytes)"
+    fi
     echo ""
     echo "    Deploy it later with:  userspace/src/piko-sync-deploy/piko-sync-deploy [user@host]"
     echo "    (piko-sync-server must be open on the device first)"
@@ -240,7 +282,7 @@ fi
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     echo "==> deploying to $TARGET (zImage only)..."
 else
-    echo "==> deploying to $TARGET (zImage + modules + X11/Matchbox)..."
+    echo "==> deploying to $TARGET (zImage + modules + X11/Matchbox + root payload)..."
 fi
 set -- "$TARGET"
 if [ -n "$ADAPTER" ]; then
@@ -254,6 +296,14 @@ if [ "$SKIP_USERSPACE" -eq 1 ]; then
 fi
 if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
     set -- --create-backup-files "$@"
+fi
+if [ "$DEPLOY_ROOT_IMAGE" -eq 1 ]; then
+    if [ ! -f "$REPO/flash/piko-root.img" ]; then
+        echo "FAILED: no $REPO/flash/piko-root.img" >&2
+        exit 1
+    fi
+    echo "==> staging piko-root.img.new"
+    set -- --root-image "$@"
 fi
 X11_PAYLOAD="${X11_PAYLOAD:-$X11_PAYLOAD_TAR}"
 export REPO KERNEL_DIR X11_PAYLOAD

@@ -82,11 +82,6 @@ core_scripts:
   - type: mkdir
     remote: /etc/zaurus
   - type: put_file
-    local: "${REPO}/rootfs/etc/zaurus/parts.cfg"
-    remote: /etc/zaurus/parts.cfg
-    mode: "0644"
-    if_exists: "${REPO}/rootfs/etc/zaurus/parts.cfg"
-  - type: put_file
     local: "${REPO}/userspace/desktop/rom.png"
     remote: /usr/share/pixmaps/rom.png
     mode: "0644"
@@ -395,3 +390,30 @@ x11_matchbox:
     local_tar: "${X11_PAYLOAD}"
     remote: /
     if_exists: "${X11_PAYLOAD}"
+
+root_payload:
+  - type: mkdir
+    remote: /usr/share/timidity
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/userspace/stage-timidity"
+    remote_base: /usr/share/timidity
+    recursive: "true"
+    mode: "0644"
+    if_exists: "${REPO}/userspace/stage-timidity/timidity.cfg"
+  - type: mkdir
+    remote: /usr/glibc
+  - type: mkdir
+    remote: /usr/glibc/lib
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/userspace/stage-glibc/lib"
+    remote_base: /usr/glibc/lib
+    recursive: "true"
+    mode: "0755"
+    if_exists: "${REPO}/userspace/stage-glibc/lib/ld-linux.so.3"
+
+root_image:
+  - type: put_file
+    local: "${REPO}/flash/piko-root.img"
+    remote: "${PIKO_BOOT_DIR}/piko-root.img.new"
+    mode: "0644"
+    if_exists: "${REPO}/flash/piko-root.img"

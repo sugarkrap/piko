@@ -2,7 +2,7 @@
 PM=${PHONEME_HOME:-/usr/local/lib/phoneme}
 LOGDIR=${PHONEME_LOG_DIR:-/mnt/card/.zaurus/var/log/phoneme}
 PIKO_CFG=${PIKO_PHONEME_CFG:-/etc/piko/phoneme.cfg}
-TIMIDITY_DEFAULT=/mnt/card/.zaurus/usr/share/timidity
+TIMIDITY_DEFAULT=/usr/share/timidity
 HEAP_MB_DEFAULT=12
 LOG_MAX=262144
 

@@ -1,7 +1,6 @@
 #include "../protocol.h"
 #include "../rom_detect.h"
 #include "../emulation_db.h"
-#include "../parts.h"
 #include "../transfer_state.h"
 #include "../transfer_queue.h"
 
@@ -680,8 +679,8 @@ int main()
         e.desktop = "j2me-game.desktop";
         e.icon = "/usr/share/pixmaps/rom.png";
         std::string d = desktop_contents(e);
-        check(d.find("X-Piko-Parts=freepats") != std::string::npos,
-              "j2me desktop declares the midi part it needs");
+        check(d.find("X-Piko-Parts") == std::string::npos,
+              "j2me desktops no longer declare software parts");
         check(d.find("Exec=/usr/local/bin/phoneme-run") != std::string::npos,
               "j2me desktop launches phoneme-run");
 
@@ -692,48 +691,7 @@ int main()
         s2.desktop = "snes-game.desktop";
         s2.icon = "/usr/share/pixmaps/rom.png";
         check(desktop_contents(s2).find("X-Piko-Parts") == std::string::npos,
-              "non-j2me desktops declare no parts");
-    }
-
-    {
-        std::vector<PartEntry> db;
-        PartEntry e;
-        e.id = "freepats";
-        e.media = PART_SD;
-        e.path = part_install_path(*part_spec("freepats"), PART_SD);
-        e.version = "20060219";
-        set_part(db, e);
-
-        check(part_catalog().size() >= 2, "catalog loaded from parts.cfg");
-        check(part_spec("freepats") != 0, "catalog knows freepats");
-        check(part_spec("glibc") != 0, "catalog knows glibc");
-        check(part_spec("nope") == 0, "catalog rejects an unknown part");
-
-        check(e.path == "/mnt/card/.zaurus/usr/share/timidity",
-              "sd install path matches the existing card layout");
-        check(part_install_path(*part_spec("glibc"), PART_NAND)
-                  == "/usr/local/glibc",
-              "nand install path has no doubled usr");
-        check(part_marker_path(*part_spec("freepats"), e.path)
-                  == "/mnt/card/.zaurus/usr/share/timidity/timidity.cfg",
-              "marker path hangs off the install path");
-
-        std::string line = encode_part(e);
-        PartEntry back;
-        check(decode_part(line, back), "config.cfg record round-trips");
-        check(back.id == e.id && back.media == e.media && back.path == e.path,
-              "config.cfg keeps id, media and path");
-        check(part_media_from_name(part_media_name(PART_CF)) == PART_CF,
-              "media name round-trips");
-
-        set_part(db, e);
-        check(db.size() == 1, "set_part upserts instead of duplicating");
-        remove_part(db, "freepats");
-        check(find_part(db, "freepats") == 0, "remove_part drops the entry");
-
-        PartEntry bad;
-        check(!decode_part("", bad), "an empty config.cfg line is not a part");
-        check(!decode_part("onlyid", bad), "a truncated config.cfg line is rejected");
+              "non-j2me desktops declare no parts either");
     }
 
     {
@@ -752,8 +710,6 @@ int main()
               "the cf card carries its own emulation db");
         check(emulation_cfg_for(PART_NAND) == "/usr/local/.zaurus/emulation.cfg",
               "nand keeps its db out of the flashed tree");
-        check(config_cfg_for(PART_SD) == "/mnt/card/.zaurus/config.cfg",
-              "installed parts are recorded on the media that holds them");
         check(media_present(PART_NAND), "nand is always present");
 
         RomEntry r;

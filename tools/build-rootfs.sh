@@ -2,25 +2,7 @@
 set -eu
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-BASE_JFFS2="${1:-$REPO/flash/base.jffs2}"
-OUT="${2:-$REPO/flash/mtd3.jffs2}"
-
 KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
-ERASEBLOCK="${ERASEBLOCK:-0x4000}"
-
-if [ ! -f "$BASE_JFFS2" ]; then
-    echo "build-rootfs: base image not found: $BASE_JFFS2" >&2
-    exit 1
-fi
-case "$(file -b "$BASE_JFFS2" 2>/dev/null)" in
-    *jffs2*little*endian*) ;;
-    *) echo "build-rootfs: $BASE_JFFS2 doesn't look like a little-endian JFFS2 image, refusing to guess" >&2; exit 1 ;;
-esac
-
-if [ "${SKIP_JFFS2:-0}" -ne 1 ] && ! command -v mkfs.jffs2 >/dev/null 2>&1; then
-    echo "build-rootfs: mkfs.jffs2 not found (apt install mtd-utils)" >&2
-    exit 1
-fi
 
 if [ -n "${ROOT_IMG_OUT:-}" ] && ! command -v fakeroot >/dev/null 2>&1; then
     echo "build-rootfs: fakeroot not found (apt install fakeroot)" >&2
@@ -239,11 +221,59 @@ cp -a "$PHONEME_HOME/." "$OVERLAY/usr/local/lib/phoneme/"
 chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
 echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
 
-if [ ! -f "$OVERLAY/etc/zaurus/parts.cfg" ]; then
-    echo "build-rootfs: rootfs/etc/zaurus/parts.cfg did not reach the overlay" >&2
+TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
+if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
+    echo "==> building the MIDI instruments (tools/userspace/build-timidity-patches.sh)"
+    "$REPO/tools/userspace/build-timidity-patches.sh"
+fi
+if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
+    echo "build-rootfs: build-timidity-patches.sh succeeded but there is no $TIMIDITY_STAGE/timidity.cfg" >&2
     exit 1
 fi
-echo "    parts: /etc/zaurus/parts.cfg ($(grep -c . "$OVERLAY/etc/zaurus/parts.cfg") entries)"
+mkdir -p "$OVERLAY/usr/share/timidity"
+cp -a "$TIMIDITY_STAGE/." "$OVERLAY/usr/share/timidity/"
+echo "    timidity: /usr/share/timidity ($(find "$OVERLAY/usr/share/timidity" -name '*.pat' | wc -l) patches)"
+
+GLIBC_STAGE="${GLIBC_STAGE:-$REPO/userspace/stage-glibc}"
+if [ ! -f "$GLIBC_STAGE/lib/ld-linux.so.3" ]; then
+    echo "==> building the GNU C library (tools/userspace/build-glibc-part.sh)"
+    "$REPO/tools/userspace/build-glibc-part.sh"
+fi
+if [ ! -f "$GLIBC_STAGE/lib/ld-linux.so.3" ]; then
+    echo "build-rootfs: build-glibc-part.sh succeeded but there is no $GLIBC_STAGE/lib/ld-linux.so.3" >&2
+    exit 1
+fi
+mkdir -p "$OVERLAY/usr/glibc"
+cp -a "$GLIBC_STAGE/lib" "$OVERLAY/usr/glibc/"
+echo "    glibc: /usr/glibc/lib (alongside uClibc)"
+
+BUSYBOX_STAGE="${BUSYBOX_ROOT_STAGE:-$REPO/userspace/stage-busybox}"
+if [ ! -f "$BUSYBOX_STAGE/bin/busybox" ]; then
+    echo "==> building busybox for the root (tools/userspace/build-busybox-root.sh)"
+    "$REPO/tools/userspace/build-busybox-root.sh"
+fi
+if [ ! -f "$BUSYBOX_STAGE/bin/busybox" ]; then
+    echo "build-rootfs: build-busybox-root.sh succeeded but there is no $BUSYBOX_STAGE/bin/busybox" >&2
+    exit 1
+fi
+cp -a "$BUSYBOX_STAGE/." "$OVERLAY/"
+echo "    busybox: /bin/busybox built from source ($(find "$BUSYBOX_STAGE" -type l | wc -l) applets)"
+
+WIRELESS_STAGE="${WIRELESS_STAGE:-$REPO/userspace/stage-target}"
+if [ ! -x "$WIRELESS_STAGE/usr/sbin/iwconfig" ]; then
+    echo "==> building the wireless tools (tools/userspace/build-libiw.sh)"
+    "$REPO/tools/userspace/build-libiw.sh"
+fi
+if [ ! -x "$WIRELESS_STAGE/usr/sbin/iwconfig" ]; then
+    echo "build-rootfs: build-libiw.sh succeeded but there is no $WIRELESS_STAGE/usr/sbin/iwconfig" >&2
+    exit 1
+fi
+mkdir -p "$OVERLAY/usr/sbin"
+for tool in iwconfig iwlist iwgetid iwpriv iwspy iwevent; do
+    cp "$WIRELESS_STAGE/usr/sbin/$tool" "$OVERLAY/usr/sbin/$tool"
+    chmod 0755 "$OVERLAY/usr/sbin/$tool"
+done
+echo "    wireless: /usr/sbin/iw* built from source"
 
 ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/userspace/stage-alsa-runtime}"
 if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
@@ -271,11 +301,15 @@ else
     echo "build-rootfs: WARNING -- no $OPKG_BIN, the pkg* wrappers will be non-functional" >&2
 fi
 
-echo "==> unpacking base image $BASE_JFFS2 (via the real kernel jffs2 driver -- needs sudo)"
+echo "==> assembling the root tree"
 MERGED="$STAGE/merged"
-sudo "$REPO/tools/scripts/jffs2-mount-extract.sh" "$BASE_JFFS2" "$MERGED"
-
-echo "==> overlaying kernel + modules + rootfs/ on top of the unpacked base"
+rm -rf "$MERGED"
+mkdir -p "$MERGED"
+for d in bin boot dev etc home lib media mnt proc root sbin sys tmp usr var \
+         usr/bin usr/sbin usr/lib usr/share usr/local var/log var/run; do
+    mkdir -p "$MERGED/$d"
+done
+chmod 1777 "$MERGED/tmp"
 cp -a "$OVERLAY/." "$MERGED/"
 
 echo "==> verifying the merged tree provides what its own boot scripts call"
@@ -312,16 +346,6 @@ if [ "$badlink" -ne 0 ]; then
 fi
 echo "    no dangling library symlinks"
 
-if [ "${SKIP_JFFS2:-0}" -ne 1 ]; then
-    echo "==> building fresh image from merged tree (eraseblock=$ERASEBLOCK)"
-    mkfs.jffs2 -r "$MERGED" -o "$OUT.partial" \
-        -e "$ERASEBLOCK" -l -U -n -q -v 2>&1 | tail -20
-    mv "$OUT.partial" "$OUT"
-
-    md5sum "$BASE_JFFS2" "$OUT"
-    echo "==> done: $OUT ($(stat -c '%s' "$OUT") bytes, base was $(stat -c '%s' "$BASE_JFFS2") bytes)"
-fi
-
 if [ -n "${ROOT_IMG_OUT:-}" ]; then
     if ! command -v mke2fs >/dev/null 2>&1; then
         echo "build-rootfs: mke2fs not found (apt install e2fsprogs)" >&2
@@ -335,9 +359,4 @@ if [ -n "${ROOT_IMG_OUT:-}" ]; then
     fakeroot sh -c "chown -R 0:0 '$MERGED' && mke2fs -F -q -t ext2 -L pikoroot -d '$MERGED' '$ROOT_IMG_OUT.partial'"
     mv "$ROOT_IMG_OUT.partial" "$ROOT_IMG_OUT"
     echo "==> done: $ROOT_IMG_OUT ($(stat -c '%s' "$ROOT_IMG_OUT") bytes)"
-fi
-
-if [ "${SKIP_JFFS2:-0}" -ne 1 ]; then
-    echo ""
-    IMAGE="$OUT" BASE_IMAGE="$BASE_JFFS2" "$REPO/tools/nand-budget.sh" "$OVERLAY"
 fi

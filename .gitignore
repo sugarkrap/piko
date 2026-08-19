@@ -49,8 +49,15 @@ rootfs/sbin/
 rootfs/usr/bin/
 rootfs/usr/share/*
 !rootfs/usr/share/piko/
-rootfs/home/
+!rootfs/usr/share/terminfo/
+!rootfs/usr/share/udhcpc/
+rootfs/home/*
+!rootfs/home/piko/
+rootfs/home/piko/*
+!rootfs/home/piko/.ssh/
 rootfs/root/*
+!rootfs/root/.profile
+!rootfs/root/.ssh/
 !rootfs/root/.matchbox/
 rootfs/root/.matchbox/*
 !rootfs/root/.matchbox/wallpaper
@@ -108,6 +115,7 @@ userspace/stage-alsa/
 userspace/stage-alsa-runtime/
 userspace/stage-ssh/
 userspace/stage-kexec/
+userspace/stage-busybox/
 userspace/src/MPlayer-*/
 userspace/stage-mplayer/
 userspace/src/curl-*/
@@ -161,3 +169,4 @@ userspace/.thirdparty-cache/*
 *.core
 
 /*.ipk
+initramfs/busybox-build-root/

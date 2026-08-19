@@ -9,7 +9,7 @@ HOSTCXXFLAGS       ?= -O2 -Wall -Wextra
 HOST_FLTK_CXXFLAGS ?=
 HOST_FLTK_LDFLAGS  ?= -lfltk
 
-COMMON_HDRS := protocol.h emulation_db.h parts.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h
+COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h
 
 .PHONY: all server client clean
 
@@ -35,7 +35,6 @@ clean:
 	rm -f piko-sync-server piko-sync-client
 
 .PHONY: test
-test: export PIKO_PARTS_CFG = $(CURDIR)/../../../rootfs/etc/zaurus/parts.cfg
 test:
 	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-protocol-test tests/protocol-test.cxx
 	/tmp/piko-sync-protocol-test

@@ -38,8 +38,7 @@ if [ "${PIKO_SYNC_SKIP_TESTS:-0}" = "0" ]; then
         for t in protocol settings; do
             "$HOSTCXX" -O2 -Wall -Wextra -o "$testdir/piko-sync-$t-test" \
                 "$SRC/tests/$t-test.cxx"
-            PIKO_PARTS_CFG="$REPO/rootfs/etc/zaurus/parts.cfg" \
-                "$testdir/piko-sync-$t-test"
+            "$testdir/piko-sync-$t-test"
         done
         rm -rf "$testdir"
     else

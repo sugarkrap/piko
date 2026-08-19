@@ -99,5 +99,5 @@ echo "==> $OUT"
 echo "    arch=$ARCH  version=$VERSION  size=$(wc -c < "$OUT") bytes"
 echo
 echo "Install it on the device with:"
-echo "    pkgadd /tmp/$(basename "$OUT")           # into the NAND root"
+echo "    pkgadd /tmp/$(basename "$OUT")           # into the root image"
 echo "    pkgadd /tmp/$(basename "$OUT") card      # onto the SD card"

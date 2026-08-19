@@ -23,6 +23,30 @@ bail() {
 	done
 }
 
+promote_staged_image() {
+	current="/media/$1"
+	staged="$current.new"
+	previous="$current.bak"
+
+	if test ! -f "$current" && test -f "$previous"; then
+		serial_echo "stage 2: restoring $1"
+		mv "$previous" "$current"
+	fi
+
+	test -s "$staged" || return 0
+
+	serial_echo "stage 2: promoting $1.new"
+	rm -f "$previous"
+	if test -f "$current"; then
+		mv "$current" "$previous" || return 0
+	fi
+	if ! mv "$staged" "$current"; then
+		serial_echo "stage 2: promotion failed"
+		mv "$previous" "$current"
+	fi
+	sync
+}
+
 PIKOROOT=
 ROOTDEV=
 ROOTTYPE=
@@ -73,6 +97,7 @@ dev)
 img)
 	mkdir -p /media
 	mount -t vfat "$DEV" /media || bail "mounting $DEV as vfat failed"
+	promote_staged_image "$IMG"
 	test -f "/media/$IMG" || bail "$IMG is not on $DEV"
 	mount -o loop "/media/$IMG" /newroot || bail "loop-mounting $IMG failed"
 	;;

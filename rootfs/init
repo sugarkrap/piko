@@ -1,2 +1,6 @@
 #!/bin/sh
+# The kernel runs this as PID 1 (cmdline: init=/init). Hand off to BusyBox
+# init, which reads /etc/inittab: sysinit -> /etc/init.d/rcS, then respawns
+# a getty/login on the console. This is the lightweight "service stack"
+# (no systemd) -- see docs/DEADLETTER-STAGE2-INIT.md.
 exec /sbin/init

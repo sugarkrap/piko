@@ -476,6 +476,7 @@ static void usage()
         "  --no-userspace\n"
         "  --create-backup-files\n"
         "  --replace-dropbear\n"
+        "  --root-image\n"
         "  --staging nand|sd|cf       stage .part files there (default sd)\n"
         "  --dry-run                  print the plan, send nothing\n"
         "  --probe                    handshake only, exit 0 or 1\n"
@@ -562,6 +563,7 @@ int main(int argc, char **argv)
         else if (a == "--no-userspace") { ctx.flags.no_userspace = true; }
         else if (a == "--create-backup-files") { ctx.flags.create_backup_files = true; }
         else if (a == "--replace-dropbear") { ctx.flags.replace_dropbear = true; }
+        else if (a == "--root-image") { ctx.flags.root_image = true; }
         else if (a == "--staging" && i + 1 < argc) {
             std::string v = argv[++i];
             if (v == "nand") g_staging = STAGE_NAND;

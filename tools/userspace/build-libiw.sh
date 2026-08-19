@@ -21,6 +21,7 @@ for f in iwlib.c iwlib.h wireless.h; do
 done
 
 if [ "$FORCE" -eq 0 ] && [ -f "$STAGE/usr/lib/libiw.a" ] \
+   && [ -x "$STAGE/usr/sbin/iwconfig" ] \
    && [ "$STAGE/usr/lib/libiw.a" -nt "$WT/iwlib.c" ]; then
     echo "==> libiw already built (pass --force to rebuild)"
     exit 0
@@ -46,6 +47,17 @@ mkdir -p "$STAGE/usr/lib" "$STAGE/usr/include"
 install -m 644 "$BUILD/libiw.a" "$STAGE/usr/lib/libiw.a"
 install -m 644 "$WT/iwlib.h"    "$STAGE/usr/include/iwlib.h"
 install -m 644 "$WT/wireless.h" "$STAGE/usr/include/wireless.h"
+
+echo "==> building the wireless tools"
+mkdir -p "$STAGE/usr/sbin"
+for tool in iwconfig iwlist iwgetid iwpriv iwspy iwevent; do
+    [ -f "$WT/$tool.c" ] || { echo "FAILED: missing $WT/$tool.c" >&2; exit 1; }
+    cp "$WT/$tool.c" "$BUILD/"
+    ( cd "$BUILD" && "$CC" -Os -W -Wall -DWE_NOLIBM=y -I. -o "$tool" "$tool.c" libiw.a )
+    "$TOOLCHAIN_BIN_DIR/$HOST_TRIPLET-strip" "$BUILD/$tool"
+    install -m 755 "$BUILD/$tool" "$STAGE/usr/sbin/$tool"
+    echo "    $tool: $(stat -c '%s' "$STAGE/usr/sbin/$tool") bytes"
+done
 
 echo "==> libiw ready:"
 echo "    $STAGE/usr/lib/libiw.a"

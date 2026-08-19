@@ -57,7 +57,7 @@ echo "==> [5/7] userspace payload + stage-2 root image"
 "$REPO/tools/userspace/build-userspace.sh" \
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
-KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" SKIP_JFFS2=1 \
+KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
     "$REPO/tools/build-rootfs.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"

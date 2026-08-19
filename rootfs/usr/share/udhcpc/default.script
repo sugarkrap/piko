@@ -1,0 +1,35 @@
+#!/bin/sh
+# Standard busybox udhcpc callback: configures the interface (and
+# resolv.conf) based on what the DHCP server actually handed back.
+# udhcpc calls this with $1 = event (deconfig/bound/renew/...) and
+# exports the lease details as environment variables ($ip, $subnet,
+# $router, $dns, ...).
+
+RESOLV_CONF=/etc/resolv.conf
+
+case "$1" in
+deconfig)
+	ifconfig "$interface" 0.0.0.0
+	;;
+bound|renew)
+	ifconfig "$interface" "$ip" ${subnet:+netmask "$subnet"}
+
+	if test -n "$router"; then
+		# busybox route has no "del default" match-any form; ignore
+		# failure if there wasn't one yet.
+		route del default 2>/dev/null
+		for r in $router; do
+			route add default gw "$r" dev "$interface"
+		done
+	fi
+
+	if test -n "$dns"; then
+		echo -n > "$RESOLV_CONF"
+		for d in $dns; do
+			echo "nameserver $d" >> "$RESOLV_CONF"
+		done
+	fi
+	;;
+esac
+
+exit 0

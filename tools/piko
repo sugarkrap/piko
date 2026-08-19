@@ -7,7 +7,7 @@ TOOLS="$REPO/tools"
 declare -A ROOT_COMMANDS=(
     [deploy]="$TOOLS/build-and-deploy.sh"
     [chunked-deploy]="$TOOLS/chunked-deploy.sh"
-    [mtd3-jffs2]="$TOOLS/build-mtd3-jffs2.sh"
+    [rootfs]="$TOOLS/build-rootfs.sh"
 )
 
 CATEGORIES=(toolchain kernel userspace emulator scripts)

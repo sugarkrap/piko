@@ -20,7 +20,7 @@ if [ "${PIKO_SYNC_DEPLOY_SKIP_TESTS:-0}" = "0" ]; then
     protocol_testbin="$(mktemp -d)/protocol-test"
     "$HOSTCXX" -O2 -Wall -Wextra -std=c++98 \
         -o "$protocol_testbin" "$REPO/userspace/src/piko-sync/tests/protocol-test.cxx"
-    PIKO_PARTS_CFG="$REPO/rootfs/etc/zaurus/parts.cfg" "$protocol_testbin"
+    "$protocol_testbin"
     rm -rf "$(dirname "$protocol_testbin")"
 
     manifest_testbin="$(mktemp -d)/manifest-test"

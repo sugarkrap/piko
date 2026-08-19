@@ -50,7 +50,6 @@
 
 #include "rom_detect.h"
 #include "emulation_db.h"
-#include "parts.h"
 #include "jar_meta.h"
 
 using namespace piko_sync;
@@ -985,7 +984,7 @@ private:
     Fl_Check_Button *skip_x11_;
     Fl_Check_Button *build_only_;
     Fl_Check_Button *no_backup_;
-    Fl_Choice *destination_;
+    Fl_Check_Button *deploy_root_image_;
     Fl_Button *run_btn_;
     Fl_Box *status_label_;
     Fl_Progress *bar_;
@@ -1063,12 +1062,8 @@ BuildRunner::BuildRunner(Fl_Group *tab, int X, int Y, int W, int H,
     y += 22;
     no_backup_ = new Fl_Check_Button(X + m, y, 110, 20, "no-backup");
     no_backup_->value(1);
-    destination_ = new Fl_Choice(X + m + 190, y - 1, 90, 22, "Staging:");
-    destination_->align(FL_ALIGN_LEFT);
-    destination_->add("sd");
-    destination_->add("nand");
-    destination_->add("cf", 0, 0, 0, FL_MENU_INACTIVE);
-    destination_->value(0);
+    deploy_root_image_ = new Fl_Check_Button(X + m + 120, y, 200, 20, "deploy-root-image");
+    deploy_root_image_->tooltip("Stage piko-root.img.new, promoted on the next boot");
     y += 26;
 
     run_btn_ = new Fl_Button(X + m, y, 140, 26, "Build && Deploy");
@@ -1117,7 +1112,6 @@ void BuildRunner::apply_settings(const Settings &cfg)
         target_->value(target.c_str());
 
     select_choice_by_label(adapter_, cfg.get("build.adapter"));
-    select_choice_by_label(destination_, cfg.get("build.staging"));
 
     kernel_only_->value(cfg.get_bool("build.kernel_only", false) ? 1 : 0);
     force_kernel_src_->value(cfg.get_bool("build.force_kernel_src", false) ? 1 : 0);
@@ -1126,6 +1120,7 @@ void BuildRunner::apply_settings(const Settings &cfg)
     skip_x11_->value(cfg.get_bool("build.skip_x11", false) ? 1 : 0);
     build_only_->value(cfg.get_bool("build.build_only", false) ? 1 : 0);
     no_backup_->value(cfg.get_bool("build.no_backup", true) ? 1 : 0);
+    deploy_root_image_->value(cfg.get_bool("build.deploy_root_image", false) ? 1 : 0);
 }
 
 void BuildRunner::store_settings(Settings &cfg) const
@@ -1138,7 +1133,6 @@ void BuildRunner::store_settings(Settings &cfg) const
     cfg.set("build.jobs", jobs_);
     cfg.set("build.target", target_->value() ? target_->value() : "");
     cfg.set("build.adapter", choice_label(adapter_));
-    cfg.set("build.staging", choice_label(destination_));
 
     cfg.set_bool("build.kernel_only", kernel_only_->value() != 0);
     cfg.set_bool("build.force_kernel_src", force_kernel_src_->value() != 0);
@@ -1147,6 +1141,7 @@ void BuildRunner::store_settings(Settings &cfg) const
     cfg.set_bool("build.skip_x11", skip_x11_->value() != 0);
     cfg.set_bool("build.build_only", build_only_->value() != 0);
     cfg.set_bool("build.no_backup", no_backup_->value() != 0);
+    cfg.set_bool("build.deploy_root_image", deploy_root_image_->value() != 0);
 }
 
 std::string BuildRunner::script_path() const
@@ -1169,10 +1164,7 @@ void BuildRunner::build_argv(std::vector<std::string> &args) const
     if (skip_x11_->value())         args.push_back("--skip-x11");
     if (build_only_->value())       args.push_back("--build-only");
     if (!no_backup_->value())       args.push_back("--create-backup-files");
-    if (destination_->text() && destination_->text()[0]) {
-        args.push_back("--staging");
-        args.push_back(destination_->text());
-    }
+    if (deploy_root_image_->value()) args.push_back("--deploy-root-image");
     if (target_->value() && target_->value()[0]) {
         std::string t = target_->value();
         if (t.find('@') == std::string::npos)
@@ -1611,45 +1603,6 @@ static bool delete_rom(const std::string &address, const std::string &path, std:
     return true;
 }
 
-static bool fetch_part_list(const std::string &address, std::string &records, std::string &err)
-{
-    std::string reply;
-    if (!rom_request(address, MSG_PART_LIST, std::string(), MSG_PART_LIST_ACK, reply, err))
-        return false;
-    PartListAckMsg ack;
-    if (!decode_part_list_ack(reply, ack)) { err = "malformed part list"; return false; }
-    records = ack.records;
-    return true;
-}
-
-static bool register_part(const std::string &address, const PartEntry &e, std::string &err)
-{
-    PartSetMsg m;
-    m.record = encode_part(e);
-    std::string reply;
-    if (!rom_request(address, MSG_PART_SET, encode(m), MSG_PART_SET_ACK, reply, err))
-        return false;
-    OkReasonMsg ack;
-    if (!decode_ok_reason(reply, ack)) { err = "malformed part reply"; return false; }
-    if (!ack.ok) { err = ack.reason; return false; }
-    return true;
-}
-
-static bool delete_part_remote(const std::string &address, const std::string &id,
-                               std::string &err)
-{
-    PartDeleteMsg m;
-    m.id = id;
-    m.purge = true;
-    std::string reply;
-    if (!rom_request(address, MSG_PART_DELETE, encode(m), MSG_PART_DELETE_ACK, reply, err))
-        return false;
-    OkReasonMsg ack;
-    if (!decode_ok_reason(reply, ack)) { err = "malformed part delete reply"; return false; }
-    if (!ack.ok) { err = ack.reason; return false; }
-    return true;
-}
-
 static bool set_rom_icon(const std::string &address, const std::string &rom_path,
                          const std::string &png, std::string &err)
 {
@@ -1698,318 +1651,6 @@ static const char *media_name(int idx)
     }
 }
 
-class SetupPane : public TransferObserver {
-public:
-    SetupPane(Fl_Group *tab, TransferPane *xfer, int X, int Y, int W, int H,
-              const Settings &cfg)
-        : xfer_(xfer), pending_media_(PART_NAND), busy_(false)
-    {
-        repo_root_ = cfg.get("build.repo_root");
-        if (const char *env_root = getenv("PIKO_SYNC_REPO_ROOT"))
-            if (*env_root) repo_root_ = env_root;
-
-        std::string catalog = (repo_root_.empty() ? std::string(".") : repo_root_)
-                            + "/rootfs/etc/zaurus/parts.cfg";
-        if (load_part_catalog(catalog) == 0)
-            load_part_catalog(PARTS_CFG);
-
-        tab->begin();
-        const int m = 10;
-        int y = Y + m;
-
-        header_ = new Fl_Box(X + m, y, W - 2 * m, 34);
-        header_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
-        header_->labelsize(11);
-        header_->label("Software parts are not flashed with the ROM. Install the ones you need "
-                       "onto SD, CF or NAND. freeJ2ME needs the Java runtime and, for music, "
-                       "the MIDI instruments.");
-        y += 38;
-
-        refresh_btn_ = new Fl_Button(X + m, y, 90, 24, "Refresh");
-        refresh_btn_->callback(refresh_cb, this);
-        status_ = new Fl_Box(X + m + 100, y, W - 2 * m - 100, 24);
-        status_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-        status_->labelsize(11);
-        status_->label("");
-        y += 32;
-
-        for (size_t i = 0; i < part_catalog().size(); i++) {
-            Row r;
-            r.spec = &part_catalog()[i];
-
-            r.label = new Fl_Box(X + m, y, 300, 18);
-            r.label->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-            r.label->labelfont(FL_HELVETICA_BOLD);
-            r.label->labelsize(12);
-            r.label->copy_label(r.spec->label.c_str());
-
-            r.media = new Fl_Choice(X + m + 310, y, 80, 22);
-            r.media->add("NAND");
-            r.media->add("SD");
-            r.media->add("CF");
-            r.media->value(r.spec->default_media);
-
-            r.install = new Fl_Button(X + m + 400, y, 80, 22, "Install");
-            r.install->callback(install_cb, this);
-
-            r.del = new Fl_Button(X + m + 486, y, 80, 22, "Delete");
-            r.del->callback(delete_cb, this);
-
-            r.status = new Fl_Box(X + m, y + 20, W - 2 * m, 16);
-            r.status->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-            r.status->labelsize(10);
-            r.status->label("");
-
-            rows_.push_back(r);
-            y += 46;
-        }
-
-        tab->end();
-        xfer_->add_observer(this);
-    }
-
-    virtual void on_transfer_complete()
-    {
-        finalize_install();
-    }
-
-    void finalize_install()
-    {
-        if (pending_id_.empty() || !xfer_->idle())
-            return;
-
-        PartEntry e;
-        e.id = pending_id_;
-        e.media = pending_media_;
-        e.path = pending_path_;
-        e.version = pending_version_;
-
-        pending_id_.clear();
-        busy_ = false;
-
-        std::string err;
-        if (!register_part(xfer_->address(), e, err))
-            set_status("installed but not registered: " + err);
-        else
-            set_status(e.id + " installed on " + part_media_name(e.media));
-        refresh();
-    }
-
-    void refresh()
-    {
-        if (busy_ && xfer_->idle() && !pending_id_.empty()) {
-            finalize_install();
-            return;
-        }
-        if (busy_ && xfer_->idle())
-            busy_ = false;
-        std::string address = xfer_->address();
-        if (address.empty()) { set_status("set the Zaurus address first"); return; }
-
-        std::string records, err;
-        if (!fetch_part_list(address, records, err)) {
-            set_status("cannot read the device: " + err);
-            for (size_t i = 0; i < rows_.size(); i++)
-                apply_row(rows_[i], 0);
-            return;
-        }
-
-        std::vector<PartEntry> db;
-        std::string line;
-        for (size_t i = 0; i <= records.size(); i++) {
-            char c = (i < records.size()) ? records[i] : '\n';
-            if (c == '\n') {
-                PartEntry e;
-                if (!line.empty() && decode_part(line, e))
-                    db.push_back(e);
-                line.clear();
-            } else if (c != '\r') {
-                line += c;
-            }
-        }
-
-        for (size_t i = 0; i < rows_.size(); i++) {
-            const PartEntry *e = find_part(db, rows_[i].spec->id);
-            apply_row(rows_[i], e);
-        }
-        set_status("");
-    }
-
-private:
-    struct Row {
-        const PartSpec *spec;
-        Fl_Box *label;
-        Fl_Box *status;
-        Fl_Choice *media;
-        Fl_Button *install;
-        Fl_Button *del;
-    };
-
-    void set_status(const std::string &text)
-    {
-        status_text_ = text;
-        status_->copy_label(status_text_.c_str());
-        status_->redraw();
-    }
-
-    void apply_row(Row &r, const PartEntry *e)
-    {
-        if (busy_) {
-            r.install->deactivate();
-            r.del->deactivate();
-            r.media->deactivate();
-            return;
-        }
-        bool present = e != 0 && option_get(e->options, "present") != "0";
-        if (e != 0 && present) {
-            r.media->value(e->media);
-            r.media->deactivate();
-            r.install->deactivate();
-            r.del->activate();
-            row_text_[r.spec->id] = std::string("installed on ")
-                                  + part_media_name(e->media) + " at " + e->path;
-        } else if (e != 0) {
-            r.media->activate();
-            r.install->activate();
-            r.del->activate();
-            row_text_[r.spec->id] = std::string("registered but missing on the device: ") + e->path;
-        } else {
-            r.media->activate();
-            r.install->activate();
-            r.del->deactivate();
-            char sz[64];
-            snprintf(sz, sizeof(sz), " (about %ld MB)", r.spec->size_kb / 1000);
-            row_text_[r.spec->id] = std::string("not installed -- ") + r.spec->detail + sz;
-        }
-        r.status->copy_label(row_text_[r.spec->id].c_str());
-        r.status->redraw();
-    }
-
-    Row *row_for(Fl_Widget *w)
-    {
-        for (size_t i = 0; i < rows_.size(); i++)
-            if (rows_[i].install == w || rows_[i].del == w)
-                return &rows_[i];
-        return 0;
-    }
-
-    static void refresh_cb(Fl_Widget *, void *v) { static_cast<SetupPane *>(v)->refresh(); }
-
-    static void install_cb(Fl_Widget *w, void *v)
-    {
-        SetupPane *p = static_cast<SetupPane *>(v);
-        Row *r = p->row_for(w);
-        if (r) p->do_install(*r);
-    }
-
-    static void delete_cb(Fl_Widget *w, void *v)
-    {
-        SetupPane *p = static_cast<SetupPane *>(v);
-        Row *r = p->row_for(w);
-        if (r) p->do_delete(*r);
-    }
-
-    std::string stage_path(const PartSpec &spec) const
-    {
-        std::string base = repo_root_.empty() ? std::string(".") : repo_root_;
-        return base + "/userspace/" + spec.stage_dir;
-    }
-
-    static bool collect_files(const std::string &dir, const std::string &rel,
-                              std::vector<std::pair<std::string, std::string> > &out)
-    {
-        DIR *d = opendir(dir.c_str());
-        if (d == 0)
-            return false;
-        struct dirent *ent;
-        while ((ent = readdir(d)) != 0) {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-                continue;
-            std::string child = dir + "/" + ent->d_name;
-            std::string child_rel = rel.empty() ? ent->d_name : rel + "/" + ent->d_name;
-            struct stat st;
-            if (lstat(child.c_str(), &st) != 0)
-                continue;
-            if (S_ISDIR(st.st_mode))
-                collect_files(child, child_rel, out);
-            else if (S_ISREG(st.st_mode))
-                out.push_back(std::make_pair(child, rel));
-        }
-        closedir(d);
-        return true;
-    }
-
-    void do_install(Row &r)
-    {
-        if (busy_) { set_status("a part install is already running"); return; }
-        if (xfer_->address().empty()) { set_status("set the Zaurus address first"); return; }
-
-        std::string stage = stage_path(*r.spec);
-        struct stat st;
-        if (stat(stage.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-            set_status("nothing staged at " + stage + " -- build this part on the host first");
-            return;
-        }
-
-        std::vector<std::pair<std::string, std::string> > files;
-        collect_files(stage, std::string(), files);
-        if (files.empty()) { set_status(stage + " is empty"); return; }
-
-        int media = r.media->value();
-        std::string root = part_install_path(*r.spec, media);
-
-        for (size_t i = 0; i < files.size(); i++) {
-            std::string dest = files[i].second.empty() ? root : root + "/" + files[i].second;
-            xfer_->queue_path(files[i].first, "overwrite=1", dest, std::string());
-        }
-        xfer_->refresh_queue_view();
-
-        pending_id_ = r.spec->id;
-        pending_media_ = media;
-        pending_path_ = root;
-        pending_version_ = r.spec->version;
-        busy_ = true;
-        for (size_t i = 0; i < rows_.size(); i++) {
-            rows_[i].install->deactivate();
-            rows_[i].del->deactivate();
-            rows_[i].media->deactivate();
-        }
-
-        char msg[160];
-        snprintf(msg, sizeof(msg), "queued %d file(s) for %s -> %s",
-                 (int)files.size(), r.spec->id.c_str(), root.c_str());
-        set_status(msg);
-    }
-
-    void do_delete(Row &r)
-    {
-        if (xfer_->address().empty()) { set_status("set the Zaurus address first"); return; }
-        if (fl_choice("Delete %s from the device?\nThis removes the installed files.",
-                      "Cancel", "Delete", 0, r.spec->label.c_str()) != 1)
-            return;
-        std::string err;
-        if (!delete_part_remote(xfer_->address(), r.spec->id, err))
-            set_status("delete failed: " + err);
-        else
-            set_status(r.spec->id + " removed");
-        refresh();
-    }
-
-    TransferPane *xfer_;
-    std::string repo_root_;
-    std::vector<Row> rows_;
-    std::map<std::string, std::string> row_text_;
-    std::string status_text_;
-    Fl_Box *header_;
-    Fl_Box *status_;
-    Fl_Button *refresh_btn_;
-    std::string pending_id_;
-    std::string pending_path_;
-    std::string pending_version_;
-    int pending_media_;
-    bool busy_;
-};
-
 struct ManagerSpec {
     const char *media_key;
     const char *subdir;
@@ -2038,16 +1679,11 @@ public:
 
         media_ = new Fl_Choice(X + m + 90, y, 110, 24, spec_.dest_label);
         media_->align(FL_ALIGN_LEFT);
-        media_->add("NAND");
         media_->add("SD");
         media_->add("CF");
         {
             std::string saved = cfg.get(spec_.media_key, "SD");
-            int idx = 1;
-            for (int i = 0; i < 3; i++)
-                if (saved == media_name(i))
-                    idx = i;
-            media_->value(idx);
+            media_->value(media_to_choice(part_media_from_name(saved)));
         }
         media_->tooltip("Which storage the device keeps these on");
 
@@ -2115,7 +1751,7 @@ public:
 
     void store_settings(Settings &cfg) const
     {
-        cfg.set(spec_.media_key, media_name(media_->value()));
+        cfg.set(spec_.media_key, media_name(media_from_choice(media_->value())));
     }
 
 private:
@@ -2129,7 +1765,7 @@ private:
     std::string address() const { return xfer_->address(); }
     std::string dest() const
     {
-        return std::string(media_base(media_->value())) + "/" + spec_.subdir;
+        return std::string(media_base(media_from_choice(media_->value()))) + "/" + spec_.subdir;
     }
 
     bool wanted(const RomEntry &e) const
@@ -2157,7 +1793,7 @@ private:
             return;
 
         std::string options;
-        option_set(options, "media", media_name(media_->value()));
+        option_set(options, "media", media_name(media_from_choice(media_->value())));
         if (rotate_chk_ && rotate_chk_->value())
             option_set(options, "rotate", "1");
 
@@ -2455,10 +2091,6 @@ int main(int argc, char **argv)
     Fl_Tabs tabs(0, HEADER_H, WIN_W, tabs_h);
     tabs.begin();
 
-    Fl_Group setup_tab(0, page_y, WIN_W, page_h, "Setup");
-    SetupPane setup(&setup_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg());
-    setup_tab.end();
-
     ManagerSpec rom_spec;
     rom_spec.media_key = "rom.media";
     rom_spec.subdir = "Emulation";
@@ -2510,7 +2142,6 @@ int main(int argc, char **argv)
 
     g_layout.tabs = &tabs;
     g_layout.xfer = &xfer;
-    g_layout.pages.push_back(&setup_tab);
     g_layout.pages.push_back(&rom_tab);
     g_layout.pages.push_back(&midlet_tab);
     g_layout.pages.push_back(&files_tab);

@@ -39,6 +39,18 @@ inline int part_media_from_name(const std::string &name)
     return PART_NAND;
 }
 
+const int MEDIA_CHOICE_COUNT = 2;
+
+inline int media_from_choice(int choice)
+{
+    return choice == 1 ? PART_CF : PART_SD;
+}
+
+inline int media_to_choice(int media)
+{
+    return media == PART_CF ? 1 : 0;
+}
+
 inline const char *part_media_base(int media)
 {
     switch (media) {
@@ -418,10 +430,8 @@ inline std::string desktop_contents(const RomEntry &e)
         out += "X-Piko-Video=qvga\n";
     } else {
         out += "X-Piko-Drivers=x11\n";
-        if (e.machine == "J2ME") {
+        if (e.machine == "J2ME")
             out += "X-Piko-Video=qvga\n";
-            out += "X-Piko-Parts=freepats\n";
-        }
     }
     out += "Icon=" + e.icon + "\n";
     out += "Terminal=false\n";

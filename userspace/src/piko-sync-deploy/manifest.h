@@ -22,9 +22,11 @@ struct DeployFlags {
     bool no_userspace;
     bool create_backup_files;
     bool replace_dropbear;
+    bool root_image;
     DeployFlags()
         : kernel_only(false), no_userspace(false),
-          create_backup_files(false), replace_dropbear(false) {}
+          create_backup_files(false), replace_dropbear(false),
+          root_image(false) {}
 };
 
 struct DeployContext {
@@ -244,6 +246,10 @@ inline bool put_files_from_tree(const std::string &local_dir, const std::string 
             continue;
 
         if (S_ISDIR(st.st_mode)) {
+            Step dir_step;
+            dir_step.type = STEP_MKDIR;
+            dir_step.remote_path = remote;
+            out.push_back(dir_step);
             if (!put_files_from_tree(full, remote, out, error, fixed_mode))
                 return false;
             continue;
@@ -280,7 +286,10 @@ inline std::vector<std::string> select_sections(const DeployFlags &flags)
     sec.push_back("panel_actions");
     if (!flags.no_userspace)
         sec.push_back("userspace_media");
+    sec.push_back("root_payload");
     sec.push_back("x11_matchbox");
+    if (flags.root_image)
+        sec.push_back("root_image");
     return sec;
 }
 
