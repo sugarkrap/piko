@@ -340,7 +340,7 @@ if [ -n "${ROOT_IMG_OUT:-}" ]; then
         exit 1
     fi
     tree_kb="$(du -sk "$MERGED" | while read -r n _; do echo "$n"; break; done)"
-    img_mb="${ROOT_IMG_SIZE_MB:-$(( tree_kb / 1024 * 14 / 10 + 96 ))}"
+    img_mb="${ROOT_IMG_SIZE_MB:-$(( tree_kb / 1024 * 14 / 10 + 32 ))}"
     echo "==> building the ext2 root image (${img_mb}M for a $(( tree_kb / 1024 ))M tree)"
     rm -f "$ROOT_IMG_OUT.partial"
     truncate -s "${img_mb}M" "$ROOT_IMG_OUT.partial"
