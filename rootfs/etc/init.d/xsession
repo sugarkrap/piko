@@ -49,6 +49,11 @@ done
 DISPLAY=:0
 export DISPLAY
 
+if [ -x /usr/bin/xkbcomp ] && [ -f /etc/X11/zaurus.xkb ]; then
+	/usr/bin/xkbcomp -I/usr/share/X11/xkb /etc/X11/zaurus.xkb "$DISPLAY" >>"$XLOG" 2>&1 \
+		|| echo "xsession: xkbcomp failed, keyboard stays on the server default" >>"$XLOG"
+fi
+
 HOME=/root
 export HOME
 

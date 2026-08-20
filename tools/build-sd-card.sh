@@ -79,6 +79,7 @@ for flavor in $FLAVORS; do
     cp "$KERNEL_DIR/arch/arm/boot/zImage" "$dest/zImage-full"
     cp "$REPO/flash/piko-root.img"        "$dest/piko-root.img"
     cp "$REPO/userspace/stage-kexec/sbin/kexec" "$dest/kexec"
+    cp "$REPO/flash/cfg/piko-boot.cfg"    "$dest/piko-boot.cfg"
     chmod 0755 "$dest/kexec"
 done
 
@@ -88,6 +89,7 @@ mkdir -p "$UPDATE"
 cp "$KERNEL_DIR/arch/arm/boot/zImage" "$UPDATE/zImage-full"
 cp "$REPO/flash/piko-root.img"        "$UPDATE/piko-root.img"
 cp "$REPO/userspace/stage-kexec/sbin/kexec" "$UPDATE/kexec"
+cp "$REPO/flash/cfg/piko-boot.cfg"    "$UPDATE/piko-boot.cfg"
 chmod 0755 "$UPDATE/kexec"
 
 echo ""
