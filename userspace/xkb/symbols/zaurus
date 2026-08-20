@@ -69,6 +69,7 @@ xkb_symbols "basic" {
     key <AE08> { [        8,  parenleft,  NoSymbol,  NoSymbol ] };
     key <AE09> { [        9, parenright,  NoSymbol,  NoSymbol ] };
     key <AE10> { [        0, asciitilde,  Delete,    Delete   ] };
+    key <AE11> { [    minus,      minus,  at,        at       ] };
     key <BKSP> {
         type[Group1] = "FOUR_LEVEL",
         symbols[Group1] = [ BackSpace, BackSpace, Delete, Delete ]
@@ -111,8 +112,8 @@ xkb_symbols "basic" {
     };
     key <AB05> { [        b,          B, underscore,  underscore  ] };
 
-    key <AB08> { [    comma,      less, less,        less        ] };
-    key <AB09> { [   period,   greater, greater,     greater     ] };
+    key <AB08> { [    comma,     slash, less,        less        ] };
+    key <AB09> { [   period,  question, greater,     greater     ] };
 
     // On/off button (matrix-keypad row 7, col 0 -- CORGI_KEY_OFF in
     // corgi.c, plain KEY_SUSPEND / evdev 205) is deliberately NOT
