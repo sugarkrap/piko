@@ -591,9 +591,6 @@ public:
         add_btn_->callback(add_cb, this);
         add_btn_->tooltip(spec_.add_tip);
 
-        refresh_btn_ = new Fl_Button(0, 0, 10, 10, "Refresh");
-        refresh_btn_->callback(refresh_cb, this);
-
         delete_btn_ = new Fl_Button(0, 0, 10, 10, "Delete");
         delete_btn_->callback(delete_cb, this);
 
@@ -628,13 +625,10 @@ public:
         int y = Y + m;
 
         media_->resize(X + m + 76, y, 84, 24);
-        add_btn_->resize(X + W - m - 152, y, 152, 24);
-
-        y += 28;
-        refresh_btn_->resize(X + m, y, 80, 24);
-        delete_btn_->resize(X + m + 86, y, 80, 24);
+        delete_btn_->resize(X + m + 176, y, 80, 24);
         if (icon_btn_)
-            icon_btn_->resize(X + m + 172, y, 92, 24);
+            icon_btn_->resize(X + m + 264, y, 92, 24);
+        add_btn_->resize(X + W - m - 152, y, 152, 24);
 
         y += 28;
         int list_h = Y + H - y - m;
@@ -679,7 +673,6 @@ public:
     }
 
 private:
-    static void refresh_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->refresh(); }
     static void delete_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->remove_selected(); }
     static void add_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->add_entries(); }
     static void select_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->show_icon(); }
@@ -882,7 +875,6 @@ private:
     Fl_Box *status_;
     Fl_Choice *media_;
     Fl_Button *add_btn_;
-    Fl_Button *refresh_btn_;
     Fl_Button *delete_btn_;
     Fl_Button *icon_btn_;
     Fl_Hold_Browser *list_;
@@ -909,6 +901,14 @@ public:
             roms_->refresh();
         if (midlets_)
             midlets_->refresh();
+    }
+
+    void refresh_shown_manager()
+    {
+        if (tabs_->value() == midlet_page_ && midlets_)
+            midlets_->refresh();
+        else if (roms_)
+            roms_->refresh();
     }
 
     TransferQueue &queue() { return queue_; }
@@ -957,6 +957,11 @@ private:
 
     void scan_existing();
     void relayout();
+
+    static void tab_cb(Fl_Widget *, void *v)
+    {
+        static_cast<ServerApp *>(v)->refresh_shown_manager();
+    }
 
     static void toggle_dock_cb(Fl_Widget *, void *v)
     {
@@ -1914,6 +1919,8 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
 
     tabs_->end();
     tabs_->resizable(0);
+    tabs_->callback(tab_cb, this);
+    tabs_->when(FL_WHEN_CHANGED);
 
     toggle_btn_ = new Fl_Button(X + m, Y + H - DOCK_SHUT_H, 120, 22, "@>  Transfers");
     toggle_btn_->box(FL_FLAT_BOX);
