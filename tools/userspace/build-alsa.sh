@@ -23,6 +23,14 @@ JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
 
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
+PIKO_STAMP="$STAGE_DIR/.piko-stamp"
+PIKO_STATE="$(sha256sum "$0" | cut -d' ' -f1) $ALSA_LIB_VERSION $ALSA_UTILS_VERSION"
+if [ "$FORCE" -eq 0 ] && [ -f "$PIKO_STAMP" ] \
+   && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -f "$STAGE_DIR/usr/lib/libasound.a" ]; then
+    echo "==> alsa $ALSA_LIB_VERSION already staged for these inputs, skipping (--force to rebuild)"
+    exit 0
+fi
+
 
 mkdir -p "$SRC_DIR"
 
@@ -191,3 +199,6 @@ echo "    ELF check (aplay):"
 "$READELF" -h "$RUNTIME_DIR/usr/bin/aplay" 2>/dev/null | grep -iE "type|flags" | sed 's/^/      /'
 echo "    dynamic deps (should be none -- fully static):"
 "$READELF" -d "$RUNTIME_DIR/usr/bin/aplay" 2>/dev/null | grep -i needed | sed 's/^/      /'
+
+mkdir -p "$STAGE_DIR"
+printf '%s\n' "$PIKO_STATE" > "$PIKO_STAMP"

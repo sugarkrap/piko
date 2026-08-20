@@ -78,6 +78,17 @@ jobs:
           path: userspace/stage-target
           key: stage-target-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
 
+      - name: cache the cross-built userspace stages
+        uses: actions/cache@v4
+        with:
+          path: |
+            userspace/stage-kexec
+            userspace/stage-ssh
+            userspace/stage-alsa
+            userspace/stage-phoneme
+            userspace/stage-busybox
+          key: stages-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
+
       - name: cache third-party x11 source downloads
         uses: actions/cache@v4
         with:

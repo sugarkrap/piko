@@ -32,6 +32,14 @@ for arg in "$@"; do
             ;;
     esac
 done
+PIKO_STAMP="$STAGE_DIR/.piko-stamp"
+PIKO_STATE="$(sha256sum "$0" | cut -d' ' -f1) $KEXEC_VERSION $KEXEC_SHA256"
+if [ "$FORCE" -eq 0 ] && [ -f "$PIKO_STAMP" ] \
+   && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -f "$STAGE_DIR/sbin/kexec" ]; then
+    echo "==> kexec $KEXEC_VERSION already staged for these inputs, skipping (--force to rebuild)"
+    exit 0
+fi
+
 
 mkdir -p "$SRC_DIR"
 
@@ -148,3 +156,6 @@ echo "==> done: $STAGE_DIR assembled"
 echo "    $STAGE_DIR/sbin/kexec"
 echo ""
 echo "    Picked up by tools/build-rootfs.sh."
+
+mkdir -p "$STAGE_DIR"
+printf '%s\n' "$PIKO_STATE" > "$PIKO_STAMP"

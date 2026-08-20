@@ -40,6 +40,14 @@ for arg in "$@"; do
             ;;
     esac
 done
+PIKO_STAMP="$STAGE_DIR/.piko-stamp"
+PIKO_STATE="$(sha256sum "$0" | cut -d' ' -f1) $DROPBEAR_VERSION $DROPBEAR_SHA256 $OPENSSH_VERSION $OPENSSH_SHA256"
+if [ "$FORCE" -eq 0 ] && [ -f "$PIKO_STAMP" ] \
+   && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -f "$STAGE_DIR/usr/sbin/dropbear" ]; then
+    echo "==> dropbear/openssh already staged for these inputs, skipping (--force to rebuild)"
+    exit 0
+fi
+
 
 mkdir -p "$SRC_DIR"
 
@@ -275,3 +283,6 @@ echo "    $STAGE_DIR/usr/sbin/dropbear   (NOT deployed unless --replace-dropbear
 echo ""
 echo "    Deploy with tools/chunked-deploy.sh (or tools/build-and-deploy.sh)."
 echo "    Also picked up by tools/build-rootfs.sh."
+
+mkdir -p "$STAGE_DIR"
+printf '%s\n' "$PIKO_STATE" > "$PIKO_STAMP"
