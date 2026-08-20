@@ -22,6 +22,11 @@ static void w100_suspend(u32 mode);
 static int w100_vsync(bool tight);
 static void w100_vsync_pause(bool tight);
 static void w100_hw_init(struct w100fb_par*);
+
+static bool assume_initialised;
+module_param(assume_initialised, bool, 0444);
+MODULE_PARM_DESC(assume_initialised,
+	"controller is already running from an earlier kernel: adopt its state instead of resetting and re-initialising it");
 static void w100_soft_reset(void);
 static void w100_pwm_setup(struct w100fb_par*);
 static void w100_init_clocks(struct w100fb_par*);
@@ -610,6 +615,11 @@ static void w100fb_activate_var(struct w100fb_par *par)
 {
 	struct w100_tg_info *tg = par->mach->tg;
 
+	if (par->adopted) {
+		par->adopted = 0;
+		return;
+	}
+
 	w100_pwm_setup(par);
 	w100_setup_memory(par);
 	w100_init_clocks(par);
@@ -1001,6 +1011,7 @@ static int w100fb_probe(struct platform_device *pdev)
 	struct w100fb_par *par;
 	struct resource *mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	unsigned int chip_id;
+	bool adopt;
 
 	if (!mem)
 		return -EINVAL;
@@ -1013,7 +1024,21 @@ static int w100fb_probe(struct platform_device *pdev)
 	if (remapped_regs == NULL)
 		goto out;
 
-	{
+	adopt = assume_initialised;
+	if (adopt) {
+		chip_id = readl(remapped_regs + mmCHIP_ID);
+		if (chip_id != CHIP_ID_W100 && chip_id != CHIP_ID_W3200 &&
+		    chip_id != CHIP_ID_W3220) {
+			printk(KERN_INFO "w100fb: chip id 0x%08x without a reset, initialising it after all\n",
+			       chip_id);
+			adopt = false;
+		} else {
+			printk(KERN_INFO "w100fb: chip id 0x%08x already running, adopting it\n",
+			       chip_id);
+		}
+	}
+
+	if (!adopt) {
 		int i;
 		for (i = 0; i < 10; i++) {
 			w100_soft_reset();
@@ -1118,7 +1143,9 @@ static int w100fb_probe(struct platform_device *pdev)
 	info->var.accel_flags = 0;
 	info->var.activate = FB_ACTIVATE_NOW;
 
-	w100_hw_init(par);
+	par->adopted = adopt ? 1 : 0;
+	if (!adopt)
+		w100_hw_init(par);
 
 	if (w100fb_check_var(&info->var, info) < 0) {
 		err = -EINVAL;

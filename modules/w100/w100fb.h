@@ -104,6 +104,7 @@ struct w100fb_mach_info {
 };
 
 struct w100fb_par {
+	unsigned int adopted;
 	unsigned int chip_id;
 	unsigned int xres;
 	unsigned int yres;
