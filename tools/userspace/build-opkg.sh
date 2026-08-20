@@ -58,7 +58,7 @@ mkdir -p "$CACHE" "$BUILD" "$STAGE"
 tarball="$CACHE/opkg-$VERSION.tar.gz"
 if [ ! -f "$tarball" ]; then
     echo "    downloading opkg-$VERSION.tar.gz"
-    curl -fL --retry 3 -o "$tarball.partial" "$URL"
+    curl -fL --http1.1 --retry 3 -o "$tarball.partial" "$URL"
     mv "$tarball.partial" "$tarball"
 fi
 got="$(sha256sum "$tarball" | cut -d' ' -f1)"

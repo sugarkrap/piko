@@ -88,7 +88,7 @@ fetch_jar() {
     mkdir -p "$CACHE_DIR"
     if [ ! -f "$path" ]; then
         echo "==> downloading $url"
-        curl -fL -o "$path.partial" "$url"
+        curl -fL --http1.1 -o "$path.partial" "$url"
         mv "$path.partial" "$path"
     fi
     got="$(sha256sum "$path" | cut -d' ' -f1)"

@@ -19,7 +19,7 @@ mkdir -p "$CACHE_DIR"
 
 if [ ! -f "$FREEPATS_TARBALL" ]; then
     echo "==> downloading $FREEPATS_URL"
-    curl -fL -o "$FREEPATS_TARBALL.partial" "$FREEPATS_URL"
+    curl -fL --http1.1 -o "$FREEPATS_TARBALL.partial" "$FREEPATS_URL"
     mv "$FREEPATS_TARBALL.partial" "$FREEPATS_TARBALL"
 fi
 

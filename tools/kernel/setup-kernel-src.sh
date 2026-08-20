@@ -30,9 +30,19 @@ fi
 
 if [ ! -f "$TARBALL" ]; then
     echo "==> downloading $KERNEL_URL"
-    curl -fL --retry 6 --retry-delay 5 --retry-all-errors \
-         --speed-limit 1024 --speed-time 30 -C - \
-         -o "$TARBALL.partial" "$KERNEL_URL"
+    attempt=0
+    until curl -fL --http1.1 --retry 6 --retry-delay 5 --retry-all-errors \
+               --speed-limit 1024 --speed-time 30 -C - \
+               -o "$TARBALL.partial" "$KERNEL_URL"; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge 5 ]; then
+            echo "tools/kernel/setup-kernel-src.sh: $KERNEL_URL kept breaking off after $attempt attempts" >&2
+            echo "    kept $(du -h "$TARBALL.partial" 2>/dev/null | cut -f1) at $TARBALL.partial" >&2
+            exit 1
+        fi
+        echo "    broke off at $(du -h "$TARBALL.partial" 2>/dev/null | cut -f1), resuming (attempt $attempt)"
+        sleep $((attempt * 10))
+    done
     xz -t "$TARBALL.partial"
     mv "$TARBALL.partial" "$TARBALL"
 else

@@ -66,7 +66,7 @@ fi
 
 if [ ! -f "$KEXEC_TARBALL" ]; then
     echo "==> downloading $KEXEC_URL"
-    curl -fL -o "$KEXEC_TARBALL.partial" "$KEXEC_URL"
+    curl -fL --http1.1 -o "$KEXEC_TARBALL.partial" "$KEXEC_URL"
     mv "$KEXEC_TARBALL.partial" "$KEXEC_TARBALL"
 else
     echo "==> reusing cached $KEXEC_TARBALL"

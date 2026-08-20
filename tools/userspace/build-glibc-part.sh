@@ -34,7 +34,7 @@ fetch() {
         return 0
     fi
     echo "==> downloading $_url"
-    if ! curl -fL --max-time 300 -o "$CACHE/$_deb.partial" "$_url"; then
+    if ! curl -fL --http1.1 --max-time 300 -o "$CACHE/$_deb.partial" "$_url"; then
         rm -f "$CACHE/$_deb.partial"
         echo "tools/userspace/build-glibc-part.sh: cannot download $_deb" >&2
         echo "  Debian armel is ARMv5TE soft-float, which is what this board needs." >&2

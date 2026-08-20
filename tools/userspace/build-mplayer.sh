@@ -62,7 +62,7 @@ fi
 
 if [ ! -f "$TARBALL" ]; then
     echo "==> downloading $MPLAYER_URL"
-    curl -fL -o "$TARBALL.partial" "$MPLAYER_URL"
+    curl -fL --http1.1 -o "$TARBALL.partial" "$MPLAYER_URL"
     mv "$TARBALL.partial" "$TARBALL"
 else
     echo "==> reusing cached $TARBALL"

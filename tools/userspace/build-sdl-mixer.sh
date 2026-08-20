@@ -51,7 +51,7 @@ fi
 
 if [ ! -f "$SDLMIX_TARBALL" ]; then
     echo "==> downloading $SDLMIX_URL"
-    curl -fL -o "$SDLMIX_TARBALL.partial" "$SDLMIX_URL"
+    curl -fL --http1.1 -o "$SDLMIX_TARBALL.partial" "$SDLMIX_URL"
     mv "$SDLMIX_TARBALL.partial" "$SDLMIX_TARBALL"
 else
     echo "==> reusing cached $SDLMIX_TARBALL"

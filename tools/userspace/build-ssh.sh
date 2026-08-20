@@ -92,7 +92,7 @@ fetch_verify_extract() {
 
     if [ ! -f "$tarball" ]; then
         echo "==> downloading $url"
-        curl -fL -o "$tarball.partial" "$url"
+        curl -fL --http1.1 -o "$tarball.partial" "$url"
         mv "$tarball.partial" "$tarball"
     else
         echo "==> reusing cached $tarball"

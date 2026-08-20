@@ -53,7 +53,7 @@ fetch_and_extract() {
 
     if [ ! -f "$_tarball" ]; then
         echo "==> downloading $_url"
-        curl -fL -o "$_tarball.partial" "$_url"
+        curl -fL --http1.1 -o "$_tarball.partial" "$_url"
         mv "$_tarball.partial" "$_tarball"
     else
         echo "==> reusing cached $_tarball"

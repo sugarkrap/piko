@@ -60,7 +60,7 @@ fi
 
 if [ ! -f "$SDLTTF_TARBALL" ]; then
     echo "==> downloading $SDLTTF_URL"
-    curl -fL -o "$SDLTTF_TARBALL.partial" "$SDLTTF_URL"
+    curl -fL --http1.1 -o "$SDLTTF_TARBALL.partial" "$SDLTTF_URL"
     mv "$SDLTTF_TARBALL.partial" "$SDLTTF_TARBALL"
 else
     echo "==> reusing cached $SDLTTF_TARBALL"

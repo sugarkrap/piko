@@ -36,7 +36,7 @@ CTNG_BIN="$TOOLCHAIN_DIR/ctng/bin/ct-ng"
 if [ ! -x "$CTNG_BIN" ]; then
     echo "==> building crosstool-NG $CTNG_VERSION"
     if [ ! -f "$CTNG_TAR" ]; then
-        curl -fL --retry 3 -o "$CTNG_TAR.partial" \
+        curl -fL --http1.1 --retry 3 -o "$CTNG_TAR.partial" \
             "https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-$CTNG_VERSION/crosstool-ng-$CTNG_VERSION.tar.xz"
         mv "$CTNG_TAR.partial" "$CTNG_TAR"
     fi
