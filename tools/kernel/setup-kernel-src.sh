@@ -6,7 +6,8 @@ KERNEL_VERSION="${KERNEL_VERSION:-7.1.4}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-kernel.config-corgi-$KERNEL_VERSION}"
 KERNEL_SRC_DIR="${KERNEL_SRC_DIR:-$REPO/kernel-src}"
 KERNEL_DIR="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION"
-TARBALL="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION.tar.xz"
+KERNEL_TARBALL_DIR="${KERNEL_TARBALL_DIR:-$REPO/kernel-dl}"
+TARBALL="$KERNEL_TARBALL_DIR/linux-$KERNEL_VERSION.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz"
 MARKER="$KERNEL_DIR/.piko-patched"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
@@ -20,11 +21,19 @@ if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
     exit 0
 fi
 
-mkdir -p "$KERNEL_SRC_DIR"
+mkdir -p "$KERNEL_SRC_DIR" "$KERNEL_TARBALL_DIR"
+
+if [ -f "$TARBALL" ] && ! xz -t "$TARBALL" 2>/dev/null; then
+    echo "==> $TARBALL is truncated or corrupt, discarding it"
+    rm -f "$TARBALL"
+fi
 
 if [ ! -f "$TARBALL" ]; then
     echo "==> downloading $KERNEL_URL"
-    curl -fL --retry 6 --retry-delay 5 --retry-all-errors -C - -o "$TARBALL.partial" "$KERNEL_URL"
+    curl -fL --retry 6 --retry-delay 5 --retry-all-errors \
+         --speed-limit 1024 --speed-time 30 -C - \
+         -o "$TARBALL.partial" "$KERNEL_URL"
+    xz -t "$TARBALL.partial"
     mv "$TARBALL.partial" "$TARBALL"
 else
     echo "==> reusing cached $TARBALL"

@@ -1,5 +1,6 @@
 kernel-src/
 kernel-src-bootstrap/
+kernel-dl/
 qemu-spitz/
 *-emulator-sd.img
 .emulator-sd.img
