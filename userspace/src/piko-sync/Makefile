@@ -9,7 +9,7 @@ HOSTCXXFLAGS       ?= -O2 -Wall -Wextra
 HOST_FLTK_CXXFLAGS ?=
 HOST_FLTK_LDFLAGS  ?= -lfltk
 
-COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h
+COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h jar_meta.h rom_detect.h
 
 .PHONY: all server client clean
 
@@ -22,7 +22,7 @@ piko-sync-server: piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
 	    -isystem $(STAGE)/usr/include \
 	    -o $@ piko-sync-server.cxx transfer_table.cxx \
 	    -L$(STAGE)/usr/lib -Wl,-rpath-link=$(STAGE)/usr/lib \
-	    -lfltk $(FLTK_LDLIBS)
+	    -lfltk_images -lpng -lz -lfltk $(FLTK_LDLIBS)
 
 client: piko-sync-client
 

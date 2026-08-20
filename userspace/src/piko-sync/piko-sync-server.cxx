@@ -2,9 +2,17 @@
 #include <FL/Fl_Window.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Box.H>
+#include <FL/Fl_Button.H>
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_File_Chooser.H>
+#include <FL/Fl_Group.H>
+#include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Progress.H>
+#include <FL/Fl_Tabs.H>
 #include <FL/Fl_Image.H>
+#include <FL/Fl_PNG_Image.H>
 #include <FL/Fl_Pixmap.H>
+#include <FL/fl_ask.H>
 
 #include <dirent.h>
 #include <errno.h>
@@ -34,11 +42,17 @@
 #include "icon_xpm.h"
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "jar_meta.h"
 
 using namespace piko_sync;
 
 static const char *TRANSFERS_DIR = "/mnt/card/Transfers";
 static const char *PART_SUFFIX = ".piko-sync-part";
+
+static const int HEADER_H = 44;
+static const int TABBAR_H = 24;
+static const int DOCK_SHUT_H = 28;
+static const int DOCK_OPEN_H = 168;
 
 static const int JFFS2_EAGAIN_RETRIES = 20;
 static const int JFFS2_EAGAIN_DELAY_US = 100000;
@@ -362,6 +376,129 @@ static int sync_rom_launchers()
     return changed + prune_rom_launchers(db);
 }
 
+static bool register_local_rom(const std::string &rom_path, const std::string &machine,
+                               const std::string &options, std::string &status)
+{
+    RomEntry e;
+    e.path = rom_path;
+    e.machine = machine;
+    e.backend = machine_backend(machine);
+    if (e.backend.empty()) {
+        status = "no emulator backend for " + machine
+                 + " -- " + basename_of_path(rom_path) + " is stored but not registered";
+        return false;
+    }
+    e.desktop = desktop_name_for(e.machine, rom_path);
+    e.icon = DEFAULT_ROM_ICON;
+
+    {
+        std::string media = option_get(options, "media");
+        if (!media.empty())
+            option_set(e.options, "media", media);
+        if (option_get(options, "heavy") == "1" || e.machine != "J2ME")
+            option_set(e.options, "heavy", "1");
+        std::string title = option_get(options, "title");
+        if (!title.empty())
+            option_set(e.options, "title", title);
+    }
+
+    if (e.machine == "J2ME") {
+        if (option_get(options, "rotate") == "1")
+            option_set(e.options, "rotate", "1");
+    }
+
+    std::vector<RomEntry> db = load_emulation_db();
+    for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path == e.path) { db.erase(db.begin() + i); break; }
+    }
+    db.push_back(e);
+
+    if (!save_emulation_db(db)) {
+        status = "rom registered but " + emulation_cfg_for(media_of_path(e.path))
+                 + " is not writable";
+        return false;
+    }
+
+    std::string err;
+    if (!write_desktop_file(e, err)) {
+        status = "rom registered but " + err;
+        return false;
+    }
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    status = e.machine + " rom registered: " + e.desktop;
+    return true;
+}
+
+static bool delete_local_rom(const std::string &rom_path, std::string &err)
+{
+    std::vector<RomEntry> db = load_emulation_db();
+    RomEntry found;
+    bool have = false;
+    for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path == rom_path) { found = db[i]; have = true; db.erase(db.begin() + i); break; }
+    }
+    if (!have) {
+        err = "no such rom on any mounted media";
+        return false;
+    }
+
+    if (unlink(found.path.c_str()) != 0 && errno != ENOENT) {
+        err = "cannot delete " + found.path + ": " + strerror(errno);
+        return false;
+    }
+
+    if (!found.desktop.empty())
+        unlink((std::string(APPLICATIONS_DIR) + "/" + found.desktop).c_str());
+
+    if (!save_emulation_db(db)) {
+        err = "rom deleted but " + emulation_cfg_for(media_of_path(found.path))
+              + " is not writable";
+        return false;
+    }
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    return true;
+}
+
+static bool set_local_rom_icon(const std::string &rom_path, const std::string &png,
+                               std::string &err)
+{
+    std::vector<RomEntry> db = load_emulation_db();
+    int idx = -1;
+    for (size_t i = 0; i < db.size(); i++)
+        if (db[i].path == rom_path) { idx = (int)i; break; }
+    if (idx < 0) {
+        err = "no such rom on any mounted media";
+        return false;
+    }
+
+    std::string ipath = icon_path_for(db[idx].machine, db[idx].path);
+    mkdir_p(PIXMAPS_DIR);
+    int fd = open_retry(ipath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        err = "cannot write " + ipath + ": " + strerror(errno);
+        return false;
+    }
+    bool ok = write_retry(fd, png.data(), png.size()) == (ssize_t)png.size();
+    close(fd);
+    if (!ok) {
+        err = ipath + " is truncated";
+        return false;
+    }
+
+    db[idx].icon = ipath;
+    if (!save_emulation_db(db)) {
+        err = "cannot update " + emulation_cfg_for(media_of_path(db[idx].path));
+        return false;
+    }
+    if (!write_desktop_file(db[idx], err))
+        return false;
+
+    system("/usr/sbin/deskscan >/dev/null 2>&1");
+    return true;
+}
+
 class ServerApp;
 
 class Connection {
@@ -396,7 +533,6 @@ private:
     void handle_rom_delete(const std::string &payload);
     void handle_rom_set_icon(const std::string &payload);
     void handle_rom_get_icon(const std::string &payload);
-    bool write_desktop_for(const RomEntry &e, std::string &err);
 
     std::string dest_dir_;
     std::string rom_machine_;
@@ -425,12 +561,355 @@ private:
     std::string staging_part_path_;
 };
 
-class ServerApp {
+struct LocalManagerSpec {
+    const char *subdir;
+    const char *add_label;
+    const char *add_tip;
+    const char *pattern;
+    const char *chooser_title;
+    const char *empty_text;
+    const char *reject_hint;
+    bool j2me;
+    bool want_icon;
+};
+
+class LocalManagerPane {
+public:
+    LocalManagerPane(Fl_Group *page, Fl_Box *status, const LocalManagerSpec &spec)
+        : spec_(spec), status_(status), icon_btn_(0), preview_(0), preview_image_(0)
+    {
+        page->begin();
+
+        media_ = new Fl_Choice(0, 0, 10, 10, "Stored on:");
+        media_->align(FL_ALIGN_LEFT);
+        media_->add("SD");
+        media_->add("CF");
+        media_->value(media_present(PART_SD) || !media_present(PART_CF) ? 0 : 1);
+        media_->tooltip("Which storage this device keeps these on");
+
+        add_btn_ = new Fl_Button(0, 0, 10, 10, spec_.add_label);
+        add_btn_->callback(add_cb, this);
+        add_btn_->tooltip(spec_.add_tip);
+
+        refresh_btn_ = new Fl_Button(0, 0, 10, 10, "Refresh");
+        refresh_btn_->callback(refresh_cb, this);
+
+        delete_btn_ = new Fl_Button(0, 0, 10, 10, "Delete");
+        delete_btn_->callback(delete_cb, this);
+
+        if (spec_.want_icon) {
+            icon_btn_ = new Fl_Button(0, 0, 10, 10, "Set Icon...");
+            icon_btn_->callback(icon_cb, this);
+            icon_btn_->tooltip("Choose the icon matchbox-desktop shows for this entry");
+        }
+
+        list_ = new Fl_Hold_Browser(0, 0, 10, 10);
+        list_->callback(select_cb, this);
+        list_->when(FL_WHEN_CHANGED);
+        static const int widths[] = { 230, 50, 70, 0 };
+        list_->column_widths(widths);
+        list_->column_char('\t');
+
+        if (spec_.want_icon) {
+            preview_ = new Fl_Box(0, 0, 48, 48);
+            preview_->box(FL_DOWN_BOX);
+            preview_->color(FL_BACKGROUND2_COLOR);
+        }
+
+        page->end();
+        page->resizable(0);
+    }
+
+    ~LocalManagerPane() { delete preview_image_; }
+
+    void relayout(int X, int Y, int W, int H)
+    {
+        int m = 8;
+        int y = Y + m;
+
+        media_->resize(X + m + 76, y, 84, 24);
+        add_btn_->resize(X + W - m - 152, y, 152, 24);
+
+        y += 28;
+        refresh_btn_->resize(X + m, y, 80, 24);
+        delete_btn_->resize(X + m + 86, y, 80, 24);
+        if (icon_btn_)
+            icon_btn_->resize(X + m + 172, y, 92, 24);
+
+        y += 28;
+        int list_h = Y + H - y - m;
+        if (list_h < 24)
+            list_h = 24;
+        int list_w = W - 2 * m - (preview_ ? 56 : 0);
+        if (list_w < 24)
+            list_w = 24;
+        list_->resize(X + m, y, list_w, list_h);
+        if (preview_)
+            preview_->resize(X + W - m - 48, y, 48, 48);
+    }
+
+    void refresh()
+    {
+        int keep = list_->value();
+        entries_.clear();
+        list_->clear();
+
+        std::vector<RomEntry> db = load_emulation_db();
+        for (size_t i = 0; i < db.size(); i++)
+            if ((db[i].machine == "J2ME") == spec_.j2me)
+                entries_.push_back(db[i]);
+
+        for (size_t i = 0; i < entries_.size(); i++) {
+            const RomEntry &e = entries_[i];
+            std::string media = option_get(e.options, "media");
+            if (media.empty())
+                media = part_media_name(media_of_path(e.path));
+            std::string label = option_unescape(option_get(e.options, "title"));
+            if (label.empty())
+                label = strip_extension(basename_of_path(e.path));
+            std::string row = label + "\t" + media + "\t" + e.machine + "\t" + e.path;
+            list_->add(row.c_str());
+        }
+        if (entries_.empty())
+            list_->add(spec_.empty_text);
+        else if (keep >= 1 && (size_t)keep <= entries_.size())
+            list_->value(keep);
+
+        show_icon();
+    }
+
+private:
+    static void refresh_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->refresh(); }
+    static void delete_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->remove_selected(); }
+    static void add_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->add_entries(); }
+    static void select_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->show_icon(); }
+    static void icon_cb(Fl_Widget *, void *v) { ((LocalManagerPane *)v)->choose_icon(); }
+
+    void status(const std::string &text)
+    {
+        if (!status_)
+            return;
+        status_->copy_label(text.c_str());
+        status_->redraw();
+    }
+
+    const RomEntry *selected() const
+    {
+        int sel = list_->value();
+        if (sel < 1 || (size_t)sel > entries_.size())
+            return 0;
+        return &entries_[sel - 1];
+    }
+
+    std::string start_dir() const
+    {
+        if (!last_dir_.empty())
+            return last_dir_;
+        if (media_present(PART_SD))
+            return media_mount_point(PART_SD);
+        if (media_present(PART_CF))
+            return media_mount_point(PART_CF);
+        return "/";
+    }
+
+    void add_entries()
+    {
+        Fl_File_Chooser chooser(start_dir().c_str(), spec_.pattern,
+                                Fl_File_Chooser::MULTI, spec_.chooser_title);
+        chooser.show();
+        while (chooser.shown())
+            Fl::wait();
+        if (!chooser.value(1))
+            return;
+
+        int media = media_from_choice(media_->value());
+        if (!media_present(media)) {
+            fl_alert("%s is not mounted, so nothing can be stored on it.",
+                     part_media_name(media));
+            return;
+        }
+
+        std::string dir = std::string(media_mount_point(media)) + "/" + spec_.subdir;
+        if (!mkdir_p(dir)) {
+            fl_alert("Cannot create %s", dir.c_str());
+            return;
+        }
+
+        std::string rejected;
+        std::string failed;
+        int added = 0;
+
+        for (int i = 1; i <= chooser.count(); i++) {
+            const char *path = chooser.value(i);
+            if (!path)
+                continue;
+            last_dir_ = dirname_of(path);
+
+            std::string machine = detect_machine(path);
+            bool wanted = spec_.j2me ? (machine == "J2ME")
+                                     : (!machine.empty() && machine != "J2ME");
+            if (!wanted) {
+                rejected += std::string("\n  ") + basename_of_path(path);
+                continue;
+            }
+
+            std::string dest = dir + "/" + basename_of_path(path);
+            if (dest != std::string(path) && !copy_file(path, dest)) {
+                failed += std::string("\n  ") + basename_of_path(path)
+                        + " (cannot copy to " + dir + ")";
+                continue;
+            }
+
+            std::string options;
+            option_set(options, "media", part_media_name(media));
+
+            std::string icon_png;
+            if (spec_.j2me) {
+                JarMeta meta;
+                if (jar_read_meta(path, meta)) {
+                    if (!meta.title.empty())
+                        option_set(options, "title", option_escape(meta.title));
+                    icon_png = meta.icon_png;
+                }
+            }
+
+            std::string note;
+            if (!register_local_rom(dest, machine, options, note)) {
+                failed += std::string("\n  ") + basename_of_path(path) + " (" + note + ")";
+                continue;
+            }
+
+            if (!icon_png.empty()) {
+                std::string err;
+                set_local_rom_icon(dest, icon_png, err);
+            }
+
+            added++;
+            status(note);
+        }
+
+        refresh();
+
+        if (added > 1 && rejected.empty() && failed.empty()) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "%d added", added);
+            status(msg);
+        }
+        if (!rejected.empty())
+            fl_alert("Not added, because they were not recognised:%s\n\n%s",
+                     rejected.c_str(), spec_.reject_hint);
+        if (!failed.empty())
+            fl_alert("Not added:%s", failed.c_str());
+    }
+
+    void remove_selected()
+    {
+        const RomEntry *e = selected();
+        if (!e) { fl_alert("Select an entry to delete first."); return; }
+
+        std::string name = strip_extension(basename_of_path(e->path));
+        std::string path = e->path;
+        if (fl_choice("Delete \"%s\"?\n%s", "Cancel", "Delete", 0,
+                      name.c_str(), path.c_str()) != 1)
+            return;
+
+        std::string err;
+        if (!delete_local_rom(path, err))
+            fl_alert("Could not delete %s:\n%s", name.c_str(), err.c_str());
+        else
+            status("deleted: " + name);
+        refresh();
+    }
+
+    void show_icon()
+    {
+        if (!preview_)
+            return;
+
+        preview_->image(0);
+        delete preview_image_;
+        preview_image_ = 0;
+
+        const RomEntry *e = selected();
+        if (e && !e->icon.empty()) {
+            Fl_PNG_Image *png = new Fl_PNG_Image(e->icon.c_str());
+            if (png->w() > 0 && png->h() > 0) {
+                if (png->w() > 48 || png->h() > 48) {
+                    preview_image_ = png->copy(48, 48);
+                    delete png;
+                } else {
+                    preview_image_ = png;
+                }
+                preview_->image(preview_image_);
+            } else {
+                delete png;
+            }
+        }
+        preview_->redraw();
+    }
+
+    void choose_icon()
+    {
+        const RomEntry *e = selected();
+        if (!e) { fl_alert("Select an entry first."); return; }
+        std::string rom = e->path;
+
+        Fl_File_Chooser chooser(start_dir().c_str(), "PNG icons (*.png)",
+                                Fl_File_Chooser::SINGLE, "Choose an icon");
+        chooser.show();
+        while (chooser.shown())
+            Fl::wait();
+        if (!chooser.value())
+            return;
+        last_dir_ = dirname_of(chooser.value());
+
+        std::string png = read_file(chooser.value());
+        if (png.size() < 8 || png.compare(1, 3, "PNG") != 0) {
+            fl_alert("%s is not a PNG image.", chooser.value());
+            return;
+        }
+
+        std::string err;
+        if (!set_local_rom_icon(rom, png, err)) {
+            fl_alert("Could not set the icon:\n%s", err.c_str());
+            return;
+        }
+        status("icon set for " + strip_extension(basename_of_path(rom)));
+        refresh();
+    }
+
+    LocalManagerSpec spec_;
+    Fl_Box *status_;
+    Fl_Choice *media_;
+    Fl_Button *add_btn_;
+    Fl_Button *refresh_btn_;
+    Fl_Button *delete_btn_;
+    Fl_Button *icon_btn_;
+    Fl_Hold_Browser *list_;
+    Fl_Box *preview_;
+    Fl_Image *preview_image_;
+    std::vector<RomEntry> entries_;
+    std::string last_dir_;
+};
+
+class ServerApp : public Fl_Group {
 public:
     ServerApp(int X, int Y, int W, int H);
     ~ServerApp();
 
-    Fl_Widget *resizable_widget() { return table_; }
+    void resize(int X, int Y, int W, int H)
+    {
+        Fl_Group::resize(X, Y, W, H);
+        relayout();
+    }
+
+    void refresh_managers()
+    {
+        if (roms_)
+            roms_->refresh();
+        if (midlets_)
+            midlets_->refresh();
+    }
 
     TransferQueue &queue() { return queue_; }
     TransferMap &transfer_map() { return transfer_map_; }
@@ -477,11 +956,36 @@ private:
     void refresh_address();
 
     void scan_existing();
+    void relayout();
+
+    static void toggle_dock_cb(Fl_Widget *, void *v)
+    {
+        ServerApp *a = static_cast<ServerApp *>(v);
+        a->set_dock_open(!a->dock_open_);
+    }
+    void set_dock_open(bool on)
+    {
+        dock_open_ = on;
+        if (dock_open_)
+            table_->show();
+        else
+            table_->hide();
+        toggle_btn_->label(dock_open_ ? "@2>  Transfers" : "@>  Transfers");
+        relayout();
+        redraw();
+    }
 
     Fl_Box *address_box_;
     Fl_Box *status_label_;
+    Fl_Tabs *tabs_;
+    Fl_Group *rom_page_;
+    Fl_Group *midlet_page_;
+    LocalManagerPane *roms_;
+    LocalManagerPane *midlets_;
+    Fl_Button *toggle_btn_;
     Fl_Progress *aggregate_bar_;
     TransferTable *table_;
+    bool dock_open_;
     TransferQueue queue_;
     DeploySession deploy_session_;
     TransferMap transfer_map_;
@@ -865,59 +1369,10 @@ void Connection::handle_complete(const std::string &payload)
 
 void Connection::register_rom(const std::string &rom_path)
 {
-    RomEntry e;
-    e.path = rom_path;
-    e.machine = rom_machine_;
-    e.backend = machine_backend(rom_machine_);
-    if (e.backend.empty()) {
-        app_->set_status("no emulator backend for " + e.machine
-                         + " -- rom transferred but not registered");
-        return;
-    }
-    e.desktop = desktop_name_for(e.machine, rom_path);
-    e.icon = DEFAULT_ROM_ICON;
-
-    {
-        std::string media = option_get(rom_options_, "media");
-        if (!media.empty())
-            option_set(e.options, "media", media);
-        if (option_get(rom_options_, "heavy") == "1" || e.machine != "J2ME")
-            option_set(e.options, "heavy", "1");
-    }
-
-    if (e.machine == "J2ME") {
-        if (option_get(rom_options_, "rotate") == "1")
-            option_set(e.options, "rotate", "1");
-    }
-
-    std::vector<RomEntry> db = load_emulation_db();
-    for (size_t i = 0; i < db.size(); i++) {
-        if (db[i].path == e.path) { db.erase(db.begin() + i); break; }
-    }
-    db.push_back(e);
-
-    if (!save_emulation_db(db)) {
-        app_->set_status("rom registered but " + emulation_cfg_for(media_of_path(e.path)) + " is not writable");
-        return;
-    }
-
-    mkdir_p(APPLICATIONS_DIR);
-    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
-    std::string contents = desktop_contents(e);
-    int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd < 0) {
-        app_->set_status("rom registered but cannot write " + dpath);
-        return;
-    }
-    bool ok = write_retry(fd, contents.data(), contents.size()) == (ssize_t)contents.size();
-    close(fd);
-    if (!ok) {
-        app_->set_status("rom registered but " + dpath + " is truncated");
-        return;
-    }
-
-    system("/usr/sbin/deskscan >/dev/null 2>&1");
-    app_->set_status(e.machine + " rom registered: " + e.desktop);
+    std::string status;
+    register_local_rom(rom_path, rom_machine_, rom_options_, status);
+    app_->set_status(status);
+    app_->refresh_managers();
 }
 
 void Connection::handle_rom_list(const std::string &payload)
@@ -936,52 +1391,19 @@ void Connection::handle_rom_delete(const std::string &payload)
     PathMsg m;
     if (!decode_path(payload, m)) { fail("malformed ROM_DELETE"); return; }
 
-    std::vector<RomEntry> db = load_emulation_db();
-    RomEntry found;
-    bool have = false;
-    for (size_t i = 0; i < db.size(); i++) {
-        if (db[i].path == m.path) { found = db[i]; have = true; db.erase(db.begin() + i); break; }
-    }
-
     OkReasonMsg ack;
-    if (!have) {
+    std::string err;
+    if (!delete_local_rom(m.path, err)) {
         ack.ok = false;
-        ack.reason = "no such rom on any mounted media";
-        send(MSG_ROM_DELETE_ACK, encode(ack));
-        close_connection();
-        return;
+        ack.reason = err;
+    } else {
+        app_->set_status("rom deleted: " + basename_of_path(m.path));
+        app_->refresh_managers();
+        ack.ok = true;
     }
 
-    if (unlink(found.path.c_str()) != 0 && errno != ENOENT) {
-        ack.ok = false;
-        ack.reason = "cannot delete " + found.path + ": " + strerror(errno);
-        send(MSG_ROM_DELETE_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    if (!found.desktop.empty())
-        unlink((std::string(APPLICATIONS_DIR) + "/" + found.desktop).c_str());
-
-    if (!save_emulation_db(db)) {
-        ack.ok = false;
-        ack.reason = "rom deleted but " + emulation_cfg_for(media_of_path(found.path)) + " is not writable";
-        send(MSG_ROM_DELETE_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    system("/usr/sbin/deskscan >/dev/null 2>&1");
-    app_->set_status("rom deleted: " + basename_of_path(found.path));
-
-    ack.ok = true;
     send(MSG_ROM_DELETE_ACK, encode(ack));
     close_connection();
-}
-
-bool Connection::write_desktop_for(const RomEntry &e, std::string &err)
-{
-    return write_desktop_file(e, err);
 }
 
 void Connection::handle_rom_set_icon(const std::string &payload)
@@ -990,51 +1412,16 @@ void Connection::handle_rom_set_icon(const std::string &payload)
     OkReasonMsg ack;
     if (!decode_rom_icon(payload, m)) { fail("malformed ROM_SET_ICON"); return; }
 
-    std::vector<RomEntry> db = load_emulation_db();
-    int idx = -1;
-    for (size_t i = 0; i < db.size(); i++)
-        if (db[i].path == m.rom_path) { idx = (int)i; break; }
-    if (idx < 0) {
-        ack.ok = false;
-        ack.reason = "no such rom on any mounted media";
-        send(MSG_ROM_SET_ICON_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    std::string ipath = icon_path_for(db[idx].machine, db[idx].path);
-    mkdir_p(PIXMAPS_DIR);
-    int fd = open_retry(ipath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd < 0) {
-        ack.ok = false;
-        ack.reason = "cannot write " + ipath + ": " + strerror(errno);
-        send(MSG_ROM_SET_ICON_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-    bool ok = write_retry(fd, m.data.data(), m.data.size()) == (ssize_t)m.data.size();
-    close(fd);
-    if (!ok) {
-        ack.ok = false;
-        ack.reason = ipath + " is truncated";
-        send(MSG_ROM_SET_ICON_ACK, encode(ack));
-        close_connection();
-        return;
-    }
-
-    db[idx].icon = ipath;
     std::string err;
-    if (!save_emulation_db(db) || !write_desktop_for(db[idx], err)) {
+    if (!set_local_rom_icon(m.rom_path, m.data, err)) {
         ack.ok = false;
-        ack.reason = err.empty() ? "cannot update " + emulation_cfg_for(media_of_path(db[idx].path)) : err;
-        send(MSG_ROM_SET_ICON_ACK, encode(ack));
-        close_connection();
-        return;
+        ack.reason = err;
+    } else {
+        app_->set_status("icon set for " + basename_of_path(m.rom_path));
+        app_->refresh_managers();
+        ack.ok = true;
     }
 
-    system("/usr/sbin/deskscan >/dev/null 2>&1");
-    app_->set_status("icon set for " + basename_of_path(db[idx].path));
-    ack.ok = true;
     send(MSG_ROM_SET_ICON_ACK, encode(ack));
     close_connection();
 }
@@ -1477,20 +1864,65 @@ void Connection::handle_deploy_begin(const std::string &payload)
 }
 
 ServerApp::ServerApp(int X, int Y, int W, int H)
-    : listen_fd_(-1)
+    : Fl_Group(X, Y, W, H), roms_(0), midlets_(0), dock_open_(false), listen_fd_(-1)
 {
-    int m = 10;
-    address_box_ = new Fl_Box(X + m, Y + m, W - 2 * m, 40);
-    address_box_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+    int m = 8;
+
+    address_box_ = new Fl_Box(X + m, Y + 4, W - 2 * m, 18);
+    address_box_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    address_box_->labelsize(12);
     address_box_->label("starting...");
 
-    status_label_ = new Fl_Box(X + m, Y + m + 44, W - 2 * m, 16);
+    status_label_ = new Fl_Box(X + m, Y + 24, W - 2 * m, 16);
     status_label_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
     status_label_->labelfont(FL_HELVETICA_ITALIC);
     status_label_->labelsize(12);
     status_label_->label("");
 
-    aggregate_bar_ = new Fl_Progress(X + m, Y + m + 62, W - 2 * m, 20);
+    tabs_ = new Fl_Tabs(X, Y + HEADER_H, W, H - HEADER_H - DOCK_SHUT_H);
+    tabs_->begin();
+
+    LocalManagerSpec rom_spec;
+    rom_spec.subdir = "Emulation";
+    rom_spec.add_label = "Add ROM...";
+    rom_spec.add_tip = "Move a ROM into storage and register it as a game";
+    rom_spec.pattern = "ROM files (*.{smc,sfc,fig,swc})";
+    rom_spec.chooser_title = "Add ROMs";
+    rom_spec.empty_text = "no roms registered yet";
+    rom_spec.reject_hint = "A ROM is recognised by its header, not only by its name.";
+    rom_spec.j2me = false;
+    rom_spec.want_icon = true;
+
+    rom_page_ = new Fl_Group(X, Y + HEADER_H + TABBAR_H, W,
+                             tabs_->h() - TABBAR_H, "ROMs");
+    roms_ = new LocalManagerPane(rom_page_, status_label_, rom_spec);
+
+    LocalManagerSpec midlet_spec;
+    midlet_spec.subdir = "Applets";
+    midlet_spec.add_label = "Add J2ME applet...";
+    midlet_spec.add_tip = "Move a MIDlet into storage and register it";
+    midlet_spec.pattern = "J2ME applets (*.{jar,jad})";
+    midlet_spec.chooser_title = "Add J2ME applets";
+    midlet_spec.empty_text = "no applets installed yet";
+    midlet_spec.reject_hint = "A MIDlet is a .jar with a MIDlet manifest, or its .jad descriptor.";
+    midlet_spec.j2me = true;
+    midlet_spec.want_icon = false;
+
+    midlet_page_ = new Fl_Group(X, Y + HEADER_H + TABBAR_H, W,
+                                tabs_->h() - TABBAR_H, "J2ME");
+    midlets_ = new LocalManagerPane(midlet_page_, status_label_, midlet_spec);
+
+    tabs_->end();
+    tabs_->resizable(0);
+
+    toggle_btn_ = new Fl_Button(X + m, Y + H - DOCK_SHUT_H, 120, 22, "@>  Transfers");
+    toggle_btn_->box(FL_FLAT_BOX);
+    toggle_btn_->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+    toggle_btn_->labelsize(12);
+    toggle_btn_->callback(toggle_dock_cb, this);
+
+    aggregate_bar_ = new Fl_Progress(X + m + 126, Y + H - DOCK_SHUT_H + 1,
+                                     W - 2 * m - 126, 20);
     aggregate_bar_->minimum(0);
     aggregate_bar_->maximum(100);
     aggregate_bar_->value(0);
@@ -1498,14 +1930,20 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
 
-    table_ = new TransferTable(X + m, Y + m + 90, W - 2 * m, H - m - 90 - m);
+    table_ = new TransferTable(X + m, Y + H, W - 2 * m, 1);
     table_->queue(&queue_);
+    table_->hide();
+
+    end();
+    resizable(0);
+    relayout();
 
     mkdir(TRANSFERS_DIR, 0755);
 
     migrate_legacy_dbs();
     if (sync_rom_launchers() > 0)
         system("/usr/sbin/deskscan >/dev/null 2>&1");
+    refresh_managers();
 
     if (access(TRANSFERS_DIR, W_OK) != 0) {
         char msg[256];
@@ -1542,8 +1980,39 @@ ServerApp::ServerApp(int X, int Y, int W, int H)
     Fl::add_timeout(3.0, refresh_address_cb, this);
 }
 
+void ServerApp::relayout()
+{
+    int m = 8;
+    int X = x(), Y = y(), W = w(), H = h();
+
+    address_box_->resize(X + m, Y + 4, W - 2 * m, 18);
+    status_label_->resize(X + m, Y + 24, W - 2 * m, 16);
+
+    int dock_h = dock_open_ ? DOCK_OPEN_H : DOCK_SHUT_H;
+    int tabs_h = H - HEADER_H - dock_h;
+    if (tabs_h < TABBAR_H + 24)
+        tabs_h = TABBAR_H + 24;
+
+    tabs_->resize(X, Y + HEADER_H, W, tabs_h);
+    rom_page_->resize(X, Y + HEADER_H + TABBAR_H, W, tabs_h - TABBAR_H);
+    midlet_page_->resize(X, Y + HEADER_H + TABBAR_H, W, tabs_h - TABBAR_H);
+    roms_->relayout(X, Y + HEADER_H + TABBAR_H, W, tabs_h - TABBAR_H);
+    midlets_->relayout(X, Y + HEADER_H + TABBAR_H, W, tabs_h - TABBAR_H);
+
+    int dy = Y + HEADER_H + tabs_h;
+    toggle_btn_->resize(X + m, dy + 2, 120, 22);
+    aggregate_bar_->resize(X + m + 126, dy + 3, W - 2 * m - 126, 20);
+
+    int table_h = dock_h - 28 - m;
+    if (table_h < 1)
+        table_h = 1;
+    table_->resize(X + m, dy + 28, W - 2 * m, table_h);
+}
+
 ServerApp::~ServerApp()
 {
+    delete roms_;
+    delete midlets_;
     while (!connections_.empty())
         connections_.back()->close_connection();
     if (listen_fd_ >= 0) {
@@ -1624,7 +2093,7 @@ int main(int argc, char **argv)
     win.begin();
     ServerApp app(0, 0, 640, 480);
     win.end();
-    win.resizable(app.resizable_widget());
+    win.resizable(&app);
 
     static Fl_Pixmap icon_pixmap(piko_sync_icon_xpm);
     static Fl_RGB_Image icon_img(&icon_pixmap);
