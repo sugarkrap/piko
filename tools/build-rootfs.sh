@@ -221,6 +221,11 @@ cp -a "$PHONEME_HOME/." "$OVERLAY/usr/local/lib/phoneme/"
 chmod 0755 "$OVERLAY/usr/local/lib/phoneme/bin/runMidlet"
 echo "    phoneme: /usr/local/lib/phoneme (runMidlet + skins + appdb)"
 
+mkdir -p "$OVERLAY/usr/local/bin"
+cp "$REPO/userspace/src/phoneme-run" "$OVERLAY/usr/local/bin/phoneme-run"
+chmod 0755 "$OVERLAY/usr/local/bin/phoneme-run"
+echo "    phoneme: /usr/local/bin/phoneme-run (what the .desktop launchers exec)"
+
 TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
 if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
     echo "==> building the MIDI instruments (tools/userspace/build-timidity-patches.sh)"
@@ -315,7 +320,9 @@ cp -a "$OVERLAY/." "$MERGED/"
 echo "==> verifying the merged tree provides what its own boot scripts call"
 REFS="$(cat "$REPO/rootfs/etc/init.d/rcS" "$REPO/rootfs/etc/init.d/xsession" \
              "$REPO/rootfs/etc/mdev.conf" "$REPO/rootfs/etc/inittab" \
-             "$REPO/rootfs"/usr/sbin/* 2>/dev/null \
+             "$REPO/rootfs"/usr/sbin/* \
+             "$REPO/userspace/src/piko-sync/emulation_db.h" \
+             "$REPO/userspace/src/piko-sync/piko-sync-server.cxx" 2>/dev/null \
     | grep -aoE '(^|[^-[:alnum:]_./])/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | grep -aoE '/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | sort -u)"
