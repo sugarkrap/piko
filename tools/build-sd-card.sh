@@ -39,6 +39,7 @@ echo "==> [3/7] stage-2 kernel-src"
 
 echo "==> [4/7] stage-2 initramfs + kernel (zImage + modules)"
 "$REPO/tools/kernel/build-initramfs.sh" --stage2
+cp "$REPO/kernel.config-corgi-$KERNEL_VERSION" "$KERNEL_DIR/.config"
 ( cd "$KERNEL_DIR" && ./scripts/config \
     --set-str CONFIG_INITRAMFS_SOURCE "$REPO/initramfs/initramfs-stage2-built.cpio.gz" )
 make -C "$KERNEL_DIR" ARCH=arm \
