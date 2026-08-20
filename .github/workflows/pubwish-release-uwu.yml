@@ -21,6 +21,9 @@ jobs:
           lfs: true
           submodules: recursive
 
+      - name: keep curl off http/2
+        run: printf -- '--http1.1\n' >> "$HOME/.curlrc"
+
       - name: compute cache keys
         run: |
           modules_hash="$(find modules -path 'modules/initramfs*' -prune -o -type f -print0 \

@@ -85,7 +85,7 @@ mkdir -p "$TOOLCHAIN_DIR/src"
 if [ ! -x "$CT_NG_SRC_DIR/ct-ng" ]; then
     if [ ! -f "$CT_NG_TARBALL" ]; then
         echo "==> downloading $CT_NG_URL"
-        curl -fL --http1.1 -o "$CT_NG_TARBALL.partial" "$CT_NG_URL"
+        curl -fL -o "$CT_NG_TARBALL.partial" "$CT_NG_URL"
         mv "$CT_NG_TARBALL.partial" "$CT_NG_TARBALL"
     else
         echo "==> reusing cached $CT_NG_TARBALL"
