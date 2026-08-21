@@ -200,6 +200,16 @@ else
 fi
 
 
+MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
+if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
+    mkdir -p "$OVERLAY/usr/bin"
+    cp "$MPLAYER_STAGE/usr/bin/mplayer" "$OVERLAY/usr/bin/mplayer"
+    chmod 0755 "$OVERLAY/usr/bin/mplayer"
+    echo "    mplayer: /usr/bin/mplayer"
+else
+    echo "build-rootfs: WARNING -- no $MPLAYER_STAGE, piko-player ships with no backend" >&2
+fi
+
 PHONEME_STAGE="${PHONEME_STAGE:-$REPO/userspace/stage-phoneme}"
 PHONEME_HOME="$PHONEME_STAGE/usr/local/lib/phoneme"
 if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then

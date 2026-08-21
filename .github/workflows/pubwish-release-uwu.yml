@@ -94,6 +94,7 @@ jobs:
             userspace/stage-kexec
             userspace/stage-ssh
             userspace/stage-alsa
+            userspace/stage-mplayer
             userspace/stage-phoneme
             userspace/stage-busybox
           key: stages-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
@@ -125,6 +126,12 @@ jobs:
             userspace/src/alsa-lib-*.tar.bz2
             userspace/src/alsa-utils-*.tar.bz2
           key: alsa-src-${{ hashFiles('tools/userspace/build-alsa.sh') }}
+
+      - name: cache the mplayer source download
+        uses: actions/cache@v4
+        with:
+          path: userspace/src/MPlayer-*.tar.xz
+          key: mplayer-src-${{ hashFiles('tools/userspace/build-mplayer.sh') }}
 
       - name: cache sdl source downloads
         uses: actions/cache@v4

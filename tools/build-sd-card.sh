@@ -55,6 +55,7 @@ echo "==> [5/7] userspace payload + stage-2 root image"
 "$REPO/tools/userspace/build-alsa.sh"
 "$REPO/tools/userspace/build-thirdparty-deps.sh"
 "$REPO/tools/userspace/build-x11-stack.sh"
+"$REPO/tools/userspace/build-mplayer.sh"
 "$REPO/tools/userspace/build-userspace.sh" \
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
