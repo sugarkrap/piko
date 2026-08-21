@@ -497,8 +497,10 @@ static bool resolve_media(DeployContext &ctx, std::string &error)
     if (!ok)
         return false;
     if (media.kernel.empty()) {
-        error = "the device reports no medium: its piko-sync-server predates the\n"
-                "media handshake, so the kernel would go to " + ctx.piko_kernel;
+        error = "the device reports no medium: either its piko-sync-server predates the\n"
+                "media handshake or its /etc/piko-media is unreadable, so the kernel\n"
+                "would go to " + ctx.piko_kernel + ".\n"
+                "Update the device from the .zaurus package on its card, then retry.";
         return false;
     }
     ctx.piko_kernel = media.kernel;
@@ -535,7 +537,8 @@ static int run_probe()
     close(fd);
     printf("%s:%d is reachable and speaking the piko-sync protocol.\n", g_host.c_str(), g_port);
     if (media.kernel.empty()) {
-        printf("  it reports no medium -- an older server, deploys would assume nand\n");
+        printf("  it reports no medium -- an older server, or no readable /etc/piko-media;\n");
+        printf("  deploys would assume nand\n");
     } else {
         printf("  kernel    %s\n", media.kernel.c_str());
         printf("  boot mnt  %s\n", media.boot_mnt.empty() ? "(none)" : media.boot_mnt.c_str());
