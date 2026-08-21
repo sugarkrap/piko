@@ -100,17 +100,11 @@ fi
 
 SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
 if [ -d "$SSH_STAGE" ]; then
-    SSH_PAYLOAD_FILES="usr/bin/scp:usr/bin/scp:755
+    ssh_list="usr/bin/scp:usr/bin/scp:755
 usr/libexec/sftp-server:usr/libexec/sftp-server:755
 usr/bin/dbclient:usr/bin/dbclient:755
-usr/bin/dropbearkey:usr/bin/dropbearkey:755"
-    SSH_PAYLOAD_SERVER="usr/sbin/dropbear:usr/sbin/dropbear:755"
-    ssh_list="$SSH_PAYLOAD_FILES"
-    if [ "${PIKO_SSH_REPLACE_DROPBEAR:-0}" = "1" ]; then
-        echo "==> PIKO_SSH_REPLACE_DROPBEAR=1: also overlaying the rebuilt dropbear"
-        ssh_list="$ssh_list
-$SSH_PAYLOAD_SERVER"
-    fi
+usr/bin/dropbearkey:usr/bin/dropbearkey:755
+usr/sbin/dropbear:usr/sbin/dropbear:755"
     for entry in $ssh_list; do
         src="$SSH_STAGE/${entry%%:*}"
         rest="${entry#*:}"

@@ -98,10 +98,10 @@ fi
 mkdir -p /etc/dropbear
 if ! test -f /etc/dropbear/dropbear_ed25519_host_key; then
 	echo "generating dropbear host keys (first boot)..."
-	dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
-	dropbearkey -t rsa     -f /etc/dropbear/dropbear_rsa_host_key     2>/dev/null
+	/usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
+	/usr/bin/dropbearkey -t rsa     -f /etc/dropbear/dropbear_rsa_host_key     2>/dev/null
 fi
-dropbear -R 2>/dev/null
+/usr/sbin/dropbear -R 2>/dev/null
 
 echo ""
 echo "=== zaurus-refresh stage 2 ready -- log in at the console ==="
