@@ -2,8 +2,10 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-STAGE="$REPO/userspace/stage-target"
-CACHE="${THIRDPARTY_CACHE:-$REPO/userspace/.thirdparty-cache}"
+STAGE="$REPO/build/target"
+CACHE="${THIRDPARTY_CACHE:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "${CACHE:-${CACHE_DIR:-}}"
 BUILD="${THIRDPARTY_BUILD:-/tmp/piko-thirdparty-build}"
 
 HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"

@@ -59,20 +59,20 @@ core_scripts:
   - type: mkdir
     remote: /usr/local/lib/phoneme/bin
   - type: put_file
-    local: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+    local: "${REPO}/build/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
     remote: /usr/local/lib/phoneme/bin/runMidlet
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+    if_exists: "${REPO}/build/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
   - type: put_tree_from_dir
-    local_dir: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/lib"
+    local_dir: "${REPO}/build/stage-phoneme/usr/local/lib/phoneme/lib"
     remote_base: /usr/local/lib/phoneme/lib
     mode: "0644"
-    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/lib"
+    if_exists: "${REPO}/build/stage-phoneme/usr/local/lib/phoneme/lib"
   - type: put_file
     local: "${REPO}/userspace/src/phoneme-run"
     remote: /usr/local/bin/phoneme-run
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
+    if_exists: "${REPO}/build/stage-phoneme/usr/local/lib/phoneme/bin/runMidlet"
   - type: put_file
     local: "${REPO}/rootfs/etc/piko/phoneme.cfg"
     remote: /etc/piko/phoneme.cfg
@@ -102,10 +102,10 @@ core_scripts:
     remote: /usr/sbin/bright
     mode: "0755"
   - type: put_file
-    local: "${REPO}/userspace/src/brightd"
+    local: "${REPO}/build/target/bin/brightd"
     remote: /usr/sbin/brightd
     mode: "0755"
-    if_exists: "${REPO}/userspace/src/brightd"
+    if_exists: "${REPO}/build/target/bin/brightd"
   - type: put_file
     local: "${REPO}/userspace/src/mhz"
     remote: /usr/sbin/mhz
@@ -234,40 +234,40 @@ ssh_payload:
 opkg:
   - type: mkdir
     remote: /var/lib/opkg/info
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: mkdir
     remote: /var/cache/opkg
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
-    local: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    local: "${REPO}/build/target/usr/bin/opkg"
     remote: /usr/bin/opkg
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/rootfs/etc/opkg/opkg.conf"
     remote: /etc/opkg/opkg.conf
     mode: "0644"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/rootfs/usr/sbin/pkgadd"
     remote: /usr/sbin/pkgadd
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/rootfs/usr/sbin/pkgdel"
     remote: /usr/sbin/pkgdel
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/rootfs/usr/sbin/pkglist"
     remote: /usr/sbin/pkglist
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/rootfs/usr/sbin/deskscan"
     remote: /usr/sbin/deskscan
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-target/usr/bin/opkg"
+    if_exists: "${REPO}/build/target/usr/bin/opkg"
   - type: put_file
     local: "${REPO}/userspace/src/kill"
     remote: /usr/bin/kill
@@ -395,25 +395,25 @@ root_payload:
   - type: mkdir
     remote: /usr/share/timidity
   - type: put_tree_from_dir
-    local_dir: "${REPO}/userspace/stage-timidity"
+    local_dir: "${REPO}/build/stage-timidity"
     remote_base: /usr/share/timidity
     recursive: "true"
     mode: "0644"
-    if_exists: "${REPO}/userspace/stage-timidity/timidity.cfg"
+    if_exists: "${REPO}/build/stage-timidity/timidity.cfg"
   - type: mkdir
     remote: /usr/glibc
   - type: mkdir
     remote: /usr/glibc/lib
   - type: put_tree_from_dir
-    local_dir: "${REPO}/userspace/stage-glibc/lib"
+    local_dir: "${REPO}/build/stage-glibc/lib"
     remote_base: /usr/glibc/lib
     recursive: "true"
     mode: "0755"
-    if_exists: "${REPO}/userspace/stage-glibc/lib/ld-linux.so.3"
+    if_exists: "${REPO}/build/stage-glibc/lib/ld-linux.so.3"
 
 root_image:
   - type: put_file
-    local: "${REPO}/flash/piko-root.img"
+    local: "${REPO}/build/flash/piko-root.img"
     remote: "${PIKO_BOOT_DIR}/piko-root.img.new"
     mode: "0644"
-    if_exists: "${REPO}/flash/piko-root.img"
+    if_exists: "${REPO}/build/flash/piko-root.img"

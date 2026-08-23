@@ -54,9 +54,9 @@ else
     CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabi-}"
 fi
 
-KERNEL_DIR="${KERNEL_DIR:-$(ls -d "$REPO"/kernel-src/linux-* 2>/dev/null | head -n1 || true)}"
+KERNEL_DIR="${KERNEL_DIR:-$(ls -d "$REPO"/build/kernel/src/linux-* 2>/dev/null | head -n1 || true)}"
 ZIMAGE_QEMU="$REPO/zImage-qemu-testing"
-[ -n "$INITRD" ] || INITRD="$REPO/initramfs/initramfs-minimal.cpio.gz"
+[ -n "$INITRD" ] || INITRD="$REPO/build/initramfs/initramfs-minimal.cpio.gz"
 
 CONFIG_BACKUP=
 restore_config() {
@@ -134,7 +134,7 @@ fi
 
 if [ ! -f "$ZIMAGE_QEMU" ] || [ "$REBUILD_KERNEL" = 1 ]; then
     [ -n "$KERNEL_DIR" ] && [ -f "$KERNEL_DIR/.config" ] || {
-        echo "$0: no configured kernel tree under $REPO/kernel-src (run tools/kernel/setup-kernel-src.sh)" >&2
+        echo "$0: no configured kernel tree under $REPO/build/kernel/src (run tools/kernel/setup-kernel-src.sh)" >&2
         exit 1
     }
     echo "==> building the QEMU kernel variant (CMDLINE_FORCE off, MACH_SPITZ on)"

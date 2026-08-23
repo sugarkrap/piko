@@ -3,7 +3,7 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/found-file-browser"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
+STAGE="${STAGE:-$REPO/build/target}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 HOST="${HOST:-arm-unknown-linux-uclibcgnueabi}"

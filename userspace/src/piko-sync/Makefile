@@ -1,5 +1,6 @@
-
-STAGE       ?= ../../stage-target
+STAGE       ?= ../../../build/target
+HOSTBIN     ?= ../../../build/host/bin
+TARGETBIN   ?= ../../../build/target/bin
 CXX         ?= g++
 CXXFLAGS    ?= -O2 -Wall -Wextra
 FLTK_LDLIBS ?= -lXft -lXrender -lfontconfig -lXext -lX11 -lm -lpthread
@@ -11,28 +12,33 @@ HOST_FLTK_LDFLAGS  ?= -lfltk
 
 COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h jar_meta.h rom_detect.h
 
+SERVER := $(TARGETBIN)/piko-sync-server
+CLIENT := $(HOSTBIN)/piko-sync-client
+
 .PHONY: all server client clean
 
 all: server client
 
-server: piko-sync-server
+server: $(SERVER)
 
-piko-sync-server: piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
+$(SERVER): piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
+	@mkdir -p $(TARGETBIN)
 	$(CXX) $(CXXFLAGS) \
 	    -isystem $(STAGE)/usr/include \
 	    -o $@ piko-sync-server.cxx transfer_table.cxx \
 	    -L$(STAGE)/usr/lib -Wl,-rpath-link=$(STAGE)/usr/lib \
 	    -lfltk_images -lpng -lz -lfltk $(FLTK_LDLIBS)
 
-client: piko-sync-client
+client: $(CLIENT)
 
-piko-sync-client: piko-sync-client.cxx transfer_table.cxx $(COMMON_HDRS) png_write.h
+$(CLIENT): piko-sync-client.cxx transfer_table.cxx $(COMMON_HDRS) png_write.h
+	@mkdir -p $(HOSTBIN)
 	$(HOSTCXX) $(HOSTCXXFLAGS) $(HOST_FLTK_CXXFLAGS) \
 	    -o $@ piko-sync-client.cxx transfer_table.cxx \
 	    $(HOST_FLTK_LDFLAGS) -lz
 
 clean:
-	rm -f piko-sync-server piko-sync-client
+	rm -f $(SERVER) $(CLIENT)
 
 .PHONY: test
 test:

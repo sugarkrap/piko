@@ -2,15 +2,18 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 KEXEC_VERSION="${KEXEC_VERSION:-2.0.31}"
 KEXEC_SRC_DIR="$SRC_DIR/kexec-tools-$KEXEC_VERSION"
-KEXEC_TARBALL="$SRC_DIR/kexec-tools-$KEXEC_VERSION.tar.xz"
+KEXEC_TARBALL="$DL_DIR/kexec-tools-$KEXEC_VERSION.tar.xz"
 KEXEC_URL="http://archive.ubuntu.com/ubuntu/pool/main/k/kexec-tools/kexec-tools_$KEXEC_VERSION.orig.tar.xz"
 KEXEC_SHA256="8a8f350ddc66e1c905a3ab525a7e9ba96c81e04e70ef69397b0155b67b922c31"
 
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-kexec}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-kexec}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 CROSS_HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"

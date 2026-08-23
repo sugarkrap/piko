@@ -4,7 +4,7 @@ set -eu
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src"
 FLTK_SRC_DIR="$SRC/fltk"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
+STAGE="${STAGE:-$REPO/build/target}"
 
 HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST/bin}"

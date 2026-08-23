@@ -3,9 +3,12 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 BUSYBOX_VERSION="${BUSYBOX_VERSION:-1.36.1}"
-INITRAMFS_DIR="${INITRAMFS_DIR:-$REPO/initramfs}"
+INITRAMFS_DIR="${INITRAMFS_DIR:-$REPO/build/initramfs}"
 BUSYBOX_SRC_DIR="${BUSYBOX_SRC_DIR:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION}"
-BUSYBOX_TARBALL="${BUSYBOX_TARBALL:-$INITRAMFS_DIR/busybox-$BUSYBOX_VERSION.tar.bz2}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
+BUSYBOX_TARBALL="${BUSYBOX_TARBALL:-$DL_DIR/busybox-$BUSYBOX_VERSION.tar.bz2}"
 BUSYBOX_URL="https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
@@ -136,6 +139,10 @@ if [ "$STAGE2" -eq 1 ]; then
 else
     printf '%s\n' "$FLAVOR" > "$ROOTFS_BUILD_DIR/piko-flavor"
     chmod 644 "$ROOTFS_BUILD_DIR/piko-flavor"
+    if [ "${PIKO_VERBOSE:-0}" = "1" ]; then
+        : > "$ROOTFS_BUILD_DIR/piko-verbose"
+        chmod 644 "$ROOTFS_BUILD_DIR/piko-verbose"
+    fi
 
     gzip -dc "$SPLASH_SRC" > "$ROOTFS_BUILD_DIR/splash.ppm"
     chmod 644 "$ROOTFS_BUILD_DIR/splash.ppm"

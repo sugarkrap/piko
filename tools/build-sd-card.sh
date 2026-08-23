@@ -3,10 +3,10 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 KERNEL_VERSION="${KERNEL_VERSION:-7.1.4}"
-KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-$KERNEL_VERSION}"
+KERNEL_DIR="${KERNEL_DIR:-$REPO/build/kernel/src/linux-$KERNEL_VERSION}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 JOBS="${JOBS:-$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)}"
-OUT_DIR="${OUT_DIR:-$REPO/sd-card}"
+OUT_DIR="${OUT_DIR:-$REPO/build/sd-card}"
 FLAVORS="${FLAVORS:-sd}"
 
 FORCE=0
@@ -41,7 +41,7 @@ echo "==> [4/7] stage-2 initramfs + kernel (zImage + modules)"
 "$REPO/tools/kernel/build-initramfs.sh" --stage2
 cp "$REPO/kernel.config-corgi-$KERNEL_VERSION" "$KERNEL_DIR/.config"
 ( cd "$KERNEL_DIR" && ./scripts/config \
-    --set-str CONFIG_INITRAMFS_SOURCE "$REPO/initramfs/initramfs-stage2-built.cpio.gz" )
+    --set-str CONFIG_INITRAMFS_SOURCE "$REPO/build/initramfs/initramfs-stage2-built.cpio.gz" )
 make -C "$KERNEL_DIR" ARCH=arm \
     CROSS_COMPILE="$TOOLCHAIN_BIN_DIR/arm-unknown-linux-uclibcgnueabi-" \
     olddefconfig
@@ -59,12 +59,12 @@ echo "==> [5/7] userspace payload + stage-2 root image"
 "$REPO/tools/userspace/build-userspace.sh" \
     --skip-ssh --skip-alsa --skip-kexec --skip-mplayer \
     --skip-st --skip-fltk --skip-toasters
-KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
+KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/build/flash/piko-root.img" \
     "$REPO/tools/build-rootfs.sh"
 
 echo "==> [6/7] piko-install + encoded updater.sh"
 "$REPO/tools/userspace/build-piko-install.sh" $FORCE_FLAG
-node "$REPO/tools/scripts/encode-updater.js" "$REPO/flash/updater-uncoded.sh" "$REPO/flash/updater-encoded.sh"
+node "$REPO/tools/scripts/encode-updater.js" "$REPO/flash/updater-uncoded.sh" "$REPO/build/flash/updater-encoded.sh"
 
 echo "==> [7/7] assembling one payload per flavor under $OUT_DIR"
 for flavor in $FLAVORS; do
@@ -72,15 +72,15 @@ for flavor in $FLAVORS; do
     rm -rf "$dest"
     mkdir -p "$dest"
 
-    cp "$REPO/flash/zImage-$flavor"      "$dest/zImage"
+    cp "$REPO/build/flash/zImage-$flavor"      "$dest/zImage"
     cp "$REPO/flash/cfg/$flavor.cfg"     "$dest/piko.cfg"
-    cp "$REPO/flash/piko-install"        "$dest/piko-install"
-    cp "$REPO/flash/updater-encoded.sh"  "$dest/updater.sh"
+    cp "$REPO/build/flash/piko-install"        "$dest/piko-install"
+    cp "$REPO/build/flash/updater-encoded.sh"  "$dest/updater.sh"
     chmod 0755 "$dest/piko-install"
 
     cp "$KERNEL_DIR/arch/arm/boot/zImage" "$dest/zImage-full"
-    cp "$REPO/flash/piko-root.img"        "$dest/piko-root.img"
-    cp "$REPO/userspace/stage-kexec/sbin/kexec" "$dest/kexec"
+    cp "$REPO/build/flash/piko-root.img"        "$dest/piko-root.img"
+    cp "$REPO/build/stage-kexec/sbin/kexec" "$dest/kexec"
     cp "$REPO/flash/cfg/piko-boot.cfg"    "$dest/piko-boot.cfg"
     chmod 0755 "$dest/kexec"
 done
@@ -89,8 +89,8 @@ UPDATE="$OUT_DIR/update/.zaurus"
 rm -rf "$OUT_DIR/update"
 mkdir -p "$UPDATE"
 cp "$KERNEL_DIR/arch/arm/boot/zImage" "$UPDATE/zImage-full"
-cp "$REPO/flash/piko-root.img"        "$UPDATE/piko-root.img"
-cp "$REPO/userspace/stage-kexec/sbin/kexec" "$UPDATE/kexec"
+cp "$REPO/build/flash/piko-root.img"        "$UPDATE/piko-root.img"
+cp "$REPO/build/stage-kexec/sbin/kexec" "$UPDATE/kexec"
 cp "$REPO/flash/cfg/piko-boot.cfg"    "$UPDATE/piko-boot.cfg"
 chmod 0755 "$UPDATE/kexec"
 

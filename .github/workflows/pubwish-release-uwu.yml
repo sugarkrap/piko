@@ -57,99 +57,56 @@ jobs:
           path: toolchain
           key: toolchain-v1-${{ env.KERNEL_VERSION }}-${{ hashFiles('tools/toolchain/**') }}
 
-      - name: cache busybox download
-        uses: actions/cache@v4
-        with:
-          path: initramfs/busybox-*.tar.bz2
-          key: busybox-src-${{ hashFiles('tools/kernel/build-initramfs.sh') }}
-
       - name: cache the kernel tarball
         uses: actions/cache@v4
         with:
-          path: kernel-dl
+          path: build/kernel/dl
           key: kernel-tarball-${{ env.KERNEL_VERSION }}
 
       - name: cache bootstrap kernel-src
         uses: actions/cache@v4
         with:
-          path: kernel-src-bootstrap
+          path: build/kernel/bootstrap
           key: kernel-src-bootstrap-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4-minimal', 'tools/kernel/setup-kernel-src.sh') }}-${{ env.MODULES_HASH }}
 
       - name: cache stage-2 kernel-src
         uses: actions/cache@v4
         with:
-          path: kernel-src
+          path: build/kernel/src
           key: kernel-src-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.config-corgi-7.1.4', 'tools/kernel/setup-kernel-src.sh') }}-${{ env.MODULES_HASH }}
 
       - name: cache the cross-built x11 and third-party prefix
         uses: actions/cache@v4
         with:
-          path: userspace/stage-target
+          path: build/target
           key: stage-target-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
 
       - name: cache the cross-built userspace stages
         uses: actions/cache@v4
         with:
           path: |
-            userspace/stage-kexec
-            userspace/stage-ssh
-            userspace/stage-alsa
-            userspace/stage-mplayer
-            userspace/stage-phoneme
-            userspace/stage-busybox
+            build/stage-kexec
+            build/stage-ssh
+            build/stage-alsa
+            build/stage-mplayer
+            build/stage-phoneme
+            build/stage-busybox
           key: stages-${{ env.KERNEL_VERSION }}-${{ env.STAGE_HASH }}
 
-      - name: cache third-party x11 source downloads
+      - name: cache third-party source downloads
         uses: actions/cache@v4
         with:
-          path: userspace/.thirdparty-cache
-          key: thirdparty-src-${{ hashFiles('tools/userspace/build-thirdparty-deps.sh') }}
-
-      - name: cache ssh source downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            userspace/src/dropbear-*.tar.bz2
-            userspace/src/openssh-*.tar.gz
-          key: ssh-src-${{ hashFiles('tools/userspace/build-ssh.sh') }}
-
-      - name: cache kexec source download
-        uses: actions/cache@v4
-        with:
-          path: userspace/src/kexec-tools-*.tar.xz
-          key: kexec-src-${{ hashFiles('tools/userspace/build-kexec.sh') }}
-
-      - name: cache alsa source downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            userspace/src/alsa-lib-*.tar.bz2
-            userspace/src/alsa-utils-*.tar.bz2
-          key: alsa-src-${{ hashFiles('tools/userspace/build-alsa.sh') }}
-
-      - name: cache the mplayer source download
-        uses: actions/cache@v4
-        with:
-          path: userspace/src/MPlayer-*.tar.xz
-          key: mplayer-src-${{ hashFiles('tools/userspace/build-mplayer.sh') }}
-
-      - name: cache sdl source downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            userspace/src/SDL-*.tar.gz
-            userspace/src/SDL_image-*.tar.gz
-            userspace/src/SDL_mixer-*.tar.gz
-          key: sdl-src-${{ hashFiles('tools/userspace/build-sdl.sh', 'tools/userspace/build-sdl-image.sh', 'tools/userspace/build-sdl-mixer.sh') }}
+          path: build/dl
+          key: dl-${{ hashFiles('tools/userspace/build-*.sh', 'tools/kernel/build-initramfs.sh') }}
 
       - name: build the sd card payload
         run: JDK_DIR="$JAVA_HOME" ./build.sh
 
       - name: locate the pikostore ipk
         run: |
-          IPK="$(ls pikostore_*_piko.ipk 2>/dev/null | head -1)"
+          IPK="$(ls build/pikostore_*_piko.ipk 2>/dev/null | head -1)"
           if [ -z "$IPK" ]; then
-              echo "::error::no pikostore_*_piko.ipk at the repo root -- tools/userspace/build-pikostore.sh (run by build-x11-stack.sh, run by build.sh) should have produced one" >&2
+              echo "::error::no build/pikostore_*_piko.ipk -- tools/userspace/build-pikostore.sh (run by build-x11-stack.sh, run by build.sh) should have produced one" >&2
               exit 1
           fi
           echo "PIKOSTORE_IPK=$IPK" >> "$GITHUB_ENV"
@@ -158,7 +115,7 @@ jobs:
         run: |
           TAG="sd-card-${{ github.run_number }}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          for d in sd-card/sd sd-card/update/.zaurus; do
+          for d in build/sd-card/sd build/sd-card/update/.zaurus; do
               if [ ! -d "$d" ]; then
                   echo "::error::build.sh produced no $d" >&2
                   exit 1
@@ -166,9 +123,9 @@ jobs:
           done
           rm -rf dist
           mkdir -p dist/piko
-          cp sd-card/sd/* dist/piko/
+          cp build/sd-card/sd/* dist/piko/
           tar -C dist -czf piko.tar.gz piko
-          tar -C sd-card/update -czf update.tar.gz .zaurus
+          tar -C build/sd-card/update -czf update.tar.gz .zaurus
           echo "ARCHIVES=piko.tar.gz update.tar.gz" >> "$GITHUB_ENV"
           for a in piko.tar.gz update.tar.gz; do
               echo "### $a" >> "$GITHUB_STEP_SUMMARY"
@@ -178,7 +135,7 @@ jobs:
           done
           echo "### bootstrap size against the 1294336-byte mtd1 kernel slot" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          sz="$(stat -c '%s' flash/zImage-sd)"
+          sz="$(stat -c '%s' build/flash/zImage-sd)"
           printf '%-5s %8s bytes  %3d%% of slot\n' \
               sd "$sz" "$((sz * 100 / 1294336))" | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

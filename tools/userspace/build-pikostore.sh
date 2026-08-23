@@ -3,8 +3,8 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/pikostore"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
-OUTDIR="${OUTDIR:-$REPO}"
+STAGE="${STAGE:-$REPO/build/target}"
+OUTDIR="${OUTDIR:-$REPO/build}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 HOST="${HOST:-arm-unknown-linux-uclibcgnueabi}"

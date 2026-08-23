@@ -81,12 +81,12 @@ fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DEFAULT_REPO="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO="${REPO:-$DEFAULT_REPO}"
-MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
-ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa-runtime}"
-SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
+MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/build/stage-mplayer}"
+ALSA_STAGE="${ALSA_STAGE:-$REPO/build/stage-alsa-runtime}"
+SDL_STAGE="${SDL_STAGE:-$REPO/build/stage-sdl-runtime}"
 HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TCROOT="${TCROOT:-$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot}"
-KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
+KERNEL_DIR="${KERNEL_DIR:-$REPO/build/kernel/src/linux-7.1.4}"
 
 if [ ! -d "$REPO" ]; then
     echo "FAILED: REPO does not exist: $REPO" >&2
@@ -332,7 +332,7 @@ else
     fi
 fi
 
-MD5SUM_BIN="$REPO/userspace/src/md5sum"
+MD5SUM_BIN="$REPO/build/target/bin/md5sum"
 if [ -f "$MD5SUM_BIN" ] && [ -n "$MD5SUM_LOCAL" ]; then
     send_file "$MD5SUM_BIN" "/usr/bin/md5sum"
     ssh_do "chmod 0755 /usr/bin/md5sum" || true
@@ -422,57 +422,57 @@ done
 ssh_do "chmod 0755 $(cd "$REPO/rootfs" && find . -type f -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
 ssh_do "chmod 0644 $(cd "$REPO/rootfs" && find . -type f ! -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
 
-if [ -f "$REPO/userspace/src/brightd" ]; then
-    send_file "$REPO/userspace/src/brightd" "/usr/sbin/brightd"
+if [ -f "$REPO/build/target/bin/brightd" ]; then
+    send_file "$REPO/build/target/bin/brightd" "/usr/sbin/brightd"
     ssh_do "chmod 0755 /usr/sbin/brightd"
 else
     echo "==> skipping brightd (not built -- run tools/userspace/build-userspace.sh)"
 fi
 
-if [ -f "$REPO/userspace/src/piko-splash" ]; then
-    send_file "$REPO/userspace/src/piko-splash" "/usr/sbin/piko-splash"
+if [ -f "$REPO/build/target/bin/piko-splash" ]; then
+    send_file "$REPO/build/target/bin/piko-splash" "/usr/sbin/piko-splash"
     ssh_do "chmod 0755 /usr/sbin/piko-splash"
 else
     echo "==> skipping piko-splash (not built -- run tools/userspace/build-userspace.sh)"
 fi
 
-if [ -f "$REPO/userspace/src/mhz" ]; then
-    send_file "$REPO/userspace/src/mhz" "/usr/sbin/mhz"
+if [ -f "$REPO/build/target/bin/mhz" ]; then
+    send_file "$REPO/build/target/bin/mhz" "/usr/sbin/mhz"
     ssh_do "chmod 0755 /usr/sbin/mhz"
 else
     echo "==> skipping mhz (not built -- run tools/userspace/build-userspace.sh)"
 fi
-if [ -f "$REPO/userspace/src/flipd" ]; then
-    send_file "$REPO/userspace/src/flipd" "/usr/sbin/flipd"
+if [ -f "$REPO/build/target/bin/flipd" ]; then
+    send_file "$REPO/build/target/bin/flipd" "/usr/sbin/flipd"
     ssh_do "chmod 0755 /usr/sbin/flipd"
 else
     echo "==> skipping flipd (not built -- run tools/userspace/build-userspace.sh)"
 fi
 for clock_tool in hwclock ntpsync; do
-    if [ -f "$REPO/userspace/src/$clock_tool" ]; then
-        send_file "$REPO/userspace/src/$clock_tool" "/usr/sbin/$clock_tool"
+    if [ -f "$REPO/build/target/bin/$clock_tool" ]; then
+        send_file "$REPO/build/target/bin/$clock_tool" "/usr/sbin/$clock_tool"
         ssh_do "chmod 0755 /usr/sbin/$clock_tool"
     else
         echo "==> skipping $clock_tool (not built -- run tools/userspace/build-userspace.sh)"
     fi
 done
-if [ -x "$REPO/userspace/src/cardswap" ]; then
-    send_file "$REPO/userspace/src/cardswap" "/usr/sbin/cardswap"
+if [ -x "$REPO/build/target/bin/cardswap" ]; then
+    send_file "$REPO/build/target/bin/cardswap" "/usr/sbin/cardswap"
     ssh_do "chmod 0755 /usr/sbin/cardswap"
 else
     echo "==> no built cardswap -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it an inserted card mounts, but gets no swap area"
 fi
 
-if [ -x "$REPO/userspace/src/zramswap" ]; then
-    send_file "$REPO/userspace/src/zramswap" "/usr/sbin/zramswap"
+if [ -x "$REPO/build/target/bin/zramswap" ]; then
+    send_file "$REPO/build/target/bin/zramswap" "/usr/sbin/zramswap"
     ssh_do "chmod 0755 /usr/sbin/zramswap"
 else
     echo "==> no built zramswap -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it the machine falls back to card-only swap"
 fi
 
-SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+SSH_STAGE="${SSH_STAGE:-$REPO/build/stage-ssh}"
 if [ "$KERNEL_ONLY" -eq 0 ] && [ -d "$SSH_STAGE" ]; then
     echo "==> SSH file transfer payload (scp + sftp-server)"
     SSH_PAYLOAD_FILES="usr/bin/scp:usr/bin/scp:755
@@ -504,24 +504,24 @@ elif [ "$KERNEL_ONLY" -eq 0 ]; then
     echo "==> no SSH payload at $SSH_STAGE -- skipping (run tools/userspace/build-ssh.sh)"
 fi
 
-if [ -x "$REPO/userspace/stage-target/usr/bin/opkg" ]; then
+if [ -x "$REPO/build/target/usr/bin/opkg" ]; then
     ssh_do "mkdir -p /etc/opkg /var/lib/opkg/info /var/cache/opkg"
-    send_file "$REPO/userspace/stage-target/usr/bin/opkg" "/usr/bin/opkg"
+    send_file "$REPO/build/target/usr/bin/opkg" "/usr/bin/opkg"
     ssh_do "chmod 0755 /usr/bin/opkg"
 else
     echo "==> no staged opkg -- skipping (build it with tools/userspace/build-opkg.sh)"
 fi
 
-if [ -x "$REPO/userspace/src/kill" ]; then
-    send_file "$REPO/userspace/src/kill" "/usr/bin/kill"
+if [ -x "$REPO/build/target/bin/kill" ]; then
+    send_file "$REPO/build/target/bin/kill" "/usr/bin/kill"
     ssh_do "chmod 0755 /usr/bin/kill"
     ssh_do "mkdir -p /usr/local/bin && ln -sf /usr/bin/kill /usr/local/bin/kill"
 fi
 
-if [ -x "$REPO/userspace/src/piko-sync/piko-sync-server" ]; then
+if [ -x "$REPO/build/target/bin/piko-sync-server" ]; then
     echo "==> piko-sync-server (stopping it first -- it cannot replace itself)"
     ssh_do "for p in \$(ps | grep '[p]iko-sync-server' | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 1" || true
-    send_file "$REPO/userspace/src/piko-sync/piko-sync-server" "/usr/bin/piko-sync-server"
+    send_file "$REPO/build/target/bin/piko-sync-server" "/usr/bin/piko-sync-server"
     ssh_do "chmod 0755 /usr/bin/piko-sync-server"
     if [ -f "$REPO/userspace/desktop/piko-sync-server.desktop" ]; then
         send_file "$REPO/userspace/desktop/piko-sync-server.desktop" "/usr/share/applications/piko-sync-server.desktop"
@@ -533,19 +533,26 @@ else
     echo "==> no built piko-sync-server -- skipping (run tools/userspace/build-piko-sync.sh)"
 fi
 
-if [ -x "$REPO/userspace/src/pkillx" ]; then
-    send_file "$REPO/userspace/src/pkillx" "/usr/sbin/pkillx"
+if [ -x "$REPO/build/target/bin/pkillx" ]; then
+    send_file "$REPO/build/target/bin/pkillx" "/usr/sbin/pkillx"
     ssh_do "chmod 0755 /usr/sbin/pkillx"
 else
     echo "==> no built pkillx -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
 fi
 
-if [ -x "$REPO/userspace/src/vol" ]; then
-    send_file "$REPO/userspace/src/vol" "/usr/sbin/vol"
+if [ -x "$REPO/build/target/bin/vol" ]; then
+    send_file "$REPO/build/target/bin/vol" "/usr/sbin/vol"
     ssh_do "chmod 0755 /usr/sbin/vol"
 else
     echo "==> no built vol -- skipping (run tools/userspace/build-userspace.sh)"
+fi
+
+if [ -x "$REPO/build/target/bin/fbtext" ]; then
+    send_file "$REPO/build/target/bin/fbtext" "/usr/sbin/fbtext"
+    ssh_do "chmod 0755 /usr/sbin/fbtext"
+else
+    echo "==> no built fbtext -- skipping (run tools/userspace/build-userspace.sh)"
 fi
 
 if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d "$SDL_STAGE" ]; then
@@ -624,7 +631,7 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 ssh_do "rm -f /usr/lib/$extra /usr/lib/$extra_real"
             done
 
-            PHONEME_HOME="$REPO/userspace/stage-phoneme/usr/local/lib/phoneme"
+            PHONEME_HOME="$REPO/build/stage-phoneme/usr/local/lib/phoneme"
             if [ -f "$PHONEME_HOME/bin/runMidlet" ]; then
                 ssh_do "mkdir -p /usr/local/lib/phoneme/bin"
                 send_file "$PHONEME_HOME/bin/runMidlet" "/usr/local/lib/phoneme/bin/runMidlet"

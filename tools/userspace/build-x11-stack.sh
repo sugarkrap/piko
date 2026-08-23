@@ -3,7 +3,7 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src"
-STAGE="$REPO/userspace/stage-target"
+STAGE="$REPO/build/target"
 
 HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST/bin}"
@@ -314,7 +314,7 @@ build_one() {
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
       mb-volume)
-          alsa_stage="$REPO/userspace/stage-alsa"
+          alsa_stage="$REPO/build/stage-alsa"
           if [ ! -f "$alsa_stage/usr/lib/libasound.a" ]; then
               echo "FAILED: alsa-lib not staged at $alsa_stage (no libasound.a)." >&2
               echo "Run tools/userspace/build-alsa.sh first." >&2
@@ -398,6 +398,6 @@ fi
 
 echo ""
 echo "==> X11/Matchbox stack ready."
-echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/"
+echo "    Libraries + xkbcomp/xev/Xfbdev:  $STAGE, and in-tree under userspace/src/ (submodule build dirs)"
 echo "    Matchbox apps:                  $D_WM $D_DESKTOP $D_PANEL $D_COMMON $D_CARD $D_VOLUME $D_BRIGHT $D_PIKAFFEINE"
 echo "    Package into a payload with:    tools/userspace/build-matchbox-payload.sh"

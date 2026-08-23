@@ -2,8 +2,8 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-WT="$REPO/userspace/wireless_tools.29"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
+WT="$REPO/vendor/wireless_tools.29"
+STAGE="${STAGE:-$REPO/build/target}"
 HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST_TRIPLET/bin}"
 

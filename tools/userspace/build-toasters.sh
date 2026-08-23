@@ -3,8 +3,8 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/toasters.c"
-BIN="$REPO/userspace/src/toasters"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
+BIN="$REPO/build/target/bin/toasters"
+STAGE="${STAGE:-$REPO/build/target}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"

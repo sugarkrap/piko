@@ -82,7 +82,7 @@ if [ "$SKIP_BUILD" -eq 1 ] && [ "$BUILD_ONLY" -eq 1 ]; then
     exit 1
 fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-KERNEL_DIR="$REPO/kernel-src/linux-7.1.4"
+KERNEL_DIR="$REPO/build/kernel/src/linux-7.1.4"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 BUILD_LOG="/tmp/kbuild-$(date +%Y%m%d-%H%M%S).log"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
@@ -90,7 +90,7 @@ export JOBS
 
 echo "==> building piko-sync-deploy"
 "$REPO/tools/userspace/build-piko-sync-deploy.sh"
-PIKO_SYNC_DEPLOY="$REPO/userspace/src/piko-sync-deploy/piko-sync-deploy"
+PIKO_SYNC_DEPLOY="$REPO/build/host/bin/piko-sync-deploy"
 
 if [ "$BUILD_ONLY" -eq 1 ]; then
     echo "==> --build-only: building without contacting any device"
@@ -245,13 +245,13 @@ elif [ "$SKIP_ROOT_IMAGE" -eq 1 ]; then
     echo "==> --skip-root-image: not rebuilding flash/piko-root.img"
 else
     echo "==> building the root image (tools/build-rootfs.sh)..."
-    if KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/flash/piko-root.img" \
+    if KERNEL_DIR="$KERNEL_DIR" ROOT_IMG_OUT="$REPO/build/flash/piko-root.img" \
             "$REPO/tools/build-rootfs.sh" > /tmp/rootfs-build.log 2>&1; then
-        UPDATE_DIR="${UPDATE_DIR:-$REPO/sd-card/update/.zaurus}"
+        UPDATE_DIR="${UPDATE_DIR:-$REPO/build/build/sd-card/update/.zaurus}"
         mkdir -p "$UPDATE_DIR"
         cp "$KERNEL_DIR/arch/arm/boot/zImage" "$UPDATE_DIR/zImage-full"
-        cp "$REPO/flash/piko-root.img"        "$UPDATE_DIR/piko-root.img"
-        echo "==> root image OK ($(wc -c < "$REPO/flash/piko-root.img") bytes)"
+        cp "$REPO/build/flash/piko-root.img"        "$UPDATE_DIR/piko-root.img"
+        echo "==> root image OK ($(wc -c < "$REPO/build/flash/piko-root.img") bytes)"
         echo "    update set refreshed: $UPDATE_DIR"
     else
         echo "WARNING: no root image, see /tmp/rootfs-build.log" >&2
@@ -270,11 +270,11 @@ if [ "$BUILD_ONLY" -eq 1 ]; then
     if [ -f "$X11_PAYLOAD_TAR" ]; then
         echo "    X11 payload: $X11_PAYLOAD_TAR ($(wc -c < "$X11_PAYLOAD_TAR") bytes)"
     fi
-    if [ -f "$REPO/flash/piko-root.img" ]; then
-        echo "    root image:  $REPO/flash/piko-root.img ($(wc -c < "$REPO/flash/piko-root.img") bytes)"
+    if [ -f "$REPO/build/flash/piko-root.img" ]; then
+        echo "    root image:  $REPO/build/flash/piko-root.img ($(wc -c < "$REPO/build/flash/piko-root.img") bytes)"
     fi
     echo ""
-    echo "    Deploy it later with:  userspace/src/piko-sync-deploy/piko-sync-deploy [user@host]"
+    echo "    Deploy it later with:  build/host/bin/piko-sync-deploy [user@host]"
     echo "    (piko-sync-server must be open on the device first)"
     exit 0
 fi
@@ -298,8 +298,8 @@ if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
     set -- --create-backup-files "$@"
 fi
 if [ "$DEPLOY_ROOT_IMAGE" -eq 1 ]; then
-    if [ ! -f "$REPO/flash/piko-root.img" ]; then
-        echo "FAILED: no $REPO/flash/piko-root.img" >&2
+    if [ ! -f "$REPO/build/flash/piko-root.img" ]; then
+        echo "FAILED: no $REPO/build/flash/piko-root.img" >&2
         exit 1
     fi
     echo "==> staging piko-root.img.new"

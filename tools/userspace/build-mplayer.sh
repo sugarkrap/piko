@@ -3,15 +3,18 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MPLAYER_VERSION="${MPLAYER_VERSION:-1.5}"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 BUILD_DIR="$SRC_DIR/MPlayer-$MPLAYER_VERSION"
-TARBALL="$SRC_DIR/MPlayer-$MPLAYER_VERSION.tar.xz"
+TARBALL="$DL_DIR/MPlayer-$MPLAYER_VERSION.tar.xz"
 MPLAYER_URL="https://fossies.org/linux/misc/MPlayer-$MPLAYER_VERSION.tar.xz"
 MPLAYER_SHA256="650cd55bb3cb44c9b39ce36dac488428559799c5f18d16d98edb2b7256cbbf85"
 
-ALSA_STAGE_DIR="${ALSA_STAGE_DIR:-$REPO/userspace/stage-alsa-nopic}"
-X11_STAGE_DIR="${X11_STAGE_DIR:-$REPO/userspace/stage-target}"
-OUT_DIR="${OUT_DIR:-$REPO/userspace/stage-mplayer}"
+ALSA_STAGE_DIR="${ALSA_STAGE_DIR:-$REPO/build/stage-alsa-nopic}"
+X11_STAGE_DIR="${X11_STAGE_DIR:-$REPO/build/target}"
+OUT_DIR="${OUT_DIR:-$REPO/build/stage-mplayer}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
@@ -39,7 +42,7 @@ if [ ! -f "$ALSA_HEADER" ] || [ ! -f "$ALSA_LIB" ]; then
     echo "  expected: $ALSA_LIB" >&2
     echo "MPlayer's -ao alsa needs alsa-lib's headers + libasound.a to link against." >&2
     echo "Run tools/userspace/build-alsa.sh first (a separate effort in this repo builds it" >&2
-    echo "into userspace/stage-alsa)." >&2
+    echo "into build/stage-alsa)." >&2
     exit 1
 fi
 
@@ -52,7 +55,7 @@ if [ ! -f "$X11_HEADER" ] || [ ! -f "$X11_LIB" ]; then
     echo "MPlayer's -vo x11 (what piko-player embeds via -wid) needs libX11's" >&2
     echo "headers + shared lib to link against." >&2
     echo "Run tools/userspace/build-x11-stack.sh first (it stages them into" >&2
-    echo "userspace/stage-target)." >&2
+    echo "build/target)." >&2
     exit 1
 fi
 

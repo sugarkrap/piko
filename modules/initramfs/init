@@ -12,6 +12,14 @@ say() {
 	echo "$*" > /dev/ttyS0 2>/dev/null
 }
 
+VERBOSE=0
+test -f /piko-verbose && VERBOSE=1
+
+trace() {
+	test "$VERBOSE" = 1 || return 0
+	say "$*"
+}
+
 rescue() {
 	say "bootstrap stopped: $*"
 	while true; do
@@ -34,7 +42,8 @@ for bl in /sys/class/backlight/*/; do
 	fi
 done
 
-/bin/fbsplash -s /splash.ppm 2>/dev/null
+test "$VERBOSE" = 1 || /bin/fbsplash -s /splash.ppm 2>/dev/null
+trace "bootstrap: init running, flavor=$FLAVOR"
 
 case "$FLAVOR" in
 sd)
@@ -53,6 +62,7 @@ cf)
 esac
 
 mkdir -p /mnt/boot
+trace "bootstrap: looking for $FSTYPE on $DEVICES"
 
 BOOTDEV=
 for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
@@ -64,6 +74,7 @@ for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 
 		fi
 	done
 	test -n "$BOOTDEV" && break
+	trace "bootstrap: no boot device yet (try $try/30)"
 	sleep 1
 done
 
@@ -72,6 +83,8 @@ if test -z "$BOOTDEV"; then
 	say "$(dmesg | tail -20)"
 	rescue "no $FSTYPE on $DEVICES"
 fi
+
+trace "bootstrap: mounted $BOOTDEV on /mnt/boot"
 
 KERNEL=/mnt/boot/$PAYLOAD_DIR/zImage-full
 ROOTIMG=$PAYLOAD_DIR/piko-root.img
@@ -88,18 +101,28 @@ if test -f "$BOOTCFG"; then
 	done < "$BOOTCFG"
 fi
 
+trace "bootstrap: kernel=$KERNEL root=$ROOTIMG"
+trace "bootstrap: append=$APPEND"
+
 test -f "$KERNEL" || rescue "no $PAYLOAD_DIR/zImage-full on $BOOTDEV"
 
 test -f "/mnt/boot/$ROOTIMG" || rescue "no $ROOTIMG on $BOOTDEV"
 PIKOROOT="img:$BOOTDEV:$ROOTIMG"
+trace "bootstrap: pikoroot=$PIKOROOT"
 
 KEXEC=/mnt/boot/$PAYLOAD_DIR/kexec
 test -x "$KEXEC" || KEXEC=/mnt/boot/sbin/kexec
 test -x "$KEXEC" || rescue "no kexec at $PAYLOAD_DIR/kexec or /sbin/kexec"
 
+trace "bootstrap: using kexec at $KEXEC"
+trace "bootstrap: kexec -l ..."
 "$KEXEC" -l "$KERNEL" --atags --append="$APPEND pikoroot=$PIKOROOT" \
 	|| rescue "kexec -l failed"
+trace "bootstrap: kexec -l ok, syncing"
 
 sync
+trace "bootstrap: sync done, jumping to stage 2"
+trace "bootstrap: screen unchanged after this = stage 2 died, not the bootstrap"
+test "$VERBOSE" = 1 && sleep 5
 "$KEXEC" -e
 rescue "kexec -e returned instead of booting stage 2"

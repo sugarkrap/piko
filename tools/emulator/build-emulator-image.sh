@@ -22,8 +22,8 @@ command -v mkfs.ext2 >/dev/null 2>&1 || {
 mkfs.ext2 -h 2>&1 | grep -q -- "-d " || {
     echo "$0: this mke2fs has no -d (need e2fsprogs >= 1.43)" >&2; exit 1; }
 
-BASE="$REPO/initramfs/rootfs"
-XSTAGE="$REPO/userspace/stage-target"
+BASE="$REPO/build/initramfs/rootfs"
+XSTAGE="$REPO/build/target"
 [ -d "$BASE" ]   || { echo "$0: no $BASE (run tools/kernel/build-initramfs.sh)" >&2; exit 1; }
 [ -d "$XSTAGE" ] || { echo "$0: no $XSTAGE (run tools/userspace/build-userspace.sh)" >&2; exit 1; }
 

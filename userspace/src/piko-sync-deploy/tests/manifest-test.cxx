@@ -170,12 +170,12 @@ static DeployContext make_fixture_context()
 {
     DeployContext ctx;
     ctx.repo = tmpdir + "/repo";
-    ctx.kernel_dir = tmpdir + "/repo/kernel-src/linux-7.1.4";
+    ctx.kernel_dir = tmpdir + "/repo/build/kernel/src/linux-7.1.4";
     ctx.kver = "7.1.4";
-    ctx.ssh_stage = tmpdir + "/repo/userspace/stage-ssh";
-    ctx.alsa_stage = tmpdir + "/repo/userspace/stage-alsa-runtime";
-    ctx.mplayer_stage = tmpdir + "/repo/userspace/stage-mplayer";
-    ctx.sdl_stage = tmpdir + "/repo/userspace/stage-sdl-runtime";
+    ctx.ssh_stage = tmpdir + "/repo/build/stage-ssh";
+    ctx.alsa_stage = tmpdir + "/repo/build/stage-alsa-runtime";
+    ctx.mplayer_stage = tmpdir + "/repo/build/stage-mplayer";
+    ctx.sdl_stage = tmpdir + "/repo/build/stage-sdl-runtime";
     ctx.tcroot = tmpdir + "/repo/toolchain/sysroot";
     ctx.x11_payload = tmpdir + "/repo/matchbox-payload.tar";
     return ctx;
@@ -183,14 +183,14 @@ static DeployContext make_fixture_context()
 
 static void seed_minimal_repo(const DeployContext &ctx)
 {
-    write_fixture("repo/kernel-src/linux-7.1.4/arch/arm/boot/zImage", "zimage-bytes");
+    write_fixture("repo/build/kernel/src/linux-7.1.4/arch/arm/boot/zImage", "zimage-bytes");
     write_fixture("repo/tools/kernel/kernel-modules.sh",
         "AUDIO_MODULES=\"\nsound/soundcore.ko\n\"\n"
         "WIFI_MODULES=\"\nkernel/drivers/pcmcia/pcmcia_core.ko\n\"\n"
         "SD_MODULES=\"\nkernel/fs/fat/fat.ko\n\"\n");
-    write_fixture("repo/kernel-src/linux-7.1.4/sound/soundcore.ko", "x");
-    write_fixture("repo/kernel-src/linux-7.1.4/drivers/pcmcia/pcmcia_core.ko", "x");
-    write_fixture("repo/kernel-src/linux-7.1.4/fs/fat/fat.ko", "x");
+    write_fixture("repo/build/kernel/src/linux-7.1.4/sound/soundcore.ko", "x");
+    write_fixture("repo/build/kernel/src/linux-7.1.4/drivers/pcmcia/pcmcia_core.ko", "x");
+    write_fixture("repo/build/kernel/src/linux-7.1.4/fs/fat/fat.ko", "x");
 
     static const char *always_present[] = {
         "repo/rootfs/etc/init.d/rcS", "repo/rootfs/etc/init.d/xsession",
@@ -334,7 +334,7 @@ static void test_conditional_files_present_when_built()
 
     DeployContext ctx = make_fixture_context();
     seed_minimal_repo(ctx);
-    write_fixture("repo/userspace/src/brightd", "elf-bytes");
+    write_fixture("repo/build/target/bin/brightd", "elf-bytes");
     write_fixture("repo/userspace/src/mhz", "elf-bytes");
 
     std::string text;
@@ -356,7 +356,7 @@ static void test_replace_dropbear_flag_gate()
 
     DeployContext ctx = make_fixture_context();
     seed_minimal_repo(ctx);
-    write_fixture("repo/userspace/stage-ssh/usr/sbin/dropbear", "elf-bytes");
+    write_fixture("repo/build/stage-ssh/usr/sbin/dropbear", "elf-bytes");
     ctx.flags.replace_dropbear = true;
 
     std::string text;
@@ -446,7 +446,7 @@ static void test_root_image_is_staged_only_when_asked()
     DeployContext ctx = make_fixture_context();
     ctx.piko_kernel = "/media/boot/.zaurus/zImage-full";
     seed_minimal_repo(ctx);
-    write_fixture("repo/flash/piko-root.img", "pretend-ext4-image");
+    write_fixture("repo/build/flash/piko-root.img", "pretend-ext4-image");
 
     std::string text;
     read_whole_file("../manifest.yaml", text);

@@ -4,19 +4,22 @@ set -eu
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 ALSA_LIB_VERSION="${ALSA_LIB_VERSION:-1.2.12}"
 ALSA_UTILS_VERSION="${ALSA_UTILS_VERSION:-1.2.12}"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 ALSA_LIB_SRC_DIR="${ALSA_LIB_SRC_DIR:-$SRC_DIR/alsa-lib-$ALSA_LIB_VERSION}"
-ALSA_LIB_TARBALL="${ALSA_LIB_TARBALL:-$SRC_DIR/alsa-lib-$ALSA_LIB_VERSION.tar.bz2}"
+ALSA_LIB_TARBALL="${ALSA_LIB_TARBALL:-$DL_DIR/alsa-lib-$ALSA_LIB_VERSION.tar.bz2}"
 ALSA_LIB_URL="https://www.alsa-project.org/files/pub/lib/alsa-lib-$ALSA_LIB_VERSION.tar.bz2"
 
 ALSA_UTILS_SRC_DIR="${ALSA_UTILS_SRC_DIR:-$SRC_DIR/alsa-utils-$ALSA_UTILS_VERSION}"
-ALSA_UTILS_TARBALL="${ALSA_UTILS_TARBALL:-$SRC_DIR/alsa-utils-$ALSA_UTILS_VERSION.tar.bz2}"
+ALSA_UTILS_TARBALL="${ALSA_UTILS_TARBALL:-$DL_DIR/alsa-utils-$ALSA_UTILS_VERSION.tar.bz2}"
 ALSA_UTILS_URL="https://www.alsa-project.org/files/pub/utils/alsa-utils-$ALSA_UTILS_VERSION.tar.bz2"
 
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-alsa}"
-RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-alsa-runtime}"
-NOPIC_DIR="${NOPIC_DIR:-$REPO/userspace/stage-alsa-nopic}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-alsa}"
+RUNTIME_DIR="${RUNTIME_DIR:-$REPO/build/stage-alsa-runtime}"
+NOPIC_DIR="${NOPIC_DIR:-$REPO/build/stage-alsa-nopic}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
