@@ -2,7 +2,27 @@
 set -eu
 test -r /etc/piko-media && . /etc/piko-media
 
-kexec -l "${PIKO_KERNEL:-/boot/zImage-full}" --atags --append="$(cat /proc/cmdline)"
+APPEND="$(cat /proc/cmdline)"
+BOOTCFG="${PIKO_BOOT_MNT:-/media/boot}/.zaurus/piko-boot.cfg"
+if test -r "$BOOTCFG"; then
+	CFGAPPEND=""
+	while read -r key value; do
+		case "$key" in
+		append) CFGAPPEND="$value" ;;
+		esac
+	done < "$BOOTCFG"
+	if test -n "$CFGAPPEND"; then
+		ROOTARGS=""
+		for arg in $(cat /proc/cmdline); do
+			case "$arg" in
+			pikoroot=*|root=*|rootfstype=*) ROOTARGS="$ROOTARGS $arg" ;;
+			esac
+		done
+		APPEND="$CFGAPPEND$ROOTARGS"
+	fi
+fi
+
+kexec -l "${PIKO_KERNEL:-/boot/zImage-full}" --atags --append="$APPEND"
 
 sync
 if [ "${PIKO_KIND:-mtd}" = img ]; then

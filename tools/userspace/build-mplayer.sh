@@ -9,7 +9,7 @@ TARBALL="$SRC_DIR/MPlayer-$MPLAYER_VERSION.tar.xz"
 MPLAYER_URL="https://fossies.org/linux/misc/MPlayer-$MPLAYER_VERSION.tar.xz"
 MPLAYER_SHA256="650cd55bb3cb44c9b39ce36dac488428559799c5f18d16d98edb2b7256cbbf85"
 
-ALSA_STAGE_DIR="${ALSA_STAGE_DIR:-$REPO/userspace/stage-alsa}"
+ALSA_STAGE_DIR="${ALSA_STAGE_DIR:-$REPO/userspace/stage-alsa-nopic}"
 X11_STAGE_DIR="${X11_STAGE_DIR:-$REPO/userspace/stage-target}"
 OUT_DIR="${OUT_DIR:-$REPO/userspace/stage-mplayer}"
 
@@ -172,6 +172,17 @@ echo "==> configuring MPlayer $MPLAYER_VERSION for arm-linux/armv5te"
   --disable-libavcodec_mpegaudio_hp \
   --disable-decoder=mlp --disable-decoder=truehd
 
+if ! grep -q -- "-lasound" config.mak; then
+    echo "tools/userspace/build-mplayer.sh: configure produced no -lasound in config.mak" >&2
+    exit 1
+fi
+ALSA_WHOLE="-Wl,--whole-archive,${ALSA_STAGE_DIR}/usr/lib/libasound.a,--no-whole-archive"
+sed -i "/^EXTRALIBS /{s|-lasound|$ALSA_WHOLE|; s| -lasound||g;}" config.mak
+if [ "$(grep "^EXTRALIBS " config.mak | grep -c -- "--whole-archive,${ALSA_STAGE_DIR}/usr/lib/libasound.a")" -ne 1 ]; then
+    echo "tools/userspace/build-mplayer.sh: libasound.a must be force-linked exactly once, or its objects land twice and the link fails" >&2
+    exit 1
+fi
+
 echo "==> building (make -j$JOBS)"
 make -j"$JOBS"
 
@@ -179,6 +190,18 @@ if [ ! -f mplayer ]; then
     echo "tools/userspace/build-mplayer.sh: build finished but ./mplayer is missing" >&2
     exit 1
 fi
+
+NM="${CROSS_COMPILE}nm"
+if ! "$NM" mplayer 2>/dev/null | grep -q "snd_dlsym_start"; then
+    echo "tools/userspace/build-mplayer.sh: mplayer has no snd_dlsym_start -- alsa-lib was not force-linked, -ao alsa will fail with 'Cannot open shared library [builtin]'" >&2
+    exit 1
+fi
+for sym in _snd_pcm_hw_open _snd_pcm_plug_open; do
+    if ! "$NM" mplayer 2>/dev/null | grep -q " $sym$"; then
+        echo "tools/userspace/build-mplayer.sh: $sym is missing from mplayer -- every alsa plugin object must be force-linked in" >&2
+        exit 1
+    fi
+done
 
 echo "==> verifying ELF class"
 READELF="${CROSS_COMPILE}readelf"
@@ -204,7 +227,7 @@ esac
 for n in $needed; do
     case "$n" in
         libX11.so.*|libXext.so.*|libxcb.so.*|libXau.so.*|libXdmcp.so.*) : ;;
-        libpng16.so.*|libz.so.*|libc.so.*) : ;;
+        libpng16.so.*|libz.so.*|libc.so.*|ld-uClibc.so.*) : ;;
         *)
             echo "tools/userspace/build-mplayer.sh: mplayer NEEDs $n, which the ROM does not ship." >&2
             echo "Add it to build-matchbox-payload.sh's LIBS, or find why it got linked." >&2

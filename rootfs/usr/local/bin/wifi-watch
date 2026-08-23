@@ -1,0 +1,15 @@
+#!/bin/sh
+LOG=${WIFI_WATCH_LOG:-/tmp/wifi-watch.log}
+PEER=${WIFI_WATCH_PEER:-10.208.47.2}
+INTERVAL=${WIFI_WATCH_INTERVAL:-15}
+val() { grep "^$1=" /proc/net/hostap/wlan0/stats 2>/dev/null | sed "s/^$1=//"; }
+while :; do
+    set -- $(cat /proc/uptime); t=$1
+    rate=$(iwconfig wlan0 2>/dev/null | grep "Bit Rate" | sed "s/.*Bit Rate[:=]//;s/ .*//")
+    ap=$(iwconfig wlan0 2>/dev/null | grep -o "Access Point: [0-9A-Fa-f:]*" | sed "s/Access Point: //")
+    qual=$(grep wlan0 /proc/net/wireless 2>/dev/null | sed "s/ *wlan0: *//" | sed "s/ \+/ /g")
+    rx=$(grep wlan0 /proc/net/dev 2>/dev/null | sed "s/ \+/ /g")
+    if ping -c1 -W2 $PEER >/dev/null 2>&1; then tx=up; else tx=DOWN; fi
+    echo "$t tx=$tx rate=$rate ap=$ap tx1=$(val TxSingleRetryFrames) txm=$(val TxMultipleRetryFrames) txlim=$(val TxRetryLimitExceeded) txdis=$(val TxDiscards) fcs=$(val RxFCSErrors) q=[$qual] dev=[$rx]" >> $LOG
+    sleep $INTERVAL
+done

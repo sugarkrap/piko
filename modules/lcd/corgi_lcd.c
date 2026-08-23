@@ -252,6 +252,21 @@ static void lcdtg_set_phadadj(struct corgi_lcd *lcd, int mode)
 	corgi_ssp_lcdtg_send(lcd, PHACTRL_ADRS, adj);
 }
 
+static void corgi_lcd_apply_mode(struct corgi_lcd *lcd, int mode)
+{
+	lcdtg_set_phadadj(lcd, mode);
+
+	switch (mode) {
+	case CORGI_LCD_MODE_VGA:
+		corgi_ssp_lcdtg_send(lcd, RESCTL_ADRS, RESCTL_VGA);
+		break;
+	case CORGI_LCD_MODE_QVGA:
+	default:
+		corgi_ssp_lcdtg_send(lcd, RESCTL_ADRS, RESCTL_QVGA);
+		break;
+	}
+}
+
 static void corgi_lcd_power_on(struct corgi_lcd *lcd)
 {
 	int comadj;
@@ -560,8 +575,10 @@ static int corgi_lcd_probe(struct spi_device *spi)
 
 	if (assume_powered) {
 		lcd->power = LCD_POWER_ON;
+		corgi_lcd_apply_mode(lcd, lcd->mode);
 		dev_info(&spi->dev,
-			 "panel assumed already powered, skipping power-on\n");
+			 "panel assumed already powered, forcing %s mode onto it\n",
+			 lcd->mode == CORGI_LCD_MODE_VGA ? "VGA" : "QVGA");
 	} else {
 		corgi_lcd_set_power(lcd->lcd_dev, LCD_POWER_ON);
 	}

@@ -114,6 +114,7 @@ userspace/src/alsa-lib-*/
 userspace/src/alsa-utils-*/
 userspace/stage-alsa/
 userspace/stage-alsa-runtime/
+userspace/stage-alsa-nopic/
 userspace/stage-ssh/
 userspace/stage-kexec/
 userspace/stage-busybox/

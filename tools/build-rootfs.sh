@@ -289,12 +289,15 @@ if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
     mkdir -p "$OVERLAY/usr/share" "$OVERLAY/var/lib/alsa"
     cp -a "$ALSA_RUNTIME/usr/share/alsa" "$OVERLAY/usr/share/"
     echo "    alsa: /usr/share/alsa (config data)"
-    for b in aplay amixer alsactl; do
-        if [ -f "$ALSA_RUNTIME/usr/bin/$b" ]; then
-            cp "$ALSA_RUNTIME/usr/bin/$b" "$OVERLAY/usr/bin/$b"
-            chmod 0755 "$OVERLAY/usr/bin/$b"
-            echo "    alsa: /usr/bin/$b"
+    for b in bin/aplay bin/amixer sbin/alsactl; do
+        if [ ! -f "$ALSA_RUNTIME/usr/$b" ]; then
+            echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/$b, not shipping it" >&2
+            continue
         fi
+        mkdir -p "$OVERLAY/usr/$(dirname "$b")"
+        cp "$ALSA_RUNTIME/usr/$b" "$OVERLAY/usr/$b"
+        chmod 0755 "$OVERLAY/usr/$b"
+        echo "    alsa: /usr/$b"
     done
 else
     echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume gets no mixer" >&2

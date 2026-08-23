@@ -89,6 +89,10 @@ if test -x /usr/sbin/brightd; then
 	trap - HUP
 fi
 
+if test -x /usr/local/bin/wifi-watch; then
+	( trap "" HUP; setsid /usr/local/bin/wifi-watch >/dev/null 2>&1 </dev/null & )
+fi
+
 if test -x /usr/sbin/flipd; then
 	trap "" HUP
 	/usr/sbin/flipd 2>/dev/null &

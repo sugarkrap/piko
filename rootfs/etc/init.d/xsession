@@ -20,14 +20,21 @@ fallback_to_console() {
 [ -x "$XSERVER" ] || fallback_to_console "$XSERVER missing"
 [ -x "$SESSION" ] || fallback_to_console "$SESSION missing (matchbox-common not installed?)"
 
+XSERVER_NAME=$(basename "$XSERVER")
+
 for lock in /tmp/.X*-lock; do
 	[ -e "$lock" ] || continue
 	lockpid=$(cat "$lock" 2>/dev/null | tr -dc '0-9')
-	if [ -n "$lockpid" ] && [ -d "/proc/$lockpid" ]; then
-		echo "xsession: $lock held by live pid $lockpid, leaving it alone"
+	lockcomm=""
+	[ -n "$lockpid" ] && [ -r "/proc/$lockpid/comm" ] && lockcomm=$(cat "/proc/$lockpid/comm" 2>/dev/null)
+	if [ "$lockcomm" = "$XSERVER_NAME" ]; then
+		echo "xsession: $lock held by live $XSERVER_NAME pid $lockpid, leaving it alone"
 		continue
 	fi
-	echo "xsession: removing stale $lock (pid ${lockpid:-unknown} is gone)"
+	if [ -n "$lockpid" ] && [ -d "/proc/$lockpid" ]; then
+		echo "xsession: $lock names pid $lockpid but that is ${lockcomm:-unknown}, not $XSERVER_NAME"
+	fi
+	echo "xsession: removing stale $lock (pid ${lockpid:-unknown})"
 	rm -f "$lock"
 	display=$(basename "$lock" | sed -e 's/^\.X//' -e 's/-lock$//')
 	rm -f "/tmp/.X11-unix/X$display"

@@ -63,6 +63,8 @@ if test -z "$PIKOROOT"; then
 	PIKOROOT="dev:$ROOTDEV:${ROOTTYPE:-ext2}"
 fi
 
+serial_echo "stage 2: pikoroot=$PIKOROOT"
+
 mkdir -p /newroot
 
 KIND="${PIKOROOT%%:*}"
@@ -84,22 +86,30 @@ img)
 	;;
 esac
 
+serial_echo "stage 2: waiting for $wait_for"
 for try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
 	test -b "$wait_for" && break
+	test "$try" = 5 && serial_echo "stage 2: still waiting for $wait_for"
+	test "$try" = 15 && serial_echo "stage 2: still waiting for $wait_for"
 	sleep 1
 done
 test -b "$wait_for" || bail "$wait_for never appeared"
+serial_echo "stage 2: $wait_for present after ${try}s"
 
 case "$KIND" in
 dev)
+	serial_echo "stage 2: mounting $DEV as $TYPE"
 	mount -t "$TYPE" "$DEV" /newroot || bail "mounting $DEV as $TYPE failed"
 	;;
 img)
 	mkdir -p /media
+	serial_echo "stage 2: mounting $DEV as vfat"
 	mount -t vfat "$DEV" /media || bail "mounting $DEV as vfat failed"
 	promote_staged_image "$IMG"
 	test -f "/media/$IMG" || bail "$IMG is not on $DEV"
+	serial_echo "stage 2: loop-mounting $IMG"
 	mount -o loop "/media/$IMG" /newroot || bail "loop-mounting $IMG failed"
+	serial_echo "stage 2: root image mounted"
 	;;
 esac
 
@@ -112,6 +122,7 @@ for c in /sbin/init /init /bin/init; do
 	test -x "/newroot$c" && REALINIT="$c" && break
 done
 test -n "$REALINIT" || bail "no init inside the root filesystem"
+serial_echo "stage 2: init is $REALINIT"
 
 if test "$KIND" = img; then
 	mkdir -p /newroot/media/boot
@@ -124,4 +135,5 @@ umount /proc 2>/dev/null
 test -x /sbin/switch_root || bail "no switch_root applet in the initramfs"
 mountpoint -q /newroot || bail "/newroot is not a mount point, switch_root would refuse"
 
+serial_echo "stage 2: switching root"
 exec switch_root /newroot "$REALINIT"

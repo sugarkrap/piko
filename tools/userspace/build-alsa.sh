@@ -16,6 +16,7 @@ ALSA_UTILS_URL="https://www.alsa-project.org/files/pub/utils/alsa-utils-$ALSA_UT
 
 STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-alsa}"
 RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-alsa-runtime}"
+NOPIC_DIR="${NOPIC_DIR:-$REPO/userspace/stage-alsa-nopic}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
@@ -26,7 +27,8 @@ FORCE=0
 PIKO_STAMP="$STAGE_DIR/.piko-stamp"
 PIKO_STATE="$(sha256sum "$0" | cut -d' ' -f1) $ALSA_LIB_VERSION $ALSA_UTILS_VERSION"
 if [ "$FORCE" -eq 0 ] && [ -f "$PIKO_STAMP" ] \
-   && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -f "$STAGE_DIR/usr/lib/libasound.a" ]; then
+   && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -f "$STAGE_DIR/usr/lib/libasound.a" ] \
+   && [ -f "$NOPIC_DIR/usr/lib/libasound.a" ]; then
     echo "==> alsa $ALSA_LIB_VERSION already staged for these inputs, skipping (--force to rebuild)"
     exit 0
 fi
@@ -110,6 +112,41 @@ if [ -f "$LIBASOUND_LA" ]; then
     sed -i "s|^libdir='/usr/lib'|libdir='$STAGE_DIR/usr/lib'|" "$LIBASOUND_LA"
 fi
 
+rm -rf "$NOPIC_DIR"
+mkdir -p "$NOPIC_DIR"
+
+echo "==> configuring alsa-lib $ALSA_LIB_VERSION (non-PIC, for the fully static consumers)"
+(
+    cd "$ALSA_LIB_SRC_DIR"
+    make distclean >/dev/null 2>&1 || true
+    ./configure \
+        --host=arm-unknown-linux-uclibcgnueabi \
+        --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
+        --prefix=/usr \
+        --disable-shared --enable-static --without-pic \
+        --without-versioned \
+        --disable-python \
+        --disable-old-symbols \
+        --disable-ucm \
+        --disable-topology \
+        --with-softfloat \
+        CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+    echo "==> building alsa-lib (non-PIC)"
+    make -j"$JOBS"
+    echo "==> installing alsa-lib (non-PIC) to $NOPIC_DIR"
+    make install DESTDIR="$NOPIC_DIR"
+)
+
+if ! "${CROSS_COMPILE}nm" "$NOPIC_DIR/usr/lib/libasound.a" 2>/dev/null | grep -q "snd_dlsym_start"; then
+    echo "tools/userspace/build-alsa.sh: no snd_dlsym_start in $NOPIC_DIR/usr/lib/libasound.a -- built with -DPIC, so a static binary has no way to reach its plugins" >&2
+    exit 1
+fi
+
+NOPIC_LA="$NOPIC_DIR/usr/lib/libasound.la"
+if [ -f "$NOPIC_LA" ]; then
+    sed -i "s|^libdir='/usr/lib'|libdir='$NOPIC_DIR/usr/lib'|" "$NOPIC_LA"
+fi
+
 echo "==> configuring alsa-utils $ALSA_UTILS_VERSION"
 (
     cd "$ALSA_UTILS_SRC_DIR"
@@ -118,8 +155,8 @@ echo "==> configuring alsa-utils $ALSA_UTILS_VERSION"
         --host=arm-unknown-linux-uclibcgnueabi \
         --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
         --prefix=/usr \
-        --with-alsa-prefix="$STAGE_DIR/usr/lib" \
-        --with-alsa-inc-prefix="$STAGE_DIR/usr/include" \
+        --with-alsa-prefix="$NOPIC_DIR/usr/lib" \
+        --with-alsa-inc-prefix="$NOPIC_DIR/usr/include" \
         --disable-alsamixer \
         --disable-bat \
         --disable-alsaloop \
@@ -131,8 +168,23 @@ echo "==> configuring alsa-utils $ALSA_UTILS_VERSION"
         --disable-rpath \
         CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
         PKG_CONFIG=false
+    if ! grep -rq --include=Makefile -- "-lasound" .; then
+        echo "tools/userspace/build-alsa.sh: configure produced no -lasound in the alsa-utils makefiles" >&2
+        exit 1
+    fi
+    find . -name Makefile -exec sed -i "s|-lasound|-Wl,--whole-archive,$NOPIC_DIR/usr/lib/libasound.a,--no-whole-archive|g" {} +
     echo "==> building alsa-utils"
     make -j"$JOBS" LDFLAGS="-all-static"
+    if ! "${CROSS_COMPILE}nm" aplay/aplay 2>/dev/null | grep -q "snd_dlsym_start"; then
+        echo "tools/userspace/build-alsa.sh: aplay has no snd_dlsym_start -- alsa-lib was not force-linked, every device open will fail with 'Cannot open shared library [builtin]'" >&2
+        exit 1
+    fi
+    for sym in _snd_pcm_hw_open _snd_pcm_plug_open; do
+        if ! "${CROSS_COMPILE}nm" aplay/aplay 2>/dev/null | grep -q " $sym$"; then
+            echo "tools/userspace/build-alsa.sh: $sym is missing from aplay -- alsa-lib resolves its plugins through dlsym, so every object must be force-linked in" >&2
+            exit 1
+        fi
+    done
     echo "==> installing alsa-utils to $STAGE_DIR"
     make install DESTDIR="$STAGE_DIR"
 )

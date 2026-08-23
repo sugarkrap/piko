@@ -616,8 +616,22 @@ static void w100fb_activate_var(struct w100fb_par *par)
 	struct w100_tg_info *tg = par->mach->tg;
 
 	if (par->adopted) {
+		union graphic_h_disp_u live_h;
+		union graphic_v_disp_u live_v;
+		unsigned int live_xres, live_yres;
+
 		par->adopted = 0;
-		return;
+
+		live_h.val = readl(remapped_regs + mmGRAPHIC_H_DISP);
+		live_v.val = readl(remapped_regs + mmGRAPHIC_V_DISP);
+		live_xres = live_h.f.graphic_h_end - live_h.f.graphic_h_start;
+		live_yres = live_v.f.graphic_v_end - live_v.f.graphic_v_start;
+
+		if (live_xres == par->mode->xres && live_yres == par->mode->yres)
+			return;
+
+		printk(KERN_INFO "w100fb: adopted controller is %ux%u but %ux%u was requested, programming it\n",
+		       live_xres, live_yres, par->mode->xres, par->mode->yres);
 	}
 
 	w100_pwm_setup(par);
