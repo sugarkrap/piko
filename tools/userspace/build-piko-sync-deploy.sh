@@ -4,6 +4,7 @@ set -eu
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/piko-sync-deploy"
 HOSTCXX="${HOSTCXX:-g++}"
+OUT="${OUT:-$REPO/build/host/bin/piko-sync-deploy}"
 
 if [ ! -f "$SRC/piko-sync-deploy.cxx" ]; then
     echo "tools/userspace/build-piko-sync-deploy.sh: $SRC/piko-sync-deploy.cxx is missing" >&2
@@ -31,6 +32,7 @@ if [ "${PIKO_SYNC_DEPLOY_SKIP_TESTS:-0}" = "0" ]; then
 fi
 
 echo "==> building piko-sync-deploy"
-"$HOSTCXX" -O2 -Wall -Wextra -std=c++98 -o "$SRC/piko-sync-deploy" "$SRC/piko-sync-deploy.cxx"
+mkdir -p "$(dirname "$OUT")"
+"$HOSTCXX" -O2 -Wall -Wextra -std=c++98 -o "$OUT" "$SRC/piko-sync-deploy.cxx"
 
-echo "==> $SRC/piko-sync-deploy"
+echo "==> $OUT"

@@ -13,7 +13,7 @@ const CONFIRMED_MAPPING = {
 
 function main() {
     const infile = process.argv[2] || 'flash/updater-uncoded.sh';
-    const outfile = process.argv[3] || 'flash/updater-encoded.sh';
+    const outfile = process.argv[3] || 'build/flash/updater-encoded.sh';
 
     const plaintext = fs.readFileSync(infile);
 

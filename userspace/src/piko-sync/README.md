@@ -70,7 +70,7 @@ tools/userspace/build-piko-sync.sh --deploy user@host # also installs the .ipk o
 Directly:
 
 ```sh
-make server STAGE=/path/to/userspace/stage-target \
+make server STAGE=/path/to/build/target \
             CXX=arm-unknown-linux-uclibcgnueabi-g++
 make client HOST_FLTK_CXXFLAGS="$(fltk-config --cxxflags)" \
             HOST_FLTK_LDFLAGS="$(fltk-config --ldflags)"

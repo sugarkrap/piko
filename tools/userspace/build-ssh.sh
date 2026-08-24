@@ -2,23 +2,26 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 DROPBEAR_VERSION="${DROPBEAR_VERSION:-2025.88}"
 DROPBEAR_SRC_DIR="$SRC_DIR/dropbear-$DROPBEAR_VERSION"
-DROPBEAR_TARBALL="$SRC_DIR/dropbear-$DROPBEAR_VERSION.tar.bz2"
+DROPBEAR_TARBALL="$DL_DIR/dropbear-$DROPBEAR_VERSION.tar.bz2"
 DROPBEAR_URL="https://matt.ucc.asn.au/dropbear/releases/dropbear-$DROPBEAR_VERSION.tar.bz2"
 DROPBEAR_SHA256="9d1c65e3f4b3f03da8390a119aebe6b14d9209b5fad0286291dabacd530dd3a3"
 
 OPENSSH_VERSION="${OPENSSH_VERSION:-10.4p1}"
 OPENSSH_SRC_DIR="$SRC_DIR/openssh-$OPENSSH_VERSION"
-OPENSSH_TARBALL="$SRC_DIR/openssh-$OPENSSH_VERSION.tar.gz"
+OPENSSH_TARBALL="$DL_DIR/openssh-$OPENSSH_VERSION.tar.gz"
 OPENSSH_URL="https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-$OPENSSH_VERSION.tar.gz"
 OPENSSH_SHA256="8cd8b6e0cadc0e5c5227f72038512bdc00e64fc6250ac9024c94a31afa3869d9"
 
 SFTPSERVER_PATH="${SFTPSERVER_PATH:-/usr/libexec/sftp-server}"
 
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-ssh}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-ssh}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"
 CROSS_HOST="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"

@@ -3,17 +3,20 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SDL_VERSION="${SDL_VERSION:-1.2.15}"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 SDL_SRC_DIR="${SDL_SRC_DIR:-$SRC_DIR/SDL-$SDL_VERSION}"
-SDL_TARBALL="${SDL_TARBALL:-$SRC_DIR/SDL-$SDL_VERSION.tar.gz}"
+SDL_TARBALL="${SDL_TARBALL:-$DL_DIR/SDL-$SDL_VERSION.tar.gz}"
 SDL_URL="https://www.libsdl.org/release/SDL-$SDL_VERSION.tar.gz"
 SDL_SHA256="d6d316a793e5e348155f0dd93b979798933fb98aa1edebcc108829d6474aad00"
 
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-sdl}"
-THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/userspace/stage-target}"
-ALSA_STAGE="${ALSA_STAGE:-$REPO/userspace/stage-alsa}"
-RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-sdl-runtime}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-sdl}"
+THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/build/target}"
+ALSA_STAGE="${ALSA_STAGE:-$REPO/build/stage-alsa}"
+RUNTIME_DIR="${RUNTIME_DIR:-$REPO/build/stage-sdl-runtime}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"

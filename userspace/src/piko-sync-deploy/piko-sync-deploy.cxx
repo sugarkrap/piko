@@ -663,11 +663,11 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    ctx.kernel_dir = ctx.repo + "/kernel-src/linux-7.1.4";
-    ctx.ssh_stage = ctx.repo + "/userspace/stage-ssh";
-    ctx.alsa_stage = ctx.repo + "/userspace/stage-alsa-runtime";
-    ctx.mplayer_stage = ctx.repo + "/userspace/stage-mplayer";
-    ctx.sdl_stage = ctx.repo + "/userspace/stage-sdl-runtime";
+    ctx.kernel_dir = ctx.repo + "/build/kernel/src/linux-7.1.4";
+    ctx.ssh_stage = ctx.repo + "/build/stage-ssh";
+    ctx.alsa_stage = ctx.repo + "/build/stage-alsa-runtime";
+    ctx.mplayer_stage = ctx.repo + "/build/stage-mplayer";
+    ctx.sdl_stage = ctx.repo + "/build/stage-sdl-runtime";
     ctx.tcroot = ctx.repo + "/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/arm-unknown-linux-uclibcgnueabi/sysroot";
     ctx.x11_payload = "/tmp/matchbox-payload.tar";
     if (const char *xp = getenv("X11_PAYLOAD"))

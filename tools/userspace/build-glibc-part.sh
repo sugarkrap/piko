@@ -2,8 +2,10 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-glibc}"
-CACHE="${CACHE:-$REPO/userspace/.thirdparty-cache}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-glibc}"
+CACHE="${CACHE:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "${CACHE:-${CACHE_DIR:-}}"
 MIRROR="${MIRROR:-http://archive.debian.org/debian}"
 
 LIBC6_DEB="${LIBC6_DEB:-libc6_2.31-13+deb11u11_armel.deb}"

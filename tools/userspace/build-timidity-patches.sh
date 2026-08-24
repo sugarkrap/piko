@@ -2,9 +2,12 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-SRC_DIR="$REPO/userspace/src"
-CACHE_DIR="${CACHE_DIR:-$SRC_DIR}"
-STAGE_DIR="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
+CACHE_DIR="${CACHE_DIR:-$DL_DIR}"
+STAGE_DIR="${TIMIDITY_STAGE:-$REPO/build/stage-timidity}"
 
 FREEPATS_VERSION="20060219"
 FREEPATS_TARBALL="$CACHE_DIR/freepats_$FREEPATS_VERSION.orig.tar.gz"

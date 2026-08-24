@@ -2,7 +2,7 @@
 set -eu
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-KERNEL_DIR="${KERNEL_DIR:-$REPO/kernel-src/linux-7.1.4}"
+KERNEL_DIR="${KERNEL_DIR:-$REPO/build/kernel/src/linux-7.1.4}"
 
 if [ -n "${ROOT_IMG_OUT:-}" ] && ! command -v fakeroot >/dev/null 2>&1; then
     echo "build-rootfs: fakeroot not found (apt install fakeroot)" >&2
@@ -75,10 +75,10 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     echo "==> building piko-sync-server (tools/userspace/build-piko-sync.sh --server-only)"
     PIKO_SYNC_IPK_OUT="$STAGE/ipk"
     mkdir -p "$PIKO_SYNC_IPK_OUT"
-    STAGE="$REPO/userspace/stage-target" OUTDIR="$PIKO_SYNC_IPK_OUT" \
+    STAGE="$REPO/build/target" OUTDIR="$PIKO_SYNC_IPK_OUT" \
         "$REPO/tools/userspace/build-piko-sync.sh" --server-only
 
-    PIKO_SYNC_BIN="$REPO/userspace/src/piko-sync/piko-sync-server"
+    PIKO_SYNC_BIN="$REPO/build/target/bin/piko-sync-server"
     if [ ! -f "$PIKO_SYNC_BIN" ]; then
         echo "build-rootfs: build-piko-sync.sh succeeded but there is no $PIKO_SYNC_BIN" >&2
         exit 1
@@ -98,7 +98,7 @@ else
     echo "==> SKIP_X11=1: not staging the X11/Matchbox payload"
 fi
 
-SSH_STAGE="${SSH_STAGE:-$REPO/userspace/stage-ssh}"
+SSH_STAGE="${SSH_STAGE:-$REPO/build/stage-ssh}"
 if [ -d "$SSH_STAGE" ]; then
     ssh_list="usr/bin/scp:usr/bin/scp:755
 usr/libexec/sftp-server:usr/libexec/sftp-server:755
@@ -123,7 +123,7 @@ else
     echo "build-rootfs: WARNING -- no $SSH_STAGE, no scp/sftp-server in this image" >&2
 fi
 
-KEXEC_STAGE="${KEXEC_STAGE:-$REPO/userspace/stage-kexec}"
+KEXEC_STAGE="${KEXEC_STAGE:-$REPO/build/stage-kexec}"
 if [ ! -f "$KEXEC_STAGE/sbin/kexec" ]; then
     echo "build-rootfs: no $KEXEC_STAGE/sbin/kexec -- run tools/userspace/build-kexec.sh first" >&2
     exit 1
@@ -142,12 +142,13 @@ ntpsync:usr/sbin/ntpsync
 piko-splash:usr/sbin/piko-splash
 pkillx:usr/sbin/pkillx
 vol:usr/sbin/vol
+fbtext:usr/sbin/fbtext
 zramswap:usr/sbin/zramswap
 kill:usr/bin/kill
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar"
 for entry in $SRC_TOOLS; do
-    src="$REPO/userspace/src/${entry%%:*}"
+    src="$REPO/build/target/bin/${entry%%:*}"
     rel="${entry#*:}"
     if [ ! -f "$src" ]; then
         echo "build-rootfs: missing $src -- run tools/userspace/build-userspace.sh first" >&2
@@ -164,7 +165,7 @@ mkdir -p "$OVERLAY/usr/local/bin"
 ln -sf /usr/bin/kill "$OVERLAY/usr/local/bin/kill"
 echo "    compat: /usr/local/bin/kill -> /usr/bin/kill"
 
-SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl-runtime}"
+SDL_STAGE="${SDL_STAGE:-$REPO/build/stage-sdl-runtime}"
 if [ -d "$SDL_STAGE" ]; then
     SDL_SONAME="libSDL-1.2.so.0"
     if [ ! -e "$SDL_STAGE/usr/lib/$SDL_SONAME" ]; then
@@ -200,7 +201,7 @@ else
 fi
 
 
-MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/userspace/stage-mplayer}"
+MPLAYER_STAGE="${MPLAYER_STAGE:-$REPO/build/stage-mplayer}"
 if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
     mkdir -p "$OVERLAY/usr/bin"
     cp "$MPLAYER_STAGE/usr/bin/mplayer" "$OVERLAY/usr/bin/mplayer"
@@ -210,7 +211,7 @@ else
     echo "build-rootfs: WARNING -- no $MPLAYER_STAGE, piko-player ships with no backend" >&2
 fi
 
-PHONEME_STAGE="${PHONEME_STAGE:-$REPO/userspace/stage-phoneme}"
+PHONEME_STAGE="${PHONEME_STAGE:-$REPO/build/stage-phoneme}"
 PHONEME_HOME="$PHONEME_STAGE/usr/local/lib/phoneme"
 if [ ! -f "$PHONEME_HOME/bin/runMidlet" ]; then
     echo "==> building phoneME J2ME (tools/userspace/build-phoneme.sh)"
@@ -230,7 +231,7 @@ cp "$REPO/userspace/src/phoneme-run" "$OVERLAY/usr/local/bin/phoneme-run"
 chmod 0755 "$OVERLAY/usr/local/bin/phoneme-run"
 echo "    phoneme: /usr/local/bin/phoneme-run (what the .desktop launchers exec)"
 
-TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/userspace/stage-timidity}"
+TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/build/stage-timidity}"
 if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
     echo "==> building the MIDI instruments (tools/userspace/build-timidity-patches.sh)"
     "$REPO/tools/userspace/build-timidity-patches.sh"
@@ -243,7 +244,7 @@ mkdir -p "$OVERLAY/usr/share/timidity"
 cp -a "$TIMIDITY_STAGE/." "$OVERLAY/usr/share/timidity/"
 echo "    timidity: /usr/share/timidity ($(find "$OVERLAY/usr/share/timidity" -name '*.pat' | wc -l) patches)"
 
-GLIBC_STAGE="${GLIBC_STAGE:-$REPO/userspace/stage-glibc}"
+GLIBC_STAGE="${GLIBC_STAGE:-$REPO/build/stage-glibc}"
 if [ ! -f "$GLIBC_STAGE/lib/ld-linux.so.3" ]; then
     echo "==> building the GNU C library (tools/userspace/build-glibc-part.sh)"
     "$REPO/tools/userspace/build-glibc-part.sh"
@@ -256,7 +257,7 @@ mkdir -p "$OVERLAY/usr/glibc"
 cp -a "$GLIBC_STAGE/lib" "$OVERLAY/usr/glibc/"
 echo "    glibc: /usr/glibc/lib (alongside uClibc)"
 
-BUSYBOX_STAGE="${BUSYBOX_ROOT_STAGE:-$REPO/userspace/stage-busybox}"
+BUSYBOX_STAGE="${BUSYBOX_ROOT_STAGE:-$REPO/build/stage-busybox}"
 if [ ! -f "$BUSYBOX_STAGE/bin/busybox" ]; then
     echo "==> building busybox for the root (tools/userspace/build-busybox-root.sh)"
     "$REPO/tools/userspace/build-busybox-root.sh"
@@ -268,7 +269,7 @@ fi
 cp -a "$BUSYBOX_STAGE/." "$OVERLAY/"
 echo "    busybox: /bin/busybox built from source ($(find "$BUSYBOX_STAGE" -type l | wc -l) applets)"
 
-WIRELESS_STAGE="${WIRELESS_STAGE:-$REPO/userspace/stage-target}"
+WIRELESS_STAGE="${WIRELESS_STAGE:-$REPO/build/target}"
 if [ ! -x "$WIRELESS_STAGE/usr/sbin/iwconfig" ]; then
     echo "==> building the wireless tools (tools/userspace/build-libiw.sh)"
     "$REPO/tools/userspace/build-libiw.sh"
@@ -284,7 +285,7 @@ for tool in iwconfig iwlist iwgetid iwpriv iwspy iwevent; do
 done
 echo "    wireless: /usr/sbin/iw* built from source"
 
-ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/userspace/stage-alsa-runtime}"
+ALSA_RUNTIME="${ALSA_RUNTIME:-$REPO/build/stage-alsa-runtime}"
 if [ -d "$ALSA_RUNTIME/usr/share/alsa" ]; then
     mkdir -p "$OVERLAY/usr/share" "$OVERLAY/var/lib/alsa"
     cp -a "$ALSA_RUNTIME/usr/share/alsa" "$OVERLAY/usr/share/"
@@ -303,7 +304,7 @@ else
     echo "build-rootfs: WARNING -- no $ALSA_RUNTIME/usr/share/alsa, mb-volume gets no mixer" >&2
 fi
 
-OPKG_BIN="${OPKG_BIN:-$REPO/userspace/stage-target/usr/bin/opkg}"
+OPKG_BIN="${OPKG_BIN:-$REPO/build/target/usr/bin/opkg}"
 if [ -f "$OPKG_BIN" ]; then
     mkdir -p "$OVERLAY/usr/bin"
     cp "$OPKG_BIN" "$OVERLAY/usr/bin/opkg"
@@ -329,7 +330,7 @@ REFS="$(cat "$REPO/rootfs/etc/init.d/rcS" "$REPO/rootfs/etc/init.d/xsession" \
              "$REPO/rootfs/etc/mdev.conf" "$REPO/rootfs/etc/inittab" \
              "$REPO/rootfs"/usr/sbin/* \
              "$REPO/userspace/src/piko-sync/emulation_db.h" \
-             "$REPO/userspace/src/piko-sync/piko-sync-server.cxx" 2>/dev/null \
+             "$REPO/build/target/bin/piko-sync-server.cxx" 2>/dev/null \
     | grep -aoE '(^|[^-[:alnum:]_./])/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | grep -aoE '/(usr/local/bin|usr/sbin|usr/bin|sbin|bin)/[A-Za-z0-9._-]*[A-Za-z0-9]' \
     | sort -u)"

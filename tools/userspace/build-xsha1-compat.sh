@@ -3,7 +3,7 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/xsha1-compat"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
+STAGE="${STAGE:-$REPO/build/target}"
 HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST_TRIPLET/bin}"
 

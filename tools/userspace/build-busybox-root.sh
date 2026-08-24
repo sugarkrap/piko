@@ -2,9 +2,9 @@
 set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-STAGE="${BUSYBOX_ROOT_STAGE:-$REPO/userspace/stage-busybox}"
-SRC_DIR="${BUSYBOX_SRC_DIR:-$REPO/initramfs/busybox-1.36.1}"
-BUILD_DIR="${BUSYBOX_ROOT_BUILD:-$REPO/initramfs/busybox-build-root}"
+STAGE="${BUSYBOX_ROOT_STAGE:-$REPO/build/stage-busybox}"
+SRC_DIR="${BUSYBOX_SRC_DIR:-$REPO/build/initramfs/busybox-1.36.1}"
+BUILD_DIR="${BUSYBOX_ROOT_BUILD:-$REPO/build/initramfs/busybox-build-root}"
 APPLETS="${BUSYBOX_APPLETS:-$REPO/modules/rootfs/busybox-applets.list}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"

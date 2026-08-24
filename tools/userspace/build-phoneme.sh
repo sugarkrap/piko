@@ -3,11 +3,13 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/phoneme/phoneme_feature"
-BUILD="${BUILD:-$REPO/userspace/build-phoneme}"
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-phoneme}"
-SDL_STAGE="${SDL_STAGE:-$REPO/userspace/stage-sdl}"
-DEPS_STAGE="${DEPS_STAGE:-$REPO/userspace/stage-target}"
-CACHE_DIR="${CACHE_DIR:-$REPO/userspace/.thirdparty-cache}"
+BUILD="${BUILD:-$REPO/build/phoneme}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-phoneme}"
+SDL_STAGE="${SDL_STAGE:-$REPO/build/stage-sdl}"
+DEPS_STAGE="${DEPS_STAGE:-$REPO/build/target}"
+CACHE_DIR="${CACHE_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "${CACHE:-${CACHE_DIR:-}}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 HOST="${HOST:-arm-unknown-linux-uclibcgnueabi}"

@@ -3,17 +3,20 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SDL_IMAGE_VERSION="${SDL_IMAGE_VERSION:-1.2.12}"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 SDLIMG_SRC_DIR="${SDLIMG_SRC_DIR:-$SRC_DIR/SDL_image-$SDL_IMAGE_VERSION}"
-SDLIMG_TARBALL="${SDLIMG_TARBALL:-$SRC_DIR/SDL_image-$SDL_IMAGE_VERSION.tar.gz}"
+SDLIMG_TARBALL="${SDLIMG_TARBALL:-$DL_DIR/SDL_image-$SDL_IMAGE_VERSION.tar.gz}"
 SDLIMG_URL="https://www.libsdl.org/projects/SDL_image/release/SDL_image-$SDL_IMAGE_VERSION.tar.gz"
 SDLIMG_SHA256="0b90722984561004de84847744d566809dbb9daf732a9e503b91a1b5a84e5699"
 
-SDL_STAGE_DIR="${SDL_STAGE_DIR:-$REPO/userspace/stage-sdl}"
-THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/userspace/stage-target}"
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-sdl}"
-RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-sdl-runtime}"
+SDL_STAGE_DIR="${SDL_STAGE_DIR:-$REPO/build/stage-sdl}"
+THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/build/target}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-sdl}"
+RUNTIME_DIR="${RUNTIME_DIR:-$REPO/build/stage-sdl-runtime}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"

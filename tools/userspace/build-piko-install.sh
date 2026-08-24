@@ -3,7 +3,7 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC_DIR="$REPO/flash/src"
-OUT_DIR="${OUT_DIR:-$REPO/flash}"
+OUT_DIR="${OUT_DIR:-$REPO/build/flash}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 
 FORCE=0

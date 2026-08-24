@@ -3,16 +3,19 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SDL2_VERSION="${SDL2_VERSION:-2.30.12}"
-SRC_DIR="$REPO/userspace/src"
+SRC_DIR="${SRC_DIR:-$REPO/build/src}"
+DL_DIR="${DL_DIR:-$REPO/build/dl}"
+. "$REPO/tools/userspace/dl-cache.sh"
+piko_seed_dl_cache "$REPO" "$DL_DIR"
 
 SDL2_SRC_DIR="${SDL2_SRC_DIR:-$SRC_DIR/SDL2-$SDL2_VERSION}"
-SDL2_TARBALL="${SDL2_TARBALL:-$SRC_DIR/SDL2-$SDL2_VERSION.tar.gz}"
+SDL2_TARBALL="${SDL2_TARBALL:-$DL_DIR/SDL2-$SDL2_VERSION.tar.gz}"
 SDL2_URL="https://www.libsdl.org/release/SDL2-$SDL2_VERSION.tar.gz"
 SDL2_SHA256="ac356ea55e8b9dd0b2d1fa27da40ef7e238267ccf9324704850d5d47375b48ea"
 
-STAGE_DIR="${STAGE_DIR:-$REPO/userspace/stage-sdl2}"
-THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/userspace/stage-target}"
-RUNTIME_DIR="${RUNTIME_DIR:-$REPO/userspace/stage-sdl2-runtime}"
+STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-sdl2}"
+THIRDPARTY_STAGE="${THIRDPARTY_STAGE:-$REPO/build/target}"
+RUNTIME_DIR="${RUNTIME_DIR:-$REPO/build/stage-sdl2-runtime}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-unknown-linux-uclibcgnueabi-}"

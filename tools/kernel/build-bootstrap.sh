@@ -3,7 +3,7 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 KERNEL_VERSION="${KERNEL_VERSION:-7.1.4}"
-KERNEL_SRC_DIR="${KERNEL_SRC_DIR:-$REPO/kernel-src-bootstrap}"
+KERNEL_SRC_DIR="${KERNEL_SRC_DIR:-$REPO/build/kernel/bootstrap}"
 KERNEL_DIR="$KERNEL_SRC_DIR/linux-$KERNEL_VERSION"
 BASE_CONFIG="$REPO/kernel.config-corgi-$KERNEL_VERSION-minimal"
 
@@ -26,15 +26,15 @@ done
 
 FLAVOR_CONF="$REPO/tools/kernel/flavors/$FLAVOR.conf"
 COMMON_CONF="$REPO/tools/kernel/flavors/common.conf"
-FRAGMENTS="$COMMON_CONF $FLAVOR_CONF"
+FRAGMENTS="$COMMON_CONF $FLAVOR_CONF${EXTRA_CONF:+ $EXTRA_CONF}"
 if [ ! -f "$FLAVOR_CONF" ]; then
     echo "tools/kernel/build-bootstrap.sh: unknown flavor '$FLAVOR' (no $FLAVOR_CONF)" >&2
     echo "  available: $(cd "$REPO/tools/kernel/flavors" && echo *.conf | sed 's/\.conf//g')" >&2
     exit 1
 fi
 
-[ -n "$OUT" ] || OUT="$REPO/flash/zImage-$FLAVOR"
-INITRAMFS_CPIO="${INITRAMFS_CPIO:-$REPO/initramfs/initramfs-minimal-built-$FLAVOR.cpio.gz}"
+[ -n "$OUT" ] || OUT="$REPO/build/flash/zImage-$FLAVOR"
+INITRAMFS_CPIO="${INITRAMFS_CPIO:-$REPO/build/initramfs/initramfs-minimal-built-$FLAVOR.cpio.gz}"
 
 if [ ! -f "$INITRAMFS_CPIO" ]; then
     echo "==> no built initramfs at $INITRAMFS_CPIO -- building it"

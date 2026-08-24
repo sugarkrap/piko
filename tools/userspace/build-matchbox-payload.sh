@@ -2,7 +2,7 @@
 set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-STAGE="$REPO/userspace/stage-target"
+STAGE="$REPO/build/target"
 HOST_TRIPLET="${CROSS_HOST:-arm-unknown-linux-uclibcgnueabi}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/$HOST_TRIPLET/bin}"
 SYSROOT="$REPO/toolchain/x-tools/$HOST_TRIPLET/$HOST_TRIPLET/sysroot"
@@ -46,7 +46,7 @@ XSERVER_BIN="${XSERVER_BIN:-$REPO/userspace/src/xserver/hw/kdrive/fbdev/Xfbdev}"
 XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
-TOASTERS_BIN="${TOASTERS_BIN:-$REPO/userspace/src/toasters}"
+TOASTERS_BIN="${TOASTERS_BIN:-$REPO/build/target/bin/toasters}"
 FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-apprun}"
 PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"

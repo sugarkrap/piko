@@ -3,8 +3,10 @@ set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/piko-sync"
-STAGE="${STAGE:-$REPO/userspace/stage-target}"
-OUTDIR="${OUTDIR:-$REPO}"
+STAGE="${STAGE:-$REPO/build/target}"
+OUTDIR="${OUTDIR:-$REPO/build}"
+SERVER_BIN="${SERVER_BIN:-$REPO/build/target/bin/piko-sync-server}"
+CLIENT_BIN="${CLIENT_BIN:-$REPO/build/host/bin/piko-sync-client}"
 
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
 HOST="${HOST:-arm-unknown-linux-uclibcgnueabi}"
@@ -66,13 +68,14 @@ if [ "$BUILD_SERVER" = "1" ]; then
     fi
 
     echo "==> cross-building piko-sync-server against $STAGE"
-    rm -f "$SRC/piko-sync-server"
+    rm -f "$SERVER_BIN"
     make -C "$SRC" server \
+        TARGETBIN="$(dirname "$SERVER_BIN")" \
         CXX="$TOOLCHAIN_BIN_DIR/$HOST-g++" \
         STAGE="$STAGE" \
         FLTK_LDLIBS="$FLTK_LDLIBS"
 
-    needed="$("$TOOLCHAIN_BIN_DIR/$HOST-readelf" -d "$SRC/piko-sync-server" \
+    needed="$("$TOOLCHAIN_BIN_DIR/$HOST-readelf" -d "$SERVER_BIN" \
         | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
     echo "    NEEDED: $needed"
     case " $needed " in
@@ -88,7 +91,7 @@ if [ "$BUILD_SERVER" = "1" ]; then
     PKGROOT="$(mktemp -d)"
     trap 'rm -rf "$PKGROOT"' EXIT INT TERM
     mkdir -p "$PKGROOT/usr/bin" "$PKGROOT/usr/share/applications" "$PKGROOT/usr/share/pixmaps"
-    cp "$SRC/piko-sync-server" "$PKGROOT/usr/bin/piko-sync-server"
+    cp "$SERVER_BIN" "$PKGROOT/usr/bin/piko-sync-server"
     cp "$REPO/userspace/desktop/piko-sync-server.desktop" \
         "$PKGROOT/usr/share/applications/piko-sync-server.desktop"
     cp "$REPO/userspace/desktop/piko-sync-server.png" \
@@ -101,7 +104,7 @@ if [ "$BUILD_SERVER" = "1" ]; then
 fi
 
 if [ "$BUILD_CLIENT" = "1" ]; then
-    HOST_FLTK_STAGE="$REPO/userspace/stage-host/usr/local"
+    HOST_FLTK_STAGE="$REPO/build/host/usr/local"
     FLTK_CONFIG="${FLTK_CONFIG:-}"
     FLTK_PREFIX_FIXUP=0
     if [ -n "$FLTK_CONFIG" ]; then
@@ -130,15 +133,16 @@ if [ "$BUILD_CLIENT" = "1" ]; then
 
     echo "==> building piko-sync-client against $FLTK_CONFIG"
     make -C "$SRC" client \
+        HOSTBIN="$(dirname "$CLIENT_BIN")" \
         HOSTCXX="${HOSTCXX:-g++}" \
         HOST_FLTK_CXXFLAGS="$CLIENT_CXXFLAGS" \
         HOST_FLTK_LDFLAGS="$CLIENT_LDFLAGS"
-    if [ ! -x "$SRC/piko-sync-client" ]; then
+    if [ ! -x "$CLIENT_BIN" ]; then
         echo "tools/userspace/build-piko-sync.sh: make reported success but there is no" >&2
-        echo "  $SRC/piko-sync-client -- refusing to claim the client was built" >&2
+        echo "  $CLIENT_BIN -- refusing to claim the client was built" >&2
         exit 1
     fi
-    echo "    built: $SRC/piko-sync-client"
+    echo "    built: $CLIENT_BIN"
     echo "    run it from the piko repo root (or set PIKO_SYNC_REPO_ROOT) so"
     echo "    the Build && Deploy tab can find tools/build-and-deploy.sh"
 fi
