@@ -39,6 +39,7 @@ fi
 
 suite=
 rotate=
+canvas=
 if [ -f "$CFG" ]; then
 	while IFS='|' read -r p machine backend desktop icon options; do
 		[ "$p" = "$JAR" ] || continue
@@ -48,6 +49,7 @@ if [ -f "$CFG" ]; then
 			case "$kv" in
 				suite=*) suite=${kv#suite=} ;;
 				rotate=*) rotate=${kv#rotate=} ;;
+				canvas=*) canvas=${kv#canvas=} ;;
 			esac
 		done
 		IFS=$OLD
@@ -76,6 +78,11 @@ if [ "$rotate" = "1" ]; then
 	export J2ME_GP2X_REVERSE
 fi
 
+if [ -n "$canvas" ]; then
+	PIKO_CANVAS=$canvas
+	export PIKO_CANVAS
+fi
+
 if [ -f "$PIKO_CFG" ]; then
 	while IFS='=' read -r key value; do
 		case "$key" in
@@ -85,6 +92,7 @@ if [ -f "$PIKO_CFG" ]; then
 			keylog) [ -n "${PIKO_KEYLOG:-}" ] || { [ "$value" = "1" ] && PIKO_KEYLOG=1; } ;;
 			quit_key) [ -n "${PIKO_QUIT_KEY:-}" ] || PIKO_QUIT_KEY=$value ;;
 			quit_hard) [ -n "${PIKO_QUIT_HARD:-}" ] || { [ "$value" = "1" ] && PIKO_QUIT_HARD=1; } ;;
+			quit_hold_ms) [ -n "${PIKO_QUIT_HOLD_MS:-}" ] || PIKO_QUIT_HOLD_MS=$value ;;
 			heap_mb) [ -n "${PIKO_HEAP_MB:-}" ] || PIKO_HEAP_MB=$value ;;
 			vm_args) [ -n "${PIKO_VM_ARGS:-}" ] || PIKO_VM_ARGS=$value ;;
 		esac
@@ -110,6 +118,10 @@ fi
 if [ -n "${PIKO_QUIT_HARD:-}" ]; then
 	export PIKO_QUIT_HARD
 fi
+
+if [ -n "${PIKO_QUIT_HOLD_MS:-}" ]; then
+	export PIKO_QUIT_HOLD_MS
+fi
 PIKO_TIMIDITY_DIR=${PIKO_TIMIDITY_DIR:-$TIMIDITY_DEFAULT}
 export PIKO_TIMIDITY_DIR
 
@@ -126,8 +138,9 @@ PIKO_HEAP_MB=${PIKO_HEAP_MB:-$HEAP_MB_DEFAULT}
 	echo "rotate: ${rotate:-0}"
 	echo "timidity: $PIKO_TIMIDITY_DIR"
 	echo "midi_amp: ${PIKO_MIDI_AMP:-default}"
+	echo "canvas: ${PIKO_CANVAS:-full}"
 	echo "display: ${DISPLAY:-(unset)}"
-	echo "quit key: ${PIKO_QUIT_KEY:-285}${PIKO_QUIT_HARD:+ (hard)}"
+	echo "quit key: ${PIKO_QUIT_KEY:-285}${PIKO_QUIT_HARD:+ (hard)} hold ${PIKO_QUIT_HOLD_MS:-3000}ms"
 	echo "keylog: ${PIKO_KEYLOG:-0}"
 	echo "---- runMidlet output ----"
 } >> "$LOG"
