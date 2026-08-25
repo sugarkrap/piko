@@ -336,6 +336,11 @@ inline bool save_emulation_file(const std::vector<RomEntry> &db, const char *pat
     return true;
 }
 
+inline bool entry_is_directive(const RomEntry &e)
+{
+    return !e.path.empty() && e.path[0] == '@';
+}
+
 inline std::vector<RomEntry> load_emulation_db()
 {
     std::vector<RomEntry> out;
@@ -343,9 +348,14 @@ inline std::vector<RomEntry> load_emulation_db()
         if (!media_present(m))
             continue;
         std::vector<RomEntry> one = load_emulation_file(emulation_cfg_for(m).c_str());
-        for (size_t i = 0; i < one.size(); i++)
-            if (media_of_path(one[i].path) == m)
+        for (size_t i = 0; i < one.size(); i++) {
+            if (entry_is_directive(one[i])) {
+                if (m == PART_NAND)
+                    out.push_back(one[i]);
+            } else if (media_of_path(one[i].path) == m) {
                 out.push_back(one[i]);
+            }
+        }
     }
     return out;
 }
@@ -355,9 +365,14 @@ inline bool save_emulation_db(const std::vector<RomEntry> &db)
     bool ok = true;
     for (int m = PART_NAND; m <= PART_CF; m++) {
         std::vector<RomEntry> mine;
-        for (size_t i = 0; i < db.size(); i++)
-            if (media_of_path(db[i].path) == m)
+        for (size_t i = 0; i < db.size(); i++) {
+            if (!db[i].path.empty() && db[i].path[0] == '@') {
+                if (m == PART_NAND)
+                    mine.push_back(db[i]);
+            } else if (media_of_path(db[i].path) == m) {
                 mine.push_back(db[i]);
+            }
+        }
 
         std::string path = emulation_cfg_for(m);
         if (!media_present(m)) {
@@ -418,10 +433,14 @@ inline std::string desktop_contents(const RomEntry &e)
     out += "Type=Application\n";
     out += "Name=" + name + "\n";
     out += "Comment=" + e.machine + " game\n";
-    if (e.machine == "J2ME")
-        out += "Exec=/usr/local/bin/phoneme-run \"" + e.path + "\"\n";
+    std::string runner = (e.machine == "J2ME")
+                         ? std::string("/usr/local/bin/phoneme-run")
+                         : "/usr/local/bin/" + e.backend + "-run";
+    if (option_get(e.options, "heavy") == "1")
+        out += "Exec=" + runner + " \"" + e.path + "\"\n";
     else
-        out += "Exec=/usr/local/bin/" + e.backend + "-run \"" + e.path + "\"\n";
+        out += "Exec=/usr/local/bin/pikoemu \"" + e.path + "\" -- "
+               + runner + " \"" + e.path + "\"\n";
     if (option_get(e.options, "heavy") == "1") {
         out += "X-Piko-Heavy=true\n";
         out += "X-Piko-Heavy-Reason=" + e.machine
@@ -430,8 +449,6 @@ inline std::string desktop_contents(const RomEntry &e)
         out += "X-Piko-Video=qvga\n";
     } else {
         out += "X-Piko-Drivers=x11\n";
-        if (e.machine == "J2ME")
-            out += "X-Piko-Video=qvga\n";
     }
     out += "Icon=" + e.icon + "\n";
     out += "Terminal=false\n";

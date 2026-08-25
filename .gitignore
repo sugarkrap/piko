@@ -1,6 +1,7 @@
 build/
 toolchain/
 qemu-spitz/
+node_modules/
 
 .cache/
 **/.cache/

@@ -681,8 +681,11 @@ int main()
         std::string d = desktop_contents(e);
         check(d.find("X-Piko-Parts") == std::string::npos,
               "j2me desktops no longer declare software parts");
-        check(d.find("Exec=/usr/local/bin/phoneme-run") != std::string::npos,
-              "j2me desktop launches phoneme-run");
+        check(d.find("Exec=/usr/local/bin/pikoemu \"/mnt/card/Applets/game.jar\" "
+                     "-- /usr/local/bin/phoneme-run") != std::string::npos,
+              "j2me desktop launches phoneme-run through pikoemu");
+        check(d.find("X-Piko-Video") == std::string::npos,
+              "pikoemu owns the video mode, the desktop does not");
 
         RomEntry s2;
         s2.path = "/mnt/card/Emulation/game.smc";

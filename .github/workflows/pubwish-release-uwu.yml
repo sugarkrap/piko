@@ -45,6 +45,9 @@ jobs:
               fakeroot e2fsprogs
           sudo pip3 install --break-system-packages --quiet jefferson
 
+      - name: install host tooling deps
+        run: npm ci --no-audit --no-fund
+
       - name: install a jdk 8 for phoneme
         uses: actions/setup-java@v4
         with:

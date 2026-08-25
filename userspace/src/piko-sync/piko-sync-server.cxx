@@ -42,6 +42,7 @@
 #include "icon_xpm.h"
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "bezel_store.h"
 #include "jar_meta.h"
 
 using namespace piko_sync;
@@ -334,8 +335,9 @@ static int prune_rom_launchers(const std::vector<RomEntry> &db)
             continue;
 
         bool live = false;
-        for (size_t i = 0; i < db.size(); i++)
-            if (db[i].path == rom && db[i].desktop == name) { live = true; break; }
+        if (rom[0] != '@')
+            for (size_t i = 0; i < db.size(); i++)
+                if (db[i].path == rom && db[i].desktop == name) { live = true; break; }
         if (!live && unlink(dpath.c_str()) == 0)
             removed++;
     }
@@ -355,6 +357,8 @@ static int sync_rom_launchers()
     bool db_changed = false;
     int changed = 0;
     for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path.empty() || db[i].path[0] == '@')
+            continue;
         if (!db[i].icon.empty() && db[i].icon.find('/') == std::string::npos) {
             db[i].icon = DEFAULT_ROM_ICON;
             db_changed = true;
@@ -533,6 +537,12 @@ private:
     void handle_rom_delete(const std::string &payload);
     void handle_rom_set_icon(const std::string &payload);
     void handle_rom_get_icon(const std::string &payload);
+    void handle_bezel_list(const std::string &payload);
+    void handle_bezel_put(const std::string &payload);
+    void handle_bezel_delete(const std::string &payload);
+    void handle_bezel_get(const std::string &payload);
+    void handle_bezel_set_rect(const std::string &payload);
+    void handle_rom_set_option(const std::string &payload);
 
     std::string dest_dir_;
     std::string rom_machine_;
@@ -1111,6 +1121,12 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_ROM_DELETE:       handle_rom_delete(payload); return;
         case MSG_ROM_SET_ICON:     handle_rom_set_icon(payload); return;
         case MSG_ROM_GET_ICON:     handle_rom_get_icon(payload); return;
+        case MSG_BEZEL_LIST:       handle_bezel_list(payload); return;
+        case MSG_BEZEL_PUT:        handle_bezel_put(payload); return;
+        case MSG_BEZEL_DELETE:     handle_bezel_delete(payload); return;
+        case MSG_BEZEL_GET:        handle_bezel_get(payload); return;
+        case MSG_BEZEL_SET_RECT:   handle_bezel_set_rect(payload); return;
+        case MSG_ROM_SET_OPTION:   handle_rom_set_option(payload); return;
         default:
             fail("expected an offer or a deploy request");
             return;
@@ -1378,6 +1394,212 @@ void Connection::register_rom(const std::string &rom_path)
     register_local_rom(rom_path, rom_machine_, rom_options_, status);
     app_->set_status(status);
     app_->refresh_managers();
+}
+
+
+void Connection::handle_rom_set_option(const std::string &payload)
+{
+    RomOptionMsg m;
+    OkReasonMsg ack;
+    if (!decode_rom_option(payload, m)) { fail("malformed ROM_SET_OPTION"); return; }
+
+    if (m.path.empty() || m.key.empty()) {
+        ack.ok = false;
+        ack.reason = "empty path or key";
+        send(MSG_ROM_SET_OPTION_ACK, encode(ack));
+        close_connection();
+        return;
+    }
+
+    std::vector<RomEntry> db = load_emulation_db();
+    bool found = false;
+    for (size_t i = 0; i < db.size(); i++) {
+        if (db[i].path != m.path)
+            continue;
+        found = true;
+        if (m.value.empty())
+            option_set(db[i].options, m.key, "");
+        else
+            option_set(db[i].options, m.key, option_escape(m.value));
+        break;
+    }
+
+    if (!found) {
+        if (m.path[0] != '@') {
+            ack.ok = false;
+            ack.reason = "no such entry";
+            send(MSG_ROM_SET_OPTION_ACK, encode(ack));
+            close_connection();
+            return;
+        }
+        if (!m.value.empty()) {
+            RomEntry e;
+            e.path = m.path;
+            e.machine = "-";
+            e.backend = "-";
+            e.desktop = "-";
+            e.icon = "-";
+            option_set(e.options, m.key, option_escape(m.value));
+            db.push_back(e);
+        }
+    }
+
+    if (!save_emulation_db(db)) {
+        ack.ok = false;
+        ack.reason = "could not write emulation.cfg";
+    } else {
+        ack.ok = true;
+        app_->set_status(m.key + " set on " + m.path);
+        app_->refresh_managers();
+    }
+    send(MSG_ROM_SET_OPTION_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_bezel_list(const std::string &payload)
+{
+    (void)payload;
+    std::vector<StoredBezel> all = bezel_list_all();
+    BezelListAckMsg ack;
+    char buf[256];
+    for (size_t i = 0; i < all.size(); i++) {
+        snprintf(buf, sizeof(buf), "|%u|%u|%u|%u|%u|%u",
+                 all[i].master.width, all[i].master.height,
+                 all[i].master.screen_x, all[i].master.screen_y,
+                 all[i].master.screen_w, all[i].master.screen_h);
+        ack.records += all[i].name + buf + "\n";
+    }
+    send(MSG_BEZEL_LIST_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_bezel_put(const std::string &payload)
+{
+    BezelBlobMsg m;
+    OkReasonMsg ack;
+    if (!decode_bezel_blob(payload, m)) { fail("malformed BEZEL_PUT"); return; }
+
+    if (!bezel_name_safe(m.name)) {
+        ack.ok = false;
+        ack.reason = "bad bezel name";
+    } else {
+        PkbzHeader h;
+        size_t off = 0;
+        if (!pkbz_decode_header(m.data, h, off)) {
+            ack.ok = false;
+            ack.reason = "not a valid pkbz blob";
+        } else {
+            int media = (int)m.media;
+            if (media != PART_SD && media != PART_CF && media != PART_NAND)
+                media = PART_SD;
+            if (!media_present(media)) {
+                ack.ok = false;
+                ack.reason = std::string(part_media_name(media)) + " is not present";
+                send(MSG_BEZEL_PUT_ACK, encode(ack));
+                close_connection();
+                return;
+            }
+            if (!bezel_make_dir(media)) {
+                ack.ok = false;
+                ack.reason = "cannot create bezel directory";
+            } else if (!bezel_write_file(bezel_file_for(media, m.name), m.data)) {
+                ack.ok = false;
+                ack.reason = "cannot write bezel file";
+            } else {
+                ack.ok = true;
+                app_->set_status("bezel " + m.name + " stored");
+            }
+        }
+    }
+    send(MSG_BEZEL_PUT_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_bezel_delete(const std::string &payload)
+{
+    BezelBlobMsg m;
+    OkReasonMsg ack;
+    if (!decode_bezel_blob(payload, m)) { fail("malformed BEZEL_DELETE"); return; }
+
+    if (!bezel_name_safe(m.name)) {
+        ack.ok = false;
+        ack.reason = "bad bezel name";
+    } else {
+        int media = bezel_media_of(m.name);
+        if (media < 0) {
+            ack.ok = false;
+            ack.reason = "no such bezel";
+        } else {
+            unlink(bezel_file_for(media, m.name).c_str());
+            ack.ok = true;
+            app_->set_status("bezel " + m.name + " deleted");
+        }
+    }
+    send(MSG_BEZEL_DELETE_ACK, encode(ack));
+    close_connection();
+}
+
+void Connection::handle_bezel_get(const std::string &payload)
+{
+    BezelBlobMsg m;
+    if (!decode_bezel_blob(payload, m)) { fail("malformed BEZEL_GET"); return; }
+
+    std::string blob;
+    if (bezel_name_safe(m.name)) {
+        int media = bezel_media_of(m.name);
+        if (media >= 0)
+            bezel_read_file(bezel_file_for(media, m.name), blob);
+    }
+
+    if (blob.empty()) {
+        BezelChunkMsg empty;
+        send(MSG_BEZEL_GET_ACK, encode(empty));
+        close_connection();
+        return;
+    }
+
+    size_t sent = 0;
+    while (sent < blob.size()) {
+        size_t n = blob.size() - sent;
+        if (n > MAX_CHUNK - 64)
+            n = MAX_CHUNK - 64;
+        BezelChunkMsg c;
+        c.total = (uint32_t)blob.size();
+        c.offset = (uint32_t)sent;
+        c.data.assign(blob, sent, n);
+        if (!send(MSG_BEZEL_GET_ACK, encode(c)))
+            break;
+        sent += n;
+    }
+    close_connection();
+}
+
+void Connection::handle_bezel_set_rect(const std::string &payload)
+{
+    BezelRectMsg m;
+    OkReasonMsg ack;
+    if (!decode_bezel_rect(payload, m)) { fail("malformed BEZEL_SET_RECT"); return; }
+
+    if (!bezel_name_safe(m.name)) {
+        ack.ok = false;
+        ack.reason = "bad bezel name";
+    } else {
+        int media = bezel_media_of(m.name);
+        if (media < 0) {
+            ack.ok = false;
+            ack.reason = "no such bezel";
+        } else {
+            bool ok = bezel_patch_rect(bezel_file_for(media, m.name),
+                                       m.x, m.y, m.w, m.h);
+            ack.ok = ok;
+            if (!ok)
+                ack.reason = "cannot patch bezel header";
+            else
+                app_->set_status("bezel " + m.name + " screen rect updated");
+        }
+    }
+    send(MSG_BEZEL_SET_RECT_ACK, encode(ack));
+    close_connection();
 }
 
 void Connection::handle_rom_list(const std::string &payload)

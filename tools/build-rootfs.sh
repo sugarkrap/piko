@@ -146,7 +146,8 @@ fbtext:usr/sbin/fbtext
 zramswap:usr/sbin/zramswap
 kill:usr/bin/kill
 md5sum:usr/bin/md5sum
-untar:usr/local/bin/untar"
+untar:usr/local/bin/untar
+pikoemu:usr/local/bin/pikoemu"
 for entry in $SRC_TOOLS; do
     src="$REPO/build/target/bin/${entry%%:*}"
     rel="${entry#*:}"
@@ -164,6 +165,16 @@ done
 mkdir -p "$OVERLAY/usr/local/bin"
 ln -sf /usr/bin/kill "$OVERLAY/usr/local/bin/kill"
 echo "    compat: /usr/local/bin/kill -> /usr/bin/kill"
+
+PIKOVIDEO_LIB="$REPO/build/target/usr/lib/libpikovideo.so.1"
+if [ ! -f "$PIKOVIDEO_LIB" ]; then
+    echo "build-rootfs: missing $PIKOVIDEO_LIB -- run tools/userspace/build-pikoemu.sh first" >&2
+    exit 1
+fi
+mkdir -p "$OVERLAY/lib"
+cp "$PIKOVIDEO_LIB" "$OVERLAY/lib/libpikovideo.so.1"
+chmod 0755 "$OVERLAY/lib/libpikovideo.so.1"
+echo "    pikoemu: /usr/local/bin/pikoemu + /lib/libpikovideo.so.1"
 
 SDL_STAGE="${SDL_STAGE:-$REPO/build/stage-sdl-runtime}"
 if [ -d "$SDL_STAGE" ]; then
@@ -230,6 +241,18 @@ mkdir -p "$OVERLAY/usr/local/bin"
 cp "$REPO/userspace/src/phoneme-run" "$OVERLAY/usr/local/bin/phoneme-run"
 chmod 0755 "$OVERLAY/usr/local/bin/phoneme-run"
 echo "    phoneme: /usr/local/bin/phoneme-run (what the .desktop launchers exec)"
+
+BEZEL_STAGE="${BEZEL_STAGE:-$REPO/build/stage-bezels}"
+if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/bezels" ]; then
+    echo "==> baking the shipped bezels (tools/userspace/build-bezels.sh)"
+    "$REPO/tools/userspace/build-bezels.sh"
+fi
+if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/bezels" ]; then
+    echo "build-rootfs: build-bezels.sh succeeded but there is no $BEZEL_STAGE/usr/local/.zaurus/bezels" >&2
+    exit 1
+fi
+cp -a "$BEZEL_STAGE/." "$OVERLAY/"
+echo "    bezels: /usr/local/.zaurus/bezels ($(find "$OVERLAY/usr/local/.zaurus/bezels" -name '*.pkbz' | wc -l) files)"
 
 TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/build/stage-timidity}"
 if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then
