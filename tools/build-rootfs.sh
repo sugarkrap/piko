@@ -242,6 +242,18 @@ cp "$REPO/userspace/src/phoneme-run" "$OVERLAY/usr/local/bin/phoneme-run"
 chmod 0755 "$OVERLAY/usr/local/bin/phoneme-run"
 echo "    phoneme: /usr/local/bin/phoneme-run (what the .desktop launchers exec)"
 
+UI_STAGE="${UI_STAGE:-$REPO/build/stage-ui}"
+if [ ! -d "$UI_STAGE/usr/local/share/piko/ui" ]; then
+    echo "==> baking the pikoemu ui assets (tools/userspace/build-ui.sh)"
+    "$REPO/tools/userspace/build-ui.sh"
+fi
+if [ ! -d "$UI_STAGE/usr/local/share/piko/ui" ]; then
+    echo "build-rootfs: build-ui.sh succeeded but there is no $UI_STAGE/usr/local/share/piko/ui" >&2
+    exit 1
+fi
+cp -a "$UI_STAGE/." "$OVERLAY/"
+echo "    pikoemu ui: /usr/local/share/piko/ui ($(find "$OVERLAY/usr/local/share/piko/ui" -type f | wc -l) files)"
+
 BEZEL_STAGE="${BEZEL_STAGE:-$REPO/build/stage-bezels}"
 if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/bezels" ]; then
     echo "==> baking the shipped bezels (tools/userspace/build-bezels.sh)"
