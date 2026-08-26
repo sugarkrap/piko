@@ -1,0 +1,31 @@
+#ifndef PIKOEMU_PROTO_H
+#define PIKOEMU_PROTO_H
+
+#define PIKOEMU_ENV_FB_FD   "PIKOEMU_FB_FD"
+#define PIKOEMU_ENV_SOCK_FD "PIKOEMU_SOCK_FD"
+#define PIKOEMU_ENV_W       "PIKOEMU_W"
+#define PIKOEMU_ENV_H       "PIKOEMU_H"
+
+#define PIKOEMU_MSG_FRAME   'F'
+#define PIKOEMU_MSG_KEYDOWN 'K'
+#define PIKOEMU_MSG_KEYUP   'k'
+#define PIKOEMU_MSG_QUIT    'Q'
+#define PIKOEMU_MSG_PENDOWN 'D'
+#define PIKOEMU_MSG_PENUP   'U'
+#define PIKOEMU_MSG_PENMOVE 'M'
+#define PIKOEMU_MSG_SIZE    'S'
+
+#define PIKOEMU_MSG_ROTATE  'R'
+#define PIKOEMU_MSG_READY   'Y'
+
+#define PIKOEMU_SIZE_BYTES  5
+#define PIKOEMU_ROT_BYTES   2
+
+#define PIKOEMU_EVENT_BYTES 9
+
+#define PIKOEMU_BUFFERS   2
+#define PIKOEMU_HDR_BYTES 16
+#define PIKOEMU_HDR_FRONT 0
+
+
+#endif

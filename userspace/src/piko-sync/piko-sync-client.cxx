@@ -1,6 +1,9 @@
 
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
+#include <FL/Fl_Int_Input.H>
+#include <FL/Fl_Check_Browser.H>
+#include <FL/Fl_Progress.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Box.H>
@@ -50,6 +53,10 @@
 
 #include "rom_detect.h"
 #include "emulation_db.h"
+#include "bezel_db.h"
+#include "bezel_format.h"
+#include "bezel_bake.h"
+#include "bezel_store.h"
 #include "jar_meta.h"
 
 using namespace piko_sync;
@@ -191,6 +198,28 @@ struct RetryContext {
 };
 
 class BuildRunner;
+
+static Fl_Box *g_busy_label = 0;
+
+class BusyCursor {
+public:
+    explicit BusyCursor(const char *msg)
+    {
+        if (g_busy_label) {
+            g_busy_label->copy_label(msg);
+            g_busy_label->redraw();
+        }
+        Fl::flush();
+    }
+    ~BusyCursor()
+    {
+        if (g_busy_label) {
+            g_busy_label->label("");
+            g_busy_label->redraw();
+        }
+        Fl::flush();
+    }
+};
 
 class TransferPane {
 public:
@@ -356,6 +385,7 @@ private:
     void (*relayout_cb_)(void *);
     void *relayout_arg_;
     Fl_Progress *aggregate_bar_;
+    Fl_Box *busy_label_;
     TransferTable *table_;
     Fl_Button *shot_btn_;
     Fl_Button *cancel_btn_;
@@ -600,6 +630,7 @@ void FileSend::handle_frame(uint32_t type, const std::string &payload)
 }
 
 static const int SHOT_TIMEOUT_SECS = 20;
+static const int BEZEL_FETCH_TIMEOUT_SECS = 180;
 
 static bool shot_recv_frame(int fd, FrameReader &reader, uint32_t &type,
                             std::string &payload, std::string &err)
@@ -834,13 +865,19 @@ TransferPane::TransferPane(int hx, int hy, int hw, int hh,
     toggle_btn_->callback(toggle_cb, this);
     toggle_btn_->tooltip("Show or hide the file transfer list");
 
-    aggregate_bar_ = new Fl_Progress(dx + m + 126, dy + 1, dw - 2 * m - 126 - 106, 20);
+    aggregate_bar_ = new Fl_Progress(dx + m + 126, dy + 1, dw - 2 * m - 126 - 106 - 130, 20);
     aggregate_bar_->minimum(0);
     aggregate_bar_->maximum(100);
     aggregate_bar_->value(0);
     aggregate_bar_->color(FL_BACKGROUND_COLOR);
     aggregate_bar_->selection_color(FL_BLUE);
     aggregate_bar_->label("0%");
+
+    busy_label_ = new Fl_Box(dx + dw - m - 306, dy + 1, 124, 20, "");
+    busy_label_->align(FL_ALIGN_INSIDE | FL_ALIGN_RIGHT);
+    busy_label_->labelsize(11);
+    busy_label_->labelcolor(FL_DARK_BLUE);
+    g_busy_label = busy_label_;
 
     cancel_btn_ = new Fl_Button(dx + dw - m - 176, dy, 70, 22, "Cancel");
     cancel_btn_->callback(cancel_cb, this);
@@ -1523,7 +1560,8 @@ static bool connect_with_timeout(int fd, struct sockaddr_in *addr, int secs, std
 
 static bool rom_request(const std::string &address, uint32_t type,
                         const std::string &payload, uint32_t want,
-                        std::string &reply, std::string &err)
+                        std::string &reply, std::string &err,
+                        int timeout_secs = SHOT_TIMEOUT_SECS)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { err = strerror(errno); return false; }
@@ -1651,27 +1689,1132 @@ static const char *media_name(int idx)
     }
 }
 
-struct ManagerSpec {
-    const char *media_key;
+struct BackendDef {
+    const char *key;
+    const char *label;
+    const char *machine;
     const char *subdir;
-    const char *dest_label;
+    const char *media_key;
     const char *add_label;
     const char *add_tip;
     const char *pattern;
     const char *chooser_title;
-    const char *empty_text;
     const char *reject_hint;
     bool j2me;
-    bool want_icon;
-    bool want_rotate;
 };
+
+static const BackendDef BACKENDS[] = {
+    { "phoneme", "phoneME", "J2ME", "Applets", "applet.media",
+      "Add J2ME applet...",
+      "Send a MIDlet to the device, install it and register it",
+      "J2ME applets (*.{jar,jad})",
+      "Add J2ME applets to send",
+      "A MIDlet is a .jar with a MIDlet manifest, or its .jad descriptor.",
+      true }
+};
+
+static const int BACKEND_COUNT = (int)(sizeof(BACKENDS) / sizeof(BACKENDS[0]));
+
+struct ManagerSpec {
+    const char *dest_label;
+    const char *empty_text;
+};
+
+
+static void bezel_scan_dir(const std::string &dir, std::vector<std::string> &out, int depth)
+{
+    if (depth > 6)
+        return;
+    DIR *d = opendir(dir.c_str());
+    if (!d)
+        return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        std::string name = e->d_name;
+        if (name == "." || name == "..")
+            continue;
+        std::string full = dir + "/" + name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode))
+            bezel_scan_dir(full, out, depth + 1);
+        else if (name.size() > 4 && name.compare(name.size() - 4, 4, ".cfg") == 0)
+            out.push_back(full);
+    }
+    closedir(d);
+}
+
+class BezelPreviewBox : public Fl_Box {
+public:
+    BezelPreviewBox(int X, int Y, int W, int H)
+        : Fl_Box(X, Y, W, H), img_(0), src_w_(0), src_h_(0),
+          rx_(0), ry_(0), rw_(0), rh_(0), have_rect_(false)
+    {
+        box(FL_DOWN_BOX);
+        color(FL_BACKGROUND2_COLOR);
+    }
+
+    ~BezelPreviewBox() { delete img_; }
+
+    void set_frame(Fl_RGB_Image *img, int src_w, int src_h)
+    {
+        delete img_;
+        img_ = img;
+        src_w_ = src_w;
+        src_h_ = src_h;
+        redraw();
+    }
+
+    void clear_frame()
+    {
+        delete img_;
+        img_ = 0;
+        src_w_ = src_h_ = 0;
+        have_rect_ = false;
+        redraw();
+    }
+
+    void set_rect(int x, int y, int w, int h)
+    {
+        rx_ = x; ry_ = y; rw_ = w; rh_ = h;
+        have_rect_ = (w > 0 && h > 0);
+        redraw();
+    }
+
+    void draw()
+    {
+        draw_box();
+        if (!img_ || src_w_ <= 0 || src_h_ <= 0) {
+            fl_color(FL_INACTIVE_COLOR);
+            fl_font(FL_HELVETICA, 11);
+            fl_draw(label() ? label() : "", x(), y(), w(), h(),
+                    FL_ALIGN_CENTER | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+            return;
+        }
+
+        int iw = img_->w(), ih = img_->h();
+        int ox = x() + (w() - iw) / 2;
+        int oy = y() + (h() - ih) / 2;
+        img_->draw(ox, oy);
+
+        if (!have_rect_)
+            return;
+        double sx = (double)iw / src_w_;
+        double sy = (double)ih / src_h_;
+        int bx = ox + (int)(rx_ * sx + 0.5);
+        int by = oy + (int)(ry_ * sy + 0.5);
+        int bw = (int)(rw_ * sx + 0.5);
+        int bh = (int)(rh_ * sy + 0.5);
+        fl_color(FL_MAGENTA);
+        fl_line_style(FL_SOLID, 1);
+        fl_rect(bx, by, bw, bh);
+        fl_rect(bx - 1, by - 1, bw + 2, bh + 2);
+        fl_line_style(0);
+    }
+
+private:
+    Fl_RGB_Image *img_;
+    int src_w_, src_h_;
+    int rx_, ry_, rw_, rh_;
+    bool have_rect_;
+};
+
+static Fl_RGB_Image *pkbz_to_image(const std::string &blob, PkbzHeader &hdr,
+                                   int max_w, int max_h)
+{
+    size_t off = 0;
+    if (!pkbz_decode_header(blob, hdr, off))
+        return 0;
+
+    int W = (int)hdr.width, H = (int)hdr.height;
+    unsigned char *rgb = new unsigned char[(size_t)W * H * 3];
+    const unsigned char *px = (const unsigned char *)blob.data() + off;
+    for (size_t i = 0; i < (size_t)W * H; i++) {
+        unsigned short v = (unsigned short)(px[i * 2] | (px[i * 2 + 1] << 8));
+        rgb[i * 3 + 0] = (unsigned char)(((v >> 11) & 0x1F) << 3);
+        rgb[i * 3 + 1] = (unsigned char)(((v >> 5) & 0x3F) << 2);
+        rgb[i * 3 + 2] = (unsigned char)((v & 0x1F) << 3);
+    }
+    Fl_RGB_Image *full = new Fl_RGB_Image(rgb, W, H, 3);
+    full->alloc_array = 1;
+
+    double s = (double)max_w / W;
+    double sy = (double)max_h / H;
+    if (sy < s) s = sy;
+    if (s < 1.0) {
+        Fl_RGB_Image *small = (Fl_RGB_Image *)full->copy((int)(W * s), (int)(H * s));
+        delete full;
+        return small;
+    }
+    return full;
+}
+
+struct DeviceBezel {
+    std::string name;
+    int w, h;
+    int sx, sy, sw, sh;
+};
+
+static bool fetch_bezel_list(const std::string &address,
+                             std::vector<DeviceBezel> &out, std::string &err)
+{
+    std::string reply;
+    if (!rom_request(address, MSG_BEZEL_LIST, std::string(), MSG_BEZEL_LIST_ACK, reply, err))
+        return false;
+    BezelListAckMsg ack;
+    if (!decode_bezel_list_ack(reply, ack)) { err = "malformed bezel list"; return false; }
+
+    out.clear();
+    std::string line;
+    for (size_t i = 0; i <= ack.records.size(); i++) {
+        if (i == ack.records.size() || ack.records[i] == '\n') {
+            if (!line.empty()) {
+                DeviceBezel b;
+                b.w = b.h = b.sx = b.sy = b.sw = b.sh = 0;
+                std::vector<std::string> f;
+                std::string cur;
+                for (size_t j = 0; j <= line.size(); j++) {
+                    if (j == line.size() || line[j] == '|') { f.push_back(cur); cur.clear(); }
+                    else cur += line[j];
+                }
+                if (f.size() >= 7) {
+                    b.name = f[0];
+                    b.w  = atoi(f[1].c_str()); b.h  = atoi(f[2].c_str());
+                    b.sx = atoi(f[3].c_str()); b.sy = atoi(f[4].c_str());
+                    b.sw = atoi(f[5].c_str()); b.sh = atoi(f[6].c_str());
+                    out.push_back(b);
+                }
+            }
+            line.clear();
+        } else {
+            line += ack.records[i];
+        }
+    }
+    return true;
+}
+
+static bool delete_bezel(const std::string &address, const std::string &name,
+                         std::string &err)
+{
+    BezelBlobMsg m;
+    m.name = name;
+    std::string reply;
+    if (!rom_request(address, MSG_BEZEL_DELETE, encode(m), MSG_BEZEL_DELETE_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+static bool get_bezel_blob(const std::string &address, const std::string &name,
+                           std::string &data, std::string &err)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { err = strerror(errno); return false; }
+
+    struct timeval tv;
+    tv.tv_sec = BEZEL_FETCH_TIMEOUT_SECS;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(DEFAULT_PORT);
+    if (address.empty() || inet_pton(AF_INET, address.c_str(), &addr.sin_addr) != 1) {
+        err = "not a valid IPv4 address: " + address;
+        close(fd);
+        return false;
+    }
+    if (!connect_with_timeout(fd, &addr, ROM_CONNECT_SECS, err)) {
+        err = "cannot reach the device: " + err;
+        close(fd);
+        return false;
+    }
+
+    FrameReader reader;
+    uint32_t t;
+    std::string p;
+
+    HelloMsg hello;
+    hello.version = PROTO_VERSION;
+    if (!send_frame_blocking(fd, MSG_HELLO, encode(hello))) {
+        err = "sending HELLO failed"; close(fd); return false;
+    }
+    if (!shot_recv_frame(fd, reader, t, p, err)) { close(fd); return false; }
+
+    BezelBlobMsg m;
+    m.name = name;
+    if (!send_frame_blocking(fd, MSG_BEZEL_GET, encode(m))) {
+        err = "sending request failed"; close(fd); return false;
+    }
+
+    data.clear();
+    uint32_t total = 0;
+    for (;;) {
+        if (!shot_recv_frame(fd, reader, t, p, err)) { close(fd); return false; }
+        if (t == MSG_ERROR) {
+            ErrorMsg em;
+            err = decode_error(p, em) ? em.message : "device reported an error";
+            close(fd);
+            return false;
+        }
+        if (t != MSG_BEZEL_GET_ACK) {
+            err = "device does not support this request (update piko-sync-server)";
+            close(fd);
+            return false;
+        }
+        BezelChunkMsg c;
+        if (!decode_bezel_chunk(p, c)) {
+            err = "malformed bezel chunk";
+            close(fd);
+            return false;
+        }
+        if (c.total == 0) {
+            close(fd);
+            return true;
+        }
+        total = c.total;
+        if (c.offset != data.size()) {
+            err = "bezel chunks arrived out of order";
+            close(fd);
+            return false;
+        }
+        data += c.data;
+        if (data.size() >= total)
+            break;
+    }
+    close(fd);
+    return true;
+}
+
+static const char *BEZEL_GLOBAL_PATH = "@global";
+
+static std::string bezel_backend_path(const char *key)
+{
+    return std::string("@backend:") + key;
+}
+
+static bool set_rom_option(const std::string &address, const std::string &path,
+                           const std::string &key, const std::string &value,
+                           std::string &err)
+{
+    RomOptionMsg m;
+    m.path = path;
+    m.key = key;
+    m.value = value;
+    std::string reply;
+    if (!rom_request(address, MSG_ROM_SET_OPTION, encode(m),
+                     MSG_ROM_SET_OPTION_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+struct BezelAssignments {
+    std::string global;
+    std::map<std::string, std::string> per_backend;
+    std::map<std::string, int> game_counts;
+};
+
+static bool fetch_bezel_assignments(const std::string &address,
+                                    BezelAssignments &out, std::string &err)
+{
+    std::string records;
+    if (!fetch_rom_list(address, records, err))
+        return false;
+
+    out.global.clear();
+    out.per_backend.clear();
+    out.game_counts.clear();
+
+    std::string line;
+    for (size_t i = 0; i <= records.size(); i++) {
+        if (i == records.size() || records[i] == '\n') {
+            if (!line.empty()) {
+                RomEntry e;
+                if (decode_entry(line, e)) {
+                    std::string bez = option_unescape(option_get(e.options, "bezel"));
+                    if (!bez.empty()) {
+                        if (e.path == BEZEL_GLOBAL_PATH)
+                            out.global = bez;
+                        else if (e.path.compare(0, 9, "@backend:") == 0)
+                            out.per_backend[e.path.substr(9)] = bez;
+                        else
+                            out.game_counts[bez]++;
+                    }
+                }
+            }
+            line.clear();
+        } else {
+            line += records[i];
+        }
+    }
+    return true;
+}
+
+static bool set_bezel_rect(const std::string &address, const std::string &name,
+                           int x, int y, int w, int h, std::string &err)
+{
+    BezelRectMsg m;
+    m.name = name;
+    m.x = (uint32_t)x; m.y = (uint32_t)y;
+    m.w = (uint32_t)w; m.h = (uint32_t)h;
+    std::string reply;
+    if (!rom_request(address, MSG_BEZEL_SET_RECT, encode(m),
+                     MSG_BEZEL_SET_RECT_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+static bool put_bezel(const std::string &address, const std::string &name,
+                      const std::string &data, int media, std::string &err)
+{
+    BezelBlobMsg m;
+    m.name = name;
+    m.media = (uint32_t)media;
+    m.data = data;
+    std::string reply;
+    if (!rom_request(address, MSG_BEZEL_PUT, encode(m), MSG_BEZEL_PUT_ACK, reply, err))
+        return false;
+    OkReasonMsg ack;
+    if (!decode_ok_reason(reply, ack)) { err = "malformed reply"; return false; }
+    if (!ack.ok) { err = ack.reason; return false; }
+    return true;
+}
+
+class PresetPicker {
+public:
+    static bool run(const std::vector<std::string> &paths,
+                    const std::vector<std::string> &names,
+                    std::vector<int> &chosen)
+    {
+        PresetPicker p(paths, names);
+        p.win_->set_modal();
+        p.win_->show();
+        while (p.win_->shown())
+            Fl::wait();
+        if (!p.accepted_)
+            return false;
+        chosen.clear();
+        for (int i = 1; i <= p.list_->nitems(); i++)
+            if (p.list_->checked(i))
+                chosen.push_back(i - 1);
+        return !chosen.empty();
+    }
+
+private:
+    PresetPicker(const std::vector<std::string> &paths,
+                 const std::vector<std::string> &names)
+        : accepted_(false)
+    {
+        (void)paths;
+        win_ = new Fl_Double_Window(460, 400, "Choose bezels to install");
+        win_->begin();
+        Fl_Box *hint = new Fl_Box(10, 8, 440, 20,
+                                  "Tick the presets to bake and send to the device.");
+        hint->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT);
+        hint->labelsize(11);
+
+        list_ = new Fl_Check_Browser(10, 32, 440, 292);
+        for (size_t i = 0; i < names.size(); i++)
+            list_->add(names[i].c_str(), 1);
+
+        Fl_Button *all = new Fl_Button(10, 332, 60, 24, "All");
+        all->callback(all_cb, this);
+        Fl_Button *none = new Fl_Button(76, 332, 60, 24, "None");
+        none->callback(none_cb, this);
+
+        count_ = new Fl_Box(146, 332, 150, 24, "");
+        count_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT);
+        count_->labelsize(11);
+
+        Fl_Button *ok = new Fl_Button(290, 332, 76, 24, "Install");
+        ok->callback(ok_cb, this);
+        Fl_Button *cancel = new Fl_Button(374, 332, 76, 24, "Cancel");
+        cancel->callback(cancel_cb, this);
+        win_->end();
+        update_count();
+    }
+
+    ~PresetPicker() { delete win_; }
+
+    static void all_cb(Fl_Widget *, void *v) { ((PresetPicker *)v)->set_all(1); }
+    static void none_cb(Fl_Widget *, void *v) { ((PresetPicker *)v)->set_all(0); }
+    static void ok_cb(Fl_Widget *, void *v) { ((PresetPicker *)v)->accept(); }
+    static void cancel_cb(Fl_Widget *, void *v) { ((PresetPicker *)v)->win_->hide(); }
+
+    void set_all(int on)
+    {
+        if (on)
+            list_->check_all();
+        else
+            list_->check_none();
+        list_->redraw();
+        update_count();
+    }
+
+    void update_count()
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%d of %d selected",
+                 list_->nchecked(), list_->nitems());
+        count_->copy_label(buf);
+        count_->redraw();
+    }
+
+    void accept()
+    {
+        if (list_->nchecked() == 0) {
+            fl_alert("Tick at least one preset, or press Cancel.");
+            return;
+        }
+        accepted_ = true;
+        win_->hide();
+    }
+
+    Fl_Double_Window *win_;
+    Fl_Check_Browser *list_;
+    Fl_Box *count_;
+    bool accepted_;
+};
+
+static bool write_local_file(const std::string &path, const std::string &data)
+{
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f)
+        return false;
+    bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+    fclose(f);
+    if (!ok)
+        remove(path.c_str());
+    return ok;
+}
+
+class BezelChooser {
+public:
+    static bool run(const std::string &address, const std::string &current,
+                    std::string &picked)
+    {
+        std::vector<DeviceBezel> list;
+        std::string err;
+        if (!fetch_bezel_list(address, list, err)) {
+            fl_alert("Could not read the bezel list from the device:\n%s", err.c_str());
+            return false;
+        }
+        if (list.empty()) {
+            fl_alert("No bezels installed on the device yet.\n\n"
+                     "Add some from Emulation Settings first.");
+            return false;
+        }
+
+        BezelChooser c(address, list, current);
+        c.win_->set_modal();
+        c.win_->show();
+        while (c.win_->shown())
+            Fl::wait();
+        if (!c.accepted_)
+            return false;
+        picked = c.picked_;
+        return true;
+    }
+
+private:
+    BezelChooser(const std::string &address, const std::vector<DeviceBezel> &list,
+                 const std::string &current)
+        : address_(address), list_(list), accepted_(false)
+    {
+        win_ = new Fl_Double_Window(560, 320, "Choose a bezel");
+        win_->begin();
+        browser_ = new Fl_Hold_Browser(10, 10, 280, 265);
+        browser_->callback(sel_cb, this);
+        browser_->when(FL_WHEN_CHANGED);
+        for (size_t i = 0; i < list_.size(); i++) {
+            browser_->add(list_[i].name.c_str());
+            if (list_[i].name == current)
+                browser_->value((int)i + 1);
+        }
+        preview_ = new BezelPreviewBox(300, 10, 250, 190);
+        preview_->label("select a bezel");
+
+        Fl_Button *ok = new Fl_Button(300, 285, 80, 24, "Use");
+        ok->callback(ok_cb, this);
+        Fl_Button *cancel = new Fl_Button(390, 285, 80, 24, "Cancel");
+        cancel->callback(cancel_cb, this);
+        win_->end();
+        if (browser_->value() >= 1)
+            show_sel();
+    }
+
+    ~BezelChooser() { delete win_; }
+
+    static void sel_cb(Fl_Widget *, void *v) { ((BezelChooser *)v)->show_sel(); }
+    static void ok_cb(Fl_Widget *, void *v) { ((BezelChooser *)v)->accept(); }
+    static void cancel_cb(Fl_Widget *, void *v) { ((BezelChooser *)v)->win_->hide(); }
+
+    void accept()
+    {
+        int sel = browser_->value();
+        if (sel < 1 || (size_t)sel > list_.size()) {
+            fl_alert("Pick a bezel first.");
+            return;
+        }
+        picked_ = list_[sel - 1].name;
+        accepted_ = true;
+        win_->hide();
+    }
+
+    void show_sel()
+    {
+        int sel = browser_->value();
+        if (sel < 1 || (size_t)sel > list_.size()) {
+            preview_->clear_frame();
+            preview_->label("select a bezel");
+            return;
+        }
+        const DeviceBezel &b = list_[sel - 1];
+        preview_->clear_frame();
+        preview_->label("fetching...");
+        preview_->redraw();
+        Fl::flush();
+
+        std::string blob, err;
+        if (!get_bezel_blob(address_, b.name, blob, err) || blob.empty()) {
+            preview_->label("preview unavailable");
+            preview_->redraw();
+            return;
+        }
+        PkbzHeader hdr;
+        Fl_RGB_Image *img = pkbz_to_image(blob, hdr, preview_->w() - 6,
+                                          preview_->h() - 6);
+        if (!img) {
+            preview_->label("preview unreadable");
+            preview_->redraw();
+            return;
+        }
+        preview_->label("");
+        preview_->set_frame(img, (int)hdr.width, (int)hdr.height);
+        preview_->set_rect(b.sx / 2, b.sy / 2, b.sw / 2, b.sh / 2);
+    }
+
+    std::string address_;
+    std::vector<DeviceBezel> list_;
+    Fl_Double_Window *win_;
+    Fl_Hold_Browser *browser_;
+    BezelPreviewBox *preview_;
+    std::string picked_;
+    bool accepted_;
+};
+
+class EmulationSettingsWindow {
+public:
+    EmulationSettingsWindow()
+        : win_(0), list_(0), preview_(0), preview_image_(0),
+          progress_win_(0), progress_label_(0), progress_bar_(0), cancel_(false),
+          xfer_(0) {}
+
+    void set_address(const std::string &a) { address_ = a; }
+    void set_xfer(TransferPane *x) { xfer_ = x; }
+
+    ~EmulationSettingsWindow() { delete preview_image_; delete win_; }
+
+    void show()
+    {
+        if (!win_)
+            build();
+        reload();
+        win_->show();
+    }
+
+    void reload()
+    {
+        BusyCursor busy("Loading bezels...");
+        std::string err;
+        if (!fetch_bezel_list(address_, bezels_, err))
+            bezels_.clear();
+        if (!fetch_bezel_assignments(address_, assign_, err))
+            assign_ = BezelAssignments();
+        repopulate();
+        update_assignment_buttons();
+        selection_changed();
+    }
+
+    void update_assignment_buttons()
+    {
+        if (assign_.global.empty())
+            rm_global_btn_->hide();
+        else
+            rm_global_btn_->show();
+
+        std::map<std::string, std::string>::const_iterator it =
+            assign_.per_backend.find(current_backend_key());
+        if (it == assign_.per_backend.end() || it->second.empty())
+            rm_backend_btn_->hide();
+        else
+            rm_backend_btn_->show();
+    }
+
+private:
+    void build()
+    {
+        int W = 720, H = 470, m = 10;
+
+        win_ = new Fl_Double_Window(W, H, "Emulation Settings");
+        win_->begin();
+
+        Fl_Tabs *tabs = new Fl_Tabs(0, 0, W, H);
+        tabs->begin();
+
+        int py = 26;
+        int ph = H - py;
+        Fl_Group *bez = new Fl_Group(0, py, W, ph, "Bezel");
+        bez->begin();
+
+        int y = py + m;
+
+        add_btn_ = new Fl_Button(m, y, 200, 24, "Add RetroArch bezel family...");
+        add_btn_->callback(add_cb, this);
+        add_btn_->tooltip("Scan a RetroArch overlay pack for .cfg presets");
+
+        del_btn_ = new Fl_Button(m + 206, y, 80, 24, "Delete");
+        del_btn_->callback(del_cb, this);
+        del_btn_->deactivate();
+
+        store_media_ = new Fl_Choice(W - m - 60, y, 60, 24, "Stored on:");
+        store_media_->align(FL_ALIGN_LEFT);
+        store_media_->add("SD");
+        store_media_->add("CF");
+        store_media_->value(0);
+        store_media_->tooltip("Which storage new bezels are written to");
+
+        y += 30;
+
+        set_global_btn_ = new Fl_Button(m, y, 140, 24, "Set global bezel");
+        set_global_btn_->callback(set_global_cb, this);
+        set_global_btn_->deactivate();
+
+        rm_global_btn_ = new Fl_Button(m + 146, y, 160, 24, "Remove global bezel");
+        rm_global_btn_->callback(rm_global_cb, this);
+        rm_global_btn_->hide();
+
+        y += 30;
+
+        backend_ = new Fl_Choice(m + 86, y, 130, 24, "Per backend:");
+        backend_->align(FL_ALIGN_LEFT);
+        for (int i = 0; i < BACKEND_COUNT; i++)
+            backend_->add(BACKENDS[i].label);
+        backend_->value(0);
+        backend_->callback(backend_changed_cb, this);
+
+        set_backend_btn_ = new Fl_Button(m + 222, y, 100, 24, "Set bezel");
+        set_backend_btn_->callback(set_backend_cb, this);
+        set_backend_btn_->deactivate();
+
+        rm_backend_btn_ = new Fl_Button(m + 328, y, 120, 24, "Remove bezel");
+        rm_backend_btn_->callback(rm_backend_cb, this);
+        rm_backend_btn_->hide();
+
+        y += 32;
+        int list_w = W - 2 * m - 270;
+        int list_h = H - y - m;
+        list_ = new Fl_Hold_Browser(m, y, list_w, list_h);
+        list_->callback(select_cb, this);
+        list_->when(FL_WHEN_CHANGED);
+        static const int widths[] = { 230, 0 };
+        list_->column_widths(widths);
+        list_->column_char('\t');
+
+        preview_ = new BezelPreviewBox(m + list_w + 10, y, 260, 195);
+        preview_->label("no bezel selected");
+
+        int fy = y + 201;
+        int fx = m + list_w + 10;
+        rect_x_ = new Fl_Int_Input(fx + 18, fy, 48, 22, "X");
+        rect_y_ = new Fl_Int_Input(fx + 84, fy, 48, 22, "Y");
+        rect_w_ = new Fl_Int_Input(fx + 150, fy, 48, 22, "W");
+        rect_h_ = new Fl_Int_Input(fx + 216, fy, 34, 22, "H");
+        rect_x_->align(FL_ALIGN_LEFT); rect_y_->align(FL_ALIGN_LEFT);
+        rect_w_->align(FL_ALIGN_LEFT); rect_h_->align(FL_ALIGN_LEFT);
+        rect_x_->callback(rect_changed_cb, this);
+        rect_y_->callback(rect_changed_cb, this);
+        rect_w_->callback(rect_changed_cb, this);
+        rect_h_->callback(rect_changed_cb, this);
+        rect_x_->when(FL_WHEN_CHANGED);
+        rect_y_->when(FL_WHEN_CHANGED);
+        rect_w_->when(FL_WHEN_CHANGED);
+        rect_h_->when(FL_WHEN_CHANGED);
+        rect_x_->tooltip("Where the game screen sits inside the bezel, in 640x480 units");
+
+        apply_rect_btn_ = new Fl_Button(fx, fy + 26, 120, 24, "Apply screen rect");
+        apply_rect_btn_->callback(apply_rect_cb, this);
+        apply_rect_btn_->deactivate();
+
+        bez->end();
+        tabs->end();
+        win_->end();
+        win_->set_non_modal();
+    }
+
+    static void add_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->add_family(); }
+    static void del_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->delete_selected(); }
+    static void select_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->selection_changed(); }
+    static void set_global_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->assign_global(true); }
+    static void rm_global_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->assign_global(false); }
+    static void set_backend_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->assign_backend(true); }
+    static void rect_changed_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->rect_changed(); }
+    static void cancel_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->cancel_ = true; }
+    static void backend_changed_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->update_assignment_buttons(); }
+    static void apply_rect_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->apply_rect(); }
+
+    int field_int(Fl_Int_Input *f) const
+    {
+        const char *t = f->value();
+        return (t && *t) ? atoi(t) : 0;
+    }
+
+    void rect_changed()
+    {
+        preview_->set_rect(field_int(rect_x_), field_int(rect_y_),
+                           field_int(rect_w_), field_int(rect_h_));
+        int sel = list_->value();
+        if (sel >= 1 && (size_t)sel <= bezels_.size())
+            apply_rect_btn_->activate();
+    }
+
+    void apply_rect()
+    {
+        BusyCursor busy("Saving...");
+        int sel = list_->value();
+        if (sel < 1 || (size_t)sel > bezels_.size())
+            return;
+        int x = field_int(rect_x_), y = field_int(rect_y_);
+        int w = field_int(rect_w_), h = field_int(rect_h_);
+        if (w <= 0 || h <= 0) { fl_alert("Width and height must be positive."); return; }
+
+        std::string err;
+        if (!set_bezel_rect(address_, bezels_[sel - 1].name, x, y, w, h, err)) {
+            fl_alert("Could not set the screen rect:\n%s", err.c_str());
+            return;
+        }
+        apply_rect_btn_->deactivate();
+        reload();
+    }
+
+    void set_rect_fields(int x, int y, int w, int h)
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", x); rect_x_->value(buf);
+        snprintf(buf, sizeof(buf), "%d", y); rect_y_->value(buf);
+        snprintf(buf, sizeof(buf), "%d", w); rect_w_->value(buf);
+        snprintf(buf, sizeof(buf), "%d", h); rect_h_->value(buf);
+    }
+    static void rm_backend_cb(Fl_Widget *, void *v) { ((EmulationSettingsWindow *)v)->assign_backend(false); }
+
+    const char *current_backend_key() const
+    {
+        int i = backend_->value();
+        if (i < 0 || i >= BACKEND_COUNT) i = 0;
+        return BACKENDS[i].key;
+    }
+
+    void assign_global(bool set)
+    {
+        BusyCursor busy("Saving...");
+        std::string name, err;
+        if (set) {
+            int sel = list_->value();
+            if (sel < 1 || (size_t)sel > bezels_.size()) return;
+            name = bezels_[sel - 1].name;
+        }
+        if (!set_rom_option(address_, BEZEL_GLOBAL_PATH, "bezel", name, err)) {
+            fl_alert("Could not update the global bezel:\n%s", err.c_str());
+            return;
+        }
+        reload();
+    }
+
+    void assign_backend(bool set)
+    {
+        BusyCursor busy("Saving...");
+        std::string name, err;
+        if (set) {
+            int sel = list_->value();
+            if (sel < 1 || (size_t)sel > bezels_.size()) return;
+            name = bezels_[sel - 1].name;
+        }
+        if (!set_rom_option(address_, bezel_backend_path(current_backend_key()),
+                            "bezel", name, err)) {
+            fl_alert("Could not update the backend bezel:\n%s", err.c_str());
+            return;
+        }
+        reload();
+    }
+
+    void not_yet()
+    {
+        fl_message("Assignment writes to emulation.cfg are the next step.");
+    }
+
+    void add_family()
+    {
+        const char *dir = fl_dir_chooser("Choose a RetroArch bezel pack", 0, 0);
+        if (!dir)
+            return;
+
+        std::vector<std::string> scanned;
+        bezel_scan_dir(dir, scanned, 0);
+
+        std::vector<std::string> all_found, names;
+        for (size_t i = 0; i < scanned.size(); i++) {
+            BezelPreset probe;
+            if (!bezel_parse_preset(scanned[i], probe))
+                continue;
+            all_found.push_back(scanned[i]);
+            names.push_back(probe.name);
+        }
+        if (all_found.empty()) {
+            fl_alert("No RetroArch overlay .cfg files found under:\n%s\n\n"
+                     "An overlay preset needs an overlay0_overlay = line.", dir);
+            return;
+        }
+
+        std::vector<int> chosen;
+        if (!PresetPicker::run(all_found, names, chosen))
+            return;
+
+        std::vector<std::string> found;
+        for (size_t i = 0; i < chosen.size(); i++)
+            found.push_back(all_found[chosen[i]]);
+
+        std::string stage_dir = "/tmp/piko-sync-bezels";
+        mkdir(stage_dir.c_str(), 0700);
+
+        cancel_ = false;
+        progress_win_ = new Fl_Double_Window(360, 110, "Baking bezels");
+        progress_win_->begin();
+        progress_label_ = new Fl_Box(10, 12, 340, 40, "");
+        progress_label_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
+        progress_bar_ = new Fl_Progress(10, 56, 340, 20);
+        progress_bar_->minimum(0);
+        progress_bar_->maximum((float)found.size());
+        Fl_Button *cancel = new Fl_Button(255, 82, 95, 22, "Cancel");
+        cancel->callback(cancel_cb, this);
+        progress_win_->end();
+        progress_win_->set_modal();
+        progress_win_->show();
+
+        int ok = 0, failed = 0;
+        std::string err;
+        for (size_t i = 0; i < found.size() && !cancel_; i++) {
+            BezelPreset preset;
+            char msg[512];
+
+            if (!bezel_parse_preset(found[i], preset)) { failed++; continue; }
+            if (!piko_sync::bezel_name_safe(preset.name)) { failed++; continue; }
+
+            snprintf(msg, sizeof(msg), "%d/%d  %s",
+                     (int)i + 1, (int)found.size(), preset.name.c_str());
+            progress_label_->copy_label(msg);
+            progress_bar_->value((float)i);
+            Fl::check();
+            if (cancel_) break;
+
+            BakedBezel master;
+            if (!bezel_bake(preset, BEZEL_MASTER_W, BEZEL_MASTER_H, master, err)) {
+                failed++;
+                continue;
+            }
+            Fl::check();
+            if (cancel_) break;
+
+            int media = media_from_choice(store_media_->value());
+            std::string dest = std::string(media_zaurus_root(media)) + "/bezels";
+            std::string path = stage_dir + "/" + preset.name + ".pkbz";
+
+            if (!write_local_file(path, bezel_to_pkbz(master, preset.preset_path))) {
+                err = "cannot stage baked bezel under " + stage_dir;
+                failed++;
+                continue;
+            }
+            if (!xfer_ || !xfer_->queue_path(path, std::string(), dest, std::string())) {
+                err = "could not queue the transfer";
+                failed++;
+                continue;
+            }
+            ok++;
+        }
+
+        progress_win_->hide();
+        delete progress_win_;
+        progress_win_ = 0;
+        progress_label_ = 0;
+        progress_bar_ = 0;
+
+        if (xfer_)
+            xfer_->refresh_queue_view();
+        if (cancel_)
+            fl_message("Cancelled after baking %d bezel%s.\n\n"
+                       "Queued transfers continue in the Transfers dock.",
+                       ok, ok == 1 ? "" : "s");
+        else if (failed)
+            fl_message("Baked and queued %d bezel%s, %d failed.\n\nLast error: %s",
+                       ok, ok == 1 ? "" : "s", failed,
+                       err.empty() ? "(none reported)" : err.c_str());
+        else
+            fl_message("Baked and queued %d bezel%s.\n\n"
+                       "Watch the Transfers dock; Refresh the list when it finishes.",
+                       ok, ok == 1 ? "" : "s");
+    }
+
+    void delete_selected()
+    {
+        int sel = list_->value();
+        if (sel < 1 || (size_t)sel > bezels_.size())
+            return;
+        std::string name = bezels_[sel - 1].name;
+        if (fl_choice("Delete bezel \"%s\" from the device?", "Cancel", "Delete", 0,
+                      name.c_str()) != 1)
+            return;
+        std::string err;
+        if (!delete_bezel(address_, name, err))
+            fl_alert("Could not delete %s:\n%s", name.c_str(), err.c_str());
+        list_->deselect();
+        reload();
+    }
+
+    void selection_changed()
+    {
+        int sel = list_->value();
+        bool have = (sel >= 1 && (size_t)sel <= bezels_.size());
+
+        if (have) {
+            del_btn_->activate();
+            set_global_btn_->activate();
+            set_backend_btn_->activate();
+        } else {
+            del_btn_->deactivate();
+            set_global_btn_->deactivate();
+            set_backend_btn_->deactivate();
+        }
+        show_preview(have ? &bezels_[sel - 1] : 0);
+    }
+
+    void show_preview(const DeviceBezel *b)
+    {
+        apply_rect_btn_->deactivate();
+        if (!b) {
+            preview_->clear_frame();
+            preview_->label("no bezel selected");
+            set_rect_fields(0, 0, 0, 0);
+            preview_->redraw();
+            return;
+        }
+
+        preview_->clear_frame();
+        preview_->label("fetching preview...");
+        preview_->redraw();
+        Fl::flush();
+
+        std::string blob, err;
+        if (!get_bezel_blob(address_, b->name, blob, err) || blob.empty()) {
+            preview_->label("preview unavailable");
+            preview_->redraw();
+            set_rect_fields(b->sx, b->sy, b->sw, b->sh);
+            return;
+        }
+
+        PkbzHeader hdr;
+        Fl_RGB_Image *img = pkbz_to_image(blob, hdr, preview_->w() - 6,
+                                          preview_->h() - 6);
+        if (!img) {
+            preview_->label("preview unreadable");
+            preview_->redraw();
+            return;
+        }
+        preview_->label("");
+        preview_->set_frame(img, (int)hdr.width, (int)hdr.height);
+        set_rect_fields(b->sx, b->sy, b->sw, b->sh);
+        preview_->set_rect(b->sx / 2, b->sy / 2, b->sw / 2, b->sh / 2);
+    }
+
+    void repopulate()
+    {
+        list_->clear();
+        for (size_t i = 0; i < bezels_.size(); i++) {
+            std::string row = bezels_[i].name + "\t" + used_in(bezels_[i]);
+            list_->add(row.c_str());
+        }
+        if (bezels_.empty())
+            list_->add("no bezels installed yet");
+    }
+
+    std::string used_in(const DeviceBezel &b) const
+    {
+        std::vector<std::string> parts;
+        char buf[64];
+
+        std::map<std::string, int>::const_iterator gc = assign_.game_counts.find(b.name);
+        if (gc != assign_.game_counts.end() && gc->second > 0) {
+            snprintf(buf, sizeof(buf), "%d Game%s", gc->second,
+                     gc->second == 1 ? "" : "s");
+            parts.push_back(buf);
+        }
+        for (int i = 0; i < BACKEND_COUNT; i++) {
+            std::map<std::string, std::string>::const_iterator it =
+                assign_.per_backend.find(BACKENDS[i].key);
+            if (it != assign_.per_backend.end() && it->second == b.name)
+                parts.push_back(BACKENDS[i].label);
+        }
+        if (assign_.global == b.name)
+            parts.push_back("Global");
+
+        if (parts.empty())
+            return "-";
+        std::string out;
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i) out += ", ";
+            out += parts[i];
+        }
+        return out;
+    }
+
+    Fl_Double_Window *win_;
+    Fl_Hold_Browser *list_;
+    BezelPreviewBox *preview_;
+    Fl_Image *preview_image_;
+    Fl_Int_Input *rect_x_, *rect_y_, *rect_w_, *rect_h_;
+    Fl_Button *apply_rect_btn_;
+    Fl_Button *add_btn_, *del_btn_, *set_global_btn_, *rm_global_btn_;
+    Fl_Button *set_backend_btn_, *rm_backend_btn_;
+    Fl_Choice *backend_;
+    Fl_Choice *store_media_;
+    std::vector<DeviceBezel> bezels_;
+    BezelAssignments assign_;
+    std::string address_;
+    Fl_Double_Window *progress_win_;
+    Fl_Box *progress_label_;
+    Fl_Progress *progress_bar_;
+    bool cancel_;
+    TransferPane *xfer_;
+};
+
+static EmulationSettingsWindow g_emu_settings;
 
 class ManagerPane : public TransferObserver {
 public:
     ManagerPane(Fl_Group *tab, TransferPane *xfer, int X, int Y, int W, int H,
                 const Settings &cfg, const ManagerSpec &spec)
         : xfer_(xfer), spec_(spec), preview_(0), preview_image_(0),
-          icon_btn_(0), rotate_chk_(0)
+          bezel_preview_(0), icon_btn_(0), rotate_chk_(0), backend_(0), settings_btn_(0),
+          set_bezel_btn_(0), del_bezel_btn_(0)
     {
         int m = 10;
         int y = Y + m;
@@ -1682,51 +2825,62 @@ public:
         media_->add("SD");
         media_->add("CF");
         {
-            std::string saved = cfg.get(spec_.media_key, "SD");
+            std::string saved = cfg.get(BACKENDS[0].media_key, "SD");
             media_->value(media_to_choice(part_media_from_name(saved)));
         }
         media_->tooltip("Which storage the device keeps these on");
 
-        add_btn_ = new Fl_Button(X + m + 320, y, 150, 24, spec_.add_label);
-        add_btn_->callback(add_cb, this);
-        add_btn_->tooltip(spec_.add_tip);
+        backend_ = new Fl_Choice(X + m + 285, y, 130, 24, "Backend:");
+        backend_->align(FL_ALIGN_LEFT);
+        for (int i = 0; i < BACKEND_COUNT; i++)
+            backend_->add(BACKENDS[i].label);
+        backend_->value(0);
+        backend_->callback(backend_cb, this);
+        backend_->tooltip("Which runtime new entries are added for");
 
-        if (spec_.want_rotate) {
-            rotate_chk_ = new Fl_Check_Button(X + m + 478, y, 150, 24, "Rotate (portrait)");
-            rotate_chk_->tooltip("Run applets added from now on with the screen rotated, "
-                                 "which suits the 240x320 layout most of them assume");
-        }
+        add_btn_ = new Fl_Button(X + m + 425, y, 165, 24, BACKENDS[0].add_label);
+        add_btn_->callback(add_cb, this);
+        add_btn_->tooltip(BACKENDS[0].add_tip);
 
         y += 30;
 
         refresh_btn_ = new Fl_Button(X + m, y, 90, 24, "Refresh");
         refresh_btn_->callback(refresh_cb, this);
 
-        delete_btn_ = new Fl_Button(X + m + 96, y, 110, 24, "Delete");
+        delete_btn_ = new Fl_Button(X + m + 96, y, 90, 24, "Delete");
         delete_btn_->callback(delete_cb, this);
 
-        if (spec_.want_icon) {
-            icon_btn_ = new Fl_Button(X + m + 212, y, 100, 24, "Set Icon...");
-            icon_btn_->callback(icon_cb, this);
-            icon_btn_->tooltip("Choose the icon matchbox-desktop shows for this entry");
-        }
+        settings_btn_ = new Fl_Button(X + m + 192, y, 145, 24, "Emulation Settings...");
+        settings_btn_->callback(settings_cb, this);
+        settings_btn_->tooltip("Bezels and global emulation settings");
+
+        set_bezel_btn_ = new Fl_Button(X + W - m - 110, y, 110, 24, "Set bezel...");
+        set_bezel_btn_->callback(set_bezel_cb, this);
+        set_bezel_btn_->tooltip("Choose the bezel this game runs with");
+
+        del_bezel_btn_ = new Fl_Button(X + W - m - 234, y, 120, 24, "Remove bezel");
+        del_bezel_btn_->callback(del_bezel_cb, this);
+        del_bezel_btn_->hide();
 
         y += 30;
 
         int list_h = Y + H - y - m;
-        int list_w = spec_.want_icon ? (W - 2 * m - 56) : (W - 2 * m);
+        int list_w = W - 2 * m - 56;
         list_ = new Fl_Hold_Browser(X + m, y, list_w, list_h);
         list_->callback(select_cb, this);
         list_->when(FL_WHEN_CHANGED);
-        static const int widths[] = { 210, 60, 70, 0 };
+        static const int widths[] = { 190, 45, 55, 130, 0 };
         list_->column_widths(widths);
         list_->column_char('\t');
 
-        if (spec_.want_icon) {
-            preview_ = new Fl_Box(X + W - m - 48, y, 48, 48);
-            preview_->box(FL_DOWN_BOX);
-            preview_->color(FL_BACKGROUND2_COLOR);
-        }
+        preview_ = new Fl_Box(X + W - m - 48, y, 48, 48);
+        preview_->box(FL_DOWN_BOX);
+        preview_->color(FL_BACKGROUND2_COLOR);
+        preview_->tooltip("Icon matchbox-desktop shows for the selected entry");
+
+        bezel_preview_ = new BezelPreviewBox(X + W - m - 48, y + 54, 48, 36);
+        bezel_preview_->label("");
+        bezel_preview_->tooltip("Bezel this entry runs with");
 
         tab->end();
 
@@ -1751,7 +2905,7 @@ public:
 
     void store_settings(Settings &cfg) const
     {
-        cfg.set(spec_.media_key, media_name(media_from_choice(media_->value())));
+        cfg.set(backend().media_key, media_name(media_from_choice(media_->value())));
     }
 
 private:
@@ -1759,19 +2913,91 @@ private:
     static void refresh_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->refresh(); }
     static void delete_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->remove_selected(); }
     static void add_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->add_entries(); }
-    static void select_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->show_icon(); }
+    static void select_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->selection_changed(); }
+
+    void selection_changed()
+    {
+        show_icon();
+        update_bezel_buttons();
+        show_bezel_preview();
+    }
+
+    void show_bezel_preview()
+    {
+        BusyCursor busy("Loading bezel...");
+        const RomEntry *e = selected();
+        std::string name = e ? option_unescape(option_get(e->options, "bezel"))
+                             : std::string();
+        if (name.empty()) {
+            bezel_preview_->clear_frame();
+            bezel_preview_->label("");
+            bezel_preview_->redraw();
+            return;
+        }
+        std::string blob, err;
+        if (!get_bezel_blob(address(), name, blob, err) || blob.empty()) {
+            bezel_preview_->clear_frame();
+            bezel_preview_->label("?");
+            bezel_preview_->redraw();
+            return;
+        }
+        PkbzHeader hdr;
+        Fl_RGB_Image *img = pkbz_to_image(blob, hdr, bezel_preview_->w() - 4,
+                                          bezel_preview_->h() - 4);
+        if (!img) {
+            bezel_preview_->clear_frame();
+            bezel_preview_->label("?");
+            bezel_preview_->redraw();
+            return;
+        }
+        bezel_preview_->label("");
+        bezel_preview_->set_frame(img, (int)hdr.width, (int)hdr.height);
+    }
+
+    void update_bezel_buttons()
+    {
+        const RomEntry *e = selected();
+        std::string bezel = e ? option_get(e->options, "bezel") : std::string();
+
+        if (bezel.empty())
+            del_bezel_btn_->hide();
+        else
+            del_bezel_btn_->show();
+        if (e)
+            set_bezel_btn_->activate();
+        else
+            set_bezel_btn_->deactivate();
+    }
     static void icon_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->choose_icon(); }
+    static void backend_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->backend_changed(); }
+    static void settings_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->open_settings(); }
+    static void set_bezel_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->set_bezel(); }
+    static void del_bezel_cb(Fl_Widget *, void *v) { ((ManagerPane *)v)->clear_bezel(); }
+
+    const BackendDef &backend() const
+    {
+        int i = backend_ ? backend_->value() : 0;
+        if (i < 0 || i >= BACKEND_COUNT) i = 0;
+        return BACKENDS[i];
+    }
+
+    void backend_changed()
+    {
+        const BackendDef &b = backend();
+        add_btn_->label(b.add_label);
+        add_btn_->tooltip(b.add_tip);
+        add_btn_->redraw();
+    }
 
     std::string address() const { return xfer_->address(); }
     std::string dest() const
     {
-        return std::string(media_base(media_from_choice(media_->value()))) + "/" + spec_.subdir;
+        return std::string(media_base(media_from_choice(media_->value()))) + "/" + backend().subdir;
     }
 
     bool wanted(const RomEntry &e) const
     {
-        bool is_j2me = (e.machine == "J2ME");
-        return is_j2me == spec_.j2me;
+        return !e.machine.empty() && e.path[0] != '@';
     }
 
     const RomEntry *selected() const
@@ -1785,7 +3011,7 @@ private:
     void add_entries()
     {
         Fl_File_Chooser chooser(xfer_->last_dir().empty() ? "." : xfer_->last_dir().c_str(),
-                                 spec_.pattern, Fl_File_Chooser::MULTI, spec_.chooser_title);
+                                 backend().pattern, Fl_File_Chooser::MULTI, backend().chooser_title);
         chooser.show();
         while (chooser.shown())
             Fl::wait();
@@ -1803,13 +3029,13 @@ private:
             if (!path)
                 continue;
             std::string machine = detect_machine(path);
-            bool ok = spec_.j2me ? (machine == "J2ME") : (!machine.empty() && machine != "J2ME");
+            bool ok = backend().j2me ? (machine == "J2ME") : (!machine.empty() && machine != "J2ME");
             if (!ok) {
                 rejected += std::string("\n  ") + basename_of_path(path);
                 continue;
             }
             std::string per_file = options;
-            if (spec_.j2me) {
+            if (backend().j2me) {
                 JarMeta meta;
                 if (jar_read_meta(path, meta)) {
                     if (!meta.title.empty())
@@ -1824,11 +3050,12 @@ private:
 
         if (!rejected.empty())
             fl_alert("Not sent, because they were not recognised:%s\n\n%s",
-                     rejected.c_str(), spec_.reject_hint);
+                     rejected.c_str(), backend().reject_hint);
     }
 
     void refresh()
     {
+        BusyCursor busy("Loading list...");
         entries_.clear();
         list_->clear();
 
@@ -1858,8 +3085,13 @@ private:
             std::string media = option_get(e.options, "media");
             if (media.empty())
                 media = "?";
+            std::string bezel = option_get(e.options, "bezel");
+            if (bezel.empty())
+                bezel = "Default";
+            else
+                bezel = option_unescape(bezel);
             std::string row = strip_extension(basename_of_path(e.path)) + "\t"
-                            + media + "\t" + e.machine + "\t" + e.path;
+                            + media + "\t" + e.machine + "\t" + bezel + "\t" + e.path;
             list_->add(row.c_str());
         }
         if (entries_.empty())
@@ -1882,8 +3114,56 @@ private:
         refresh();
     }
 
+    void open_settings()
+    {
+        std::string a = address();
+        if (a.empty()) {
+            fl_alert("Set the Zaurus address first.");
+            return;
+        }
+        g_emu_settings.set_address(a);
+        g_emu_settings.set_xfer(xfer_);
+        g_emu_settings.show();
+    }
+
+    void set_bezel()
+    {
+        const RomEntry *e = selected();
+        if (!e) { fl_alert("Select a game first."); return; }
+
+        std::string current = option_unescape(option_get(e->options, "bezel"));
+        std::string picked, err;
+        std::string path = e->path;
+        if (!BezelChooser::run(address(), current, picked))
+            return;
+        if (!set_rom_option(address(), path, "bezel", picked, err)) {
+            fl_alert("Could not set the bezel:\n%s", err.c_str());
+            return;
+        }
+        refresh();
+    }
+
+    void clear_bezel()
+    {
+        const RomEntry *e = selected();
+        if (!e) return;
+        std::string name = strip_extension(basename_of_path(e->path));
+        std::string path = e->path;
+        if (fl_choice("Remove the bezel from \"%s\"?\n\n"
+                      "It will fall back to the backend or global bezel.",
+                      "Cancel", "Remove", 0, name.c_str()) != 1)
+            return;
+        std::string err;
+        if (!set_rom_option(address(), path, "bezel", "", err)) {
+            fl_alert("Could not remove the bezel:\n%s", err.c_str());
+            return;
+        }
+        refresh();
+    }
+
     void show_icon()
     {
+        BusyCursor busy("Loading icon...");
         if (!preview_)
             return;
         const RomEntry *e = selected();
@@ -1960,8 +3240,13 @@ private:
     Fl_Button *delete_btn_;
     Fl_Button *icon_btn_;
     Fl_Check_Button *rotate_chk_;
+    Fl_Choice *backend_;
+    Fl_Button *settings_btn_;
+    Fl_Button *set_bezel_btn_;
+    Fl_Button *del_bezel_btn_;
     Fl_Hold_Browser *list_;
     Fl_Box *preview_;
+    BezelPreviewBox *bezel_preview_;
     Fl_PNG_Image *preview_image_;
     std::vector<RomEntry> entries_;
     std::map<std::string, std::string> pending_icons_;
@@ -2091,41 +3376,13 @@ int main(int argc, char **argv)
     Fl_Tabs tabs(0, HEADER_H, WIN_W, tabs_h);
     tabs.begin();
 
-    ManagerSpec rom_spec;
-    rom_spec.media_key = "rom.media";
-    rom_spec.subdir = "Emulation";
-    rom_spec.dest_label = "Stored on:";
-    rom_spec.add_label = "Add ROM...";
-    rom_spec.add_tip = "Send a ROM to the device and register it as a game";
-    rom_spec.pattern = "ROM files (*.{smc,sfc,fig,swc})";
-    rom_spec.chooser_title = "Add ROMs to send";
-    rom_spec.empty_text = "no roms registered on the device yet";
-    rom_spec.reject_hint = "Use the Transfer files tab to send them as ordinary files.";
-    rom_spec.j2me = false;
-    rom_spec.want_icon = true;
-    rom_spec.want_rotate = false;
+    ManagerSpec emu_spec;
+    emu_spec.dest_label = "Stored on:";
+    emu_spec.empty_text = "nothing registered on the device yet";
 
-    Fl_Group rom_tab(0, page_y, WIN_W, page_h, "ROMs");
-    ManagerPane roms(&rom_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg(), rom_spec);
-    rom_tab.end();
-
-    ManagerSpec midlet_spec;
-    midlet_spec.media_key = "applet.media";
-    midlet_spec.subdir = "Applets";
-    midlet_spec.dest_label = "Stored on:";
-    midlet_spec.add_label = "Add J2ME applet...";
-    midlet_spec.add_tip = "Send a MIDlet to the device, install it and register it";
-    midlet_spec.pattern = "J2ME applets (*.{jar,jad})";
-    midlet_spec.chooser_title = "Add J2ME applets to send";
-    midlet_spec.empty_text = "no applets installed on the device yet";
-    midlet_spec.reject_hint = "A MIDlet is a .jar with a MIDlet manifest, or its .jad descriptor.";
-    midlet_spec.j2me = true;
-    midlet_spec.want_icon = false;
-    midlet_spec.want_rotate = true;
-
-    Fl_Group midlet_tab(0, page_y, WIN_W, page_h, "J2ME");
-    ManagerPane midlets(&midlet_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg(), midlet_spec);
-    midlet_tab.end();
+    Fl_Group emu_tab(0, page_y, WIN_W, page_h, "Emulation");
+    ManagerPane emulation(&emu_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg(), emu_spec);
+    emu_tab.end();
 
     Fl_Group files_tab(0, page_y, WIN_W, page_h, "Transfer files");
     TransferFilesPane files(&files_tab, &xfer, 0, page_y, WIN_W, page_h, settings.cfg());
@@ -2136,21 +3393,19 @@ int main(int argc, char **argv)
     deploy_tab.end();
 
     tabs.end();
-    tabs.resizable(rom_tab);
+    tabs.resizable(emu_tab);
 
     win.end();
 
     g_layout.tabs = &tabs;
     g_layout.xfer = &xfer;
-    g_layout.pages.push_back(&rom_tab);
-    g_layout.pages.push_back(&midlet_tab);
+    g_layout.pages.push_back(&emu_tab);
     g_layout.pages.push_back(&files_tab);
     g_layout.pages.push_back(&deploy_tab);
     xfer.on_relayout(relayout_cb, 0);
 
     settings.bind(&xfer, 0, &runner);
-    settings.add_manager(&roms);
-    settings.add_manager(&midlets);
+    settings.add_manager(&emulation);
     settings.add_files_pane(&files);
 
     static Fl_Pixmap icon_pixmap(piko_sync_icon_xpm);

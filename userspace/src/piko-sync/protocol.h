@@ -53,7 +53,19 @@ enum MessageType {
     MSG_ROM_SET_ICON       = 30,
     MSG_ROM_SET_ICON_ACK   = 31,
     MSG_ROM_GET_ICON       = 32,
-    MSG_ROM_GET_ICON_ACK   = 33
+    MSG_ROM_GET_ICON_ACK   = 33,
+    MSG_BEZEL_LIST         = 34,
+    MSG_BEZEL_LIST_ACK     = 35,
+    MSG_BEZEL_PUT          = 36,
+    MSG_BEZEL_PUT_ACK      = 37,
+    MSG_BEZEL_DELETE       = 38,
+    MSG_BEZEL_DELETE_ACK   = 39,
+    MSG_BEZEL_GET          = 40,
+    MSG_BEZEL_GET_ACK      = 41,
+    MSG_BEZEL_SET_RECT     = 42,
+    MSG_BEZEL_SET_RECT_ACK = 43,
+    MSG_ROM_SET_OPTION     = 44,
+    MSG_ROM_SET_OPTION_ACK = 45
 };
 
 enum PutPolicy {
@@ -618,6 +630,127 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
 {
     size_t pos = 0;
     return get_u64(p, pos, m.free_bytes);
+}
+
+struct BezelListAckMsg {
+    std::string records;
+};
+inline std::string encode(const BezelListAckMsg &m)
+{
+    std::string p;
+    put_u32(p, static_cast<uint32_t>(m.records.size()));
+    p.append(m.records);
+    return p;
+}
+inline bool decode_bezel_list_ack(const std::string &p, BezelListAckMsg &m)
+{
+    size_t off = 0;
+    uint32_t n = 0;
+    if (!get_u32(p, off, n)) return false;
+    if (p.size() - off < n) return false;
+    m.records.assign(p, off, n);
+    return true;
+}
+
+struct BezelBlobMsg {
+    BezelBlobMsg() : media(0) {}
+    std::string name;
+    uint32_t    media;
+    std::string data;
+};
+inline std::string encode(const BezelBlobMsg &m)
+{
+    std::string p;
+    put_str16(p, m.name);
+    put_u32(p, m.media);
+    put_u32(p, static_cast<uint32_t>(m.data.size()));
+    p.append(m.data);
+    return p;
+}
+inline bool decode_bezel_blob(const std::string &p, BezelBlobMsg &m)
+{
+    size_t off = 0;
+    uint32_t n = 0;
+    if (!get_str16(p, off, m.name)) return false;
+    if (!get_u32(p, off, m.media)) return false;
+    if (!get_u32(p, off, n)) return false;
+    if (p.size() - off < n) return false;
+    m.data.assign(p, off, n);
+    return true;
+}
+
+struct RomOptionMsg {
+    std::string path;
+    std::string key;
+    std::string value;
+};
+inline std::string encode(const RomOptionMsg &m)
+{
+    std::string p;
+    put_str16(p, m.path);
+    put_str16(p, m.key);
+    put_str16(p, m.value);
+    return p;
+}
+inline bool decode_rom_option(const std::string &p, RomOptionMsg &m)
+{
+    size_t off = 0;
+    if (!get_str16(p, off, m.path)) return false;
+    if (!get_str16(p, off, m.key)) return false;
+    if (!get_str16(p, off, m.value)) return false;
+    return true;
+}
+
+struct BezelChunkMsg {
+    BezelChunkMsg() : total(0), offset(0) {}
+    uint32_t total;
+    uint32_t offset;
+    std::string data;
+};
+inline std::string encode(const BezelChunkMsg &m)
+{
+    std::string p;
+    put_u32(p, m.total);
+    put_u32(p, m.offset);
+    put_u32(p, static_cast<uint32_t>(m.data.size()));
+    p.append(m.data);
+    return p;
+}
+inline bool decode_bezel_chunk(const std::string &p, BezelChunkMsg &m)
+{
+    size_t off = 0;
+    uint32_t n = 0;
+    if (!get_u32(p, off, m.total)) return false;
+    if (!get_u32(p, off, m.offset)) return false;
+    if (!get_u32(p, off, n)) return false;
+    if (p.size() - off < n) return false;
+    m.data.assign(p, off, n);
+    return true;
+}
+
+struct BezelRectMsg {
+    std::string name;
+    uint32_t x, y, w, h;
+};
+inline std::string encode(const BezelRectMsg &m)
+{
+    std::string p;
+    put_str16(p, m.name);
+    put_u32(p, m.x);
+    put_u32(p, m.y);
+    put_u32(p, m.w);
+    put_u32(p, m.h);
+    return p;
+}
+inline bool decode_bezel_rect(const std::string &p, BezelRectMsg &m)
+{
+    size_t off = 0;
+    if (!get_str16(p, off, m.name)) return false;
+    if (!get_u32(p, off, m.x)) return false;
+    if (!get_u32(p, off, m.y)) return false;
+    if (!get_u32(p, off, m.w)) return false;
+    if (!get_u32(p, off, m.h)) return false;
+    return true;
 }
 
 struct RomIconMsg {
