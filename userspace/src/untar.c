@@ -189,14 +189,18 @@ static void extract_file_entry(int fd, const char *dest_path, long size, mode_t 
     long written = 0;
     int out;
     char dir[MAX_PATH + 16];
+    char temp_path[MAX_PATH + 16];
 
     path_dirname(dest_path, dir, sizeof(dir));
     if (mkdir_p(dir) < 0)
         die("could not create directory %s: %s", dir, strerror(errno));
 
-    out = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (snprintf(temp_path, sizeof(temp_path), "%s.untar-new", dest_path) >= (int)sizeof(temp_path))
+        die("path too long: %s", dest_path);
+
+    out = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out < 0)
-        die("could not create %s: %s", dest_path, strerror(errno));
+        die("could not create %s: %s", temp_path, strerror(errno));
 
     for (b = 0; b < nblocks; b++) {
         unsigned char block[BLOCK_SIZE];
@@ -216,8 +220,11 @@ static void extract_file_entry(int fd, const char *dest_path, long size, mode_t 
     }
 
     if (fchmod(out, mode) < 0)
-        die("chmod failed on %s: %s", dest_path, strerror(errno));
+        die("chmod failed on %s: %s", temp_path, strerror(errno));
     close(out);
+
+    if (rename(temp_path, dest_path) < 0)
+        die("could not replace %s: %s", dest_path, strerror(errno));
 }
 
 int main(int argc, char **argv)

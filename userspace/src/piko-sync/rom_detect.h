@@ -102,10 +102,45 @@ inline std::string detect_machine(const std::string &path)
     return snes ? std::string("SNES") : std::string();
 }
 
+struct BackendInfo {
+    const char *name;
+    const char *display;
+    const char *machines;
+    const char *extensions;
+};
+
+inline const BackendInfo *backend_table(size_t &count)
+{
+    static const BackendInfo table[] = {
+        { "phoneme", "phoneME", "J2ME", "jar,jad" },
+    };
+    count = sizeof(table) / sizeof(table[0]);
+    return table;
+}
+
+inline bool backend_supports(const BackendInfo &backend, const std::string &machine)
+{
+    std::string list(backend.machines);
+    size_t start = 0;
+    bool supported = false;
+    while (start <= list.size() && !supported) {
+        size_t stop = list.find(',', start);
+        if (stop == std::string::npos)
+            stop = list.size();
+        if (list.substr(start, stop - start) == machine)
+            supported = true;
+        start = stop + 1;
+    }
+    return supported;
+}
+
 inline std::string machine_backend(const std::string &machine)
 {
-    if (machine == "J2ME")
-        return std::string("phoneme");
+    size_t count = 0;
+    const BackendInfo *table = backend_table(count);
+    for (size_t i = 0; i < count; i++)
+        if (backend_supports(table[i], machine))
+            return std::string(table[i].name);
     return std::string();
 }
 

@@ -1,57 +1,68 @@
 #ifndef HOSTAP_80211_H
 #define HOSTAP_80211_H
 
-#include <linux/types.h>
-#include <linux/skbuff.h>
-#include <linux/netdevice.h>
+struct hostap_ieee80211_hdr {
+	u16 frame_control;
+	u16 duration_id;
+	u8 addr1[6];
+	u8 addr2[6];
+	u8 addr3[6];
+	u16 seq_ctrl;
+	u8 addr4[6];
+} __attribute__ ((packed));
 
 struct hostap_ieee80211_mgmt {
-	__le16 frame_control;
-	__le16 duration;
+	u16 frame_control;
+	u16 duration;
 	u8 da[6];
 	u8 sa[6];
 	u8 bssid[6];
-	__le16 seq_ctrl;
+	u16 seq_ctrl;
 	union {
 		struct {
-			__le16 auth_alg;
-			__le16 auth_transaction;
-			__le16 status_code;
+			u16 auth_alg;
+			u16 auth_transaction;
+			u16 status_code;
+			
 			u8 variable[0];
-		} __packed auth;
+		} __attribute__ ((packed)) auth;
 		struct {
-			__le16 reason_code;
-		} __packed deauth;
+			u16 reason_code;
+		} __attribute__ ((packed)) deauth;
 		struct {
-			__le16 capab_info;
-			__le16 listen_interval;
+			u16 capab_info;
+			u16 listen_interval;
+			
 			u8 variable[0];
-		} __packed assoc_req;
+		} __attribute__ ((packed)) assoc_req;
 		struct {
-			__le16 capab_info;
-			__le16 status_code;
-			__le16 aid;
+			u16 capab_info;
+			u16 status_code;
+			u16 aid;
+			
 			u8 variable[0];
-		} __packed assoc_resp, reassoc_resp;
+		} __attribute__ ((packed)) assoc_resp, reassoc_resp;
 		struct {
-			__le16 capab_info;
-			__le16 listen_interval;
+			u16 capab_info;
+			u16 listen_interval;
 			u8 current_ap[6];
+			
 			u8 variable[0];
-		} __packed reassoc_req;
+		} __attribute__ ((packed)) reassoc_req;
 		struct {
-			__le16 reason_code;
-		} __packed disassoc;
+			u16 reason_code;
+		} __attribute__ ((packed)) disassoc;
 		struct {
-		} __packed probe_req;
+		} __attribute__ ((packed)) probe_req;
 		struct {
 			u8 timestamp[8];
-			__le16 beacon_int;
-			__le16 capab_info;
+			u16 beacon_int;
+			u16 capab_info;
+			
 			u8 variable[0];
-		} __packed beacon, probe_resp;
+		} __attribute__ ((packed)) beacon, probe_resp;
 	} u;
-} __packed;
+} __attribute__ ((packed));
 
 #define IEEE80211_MGMT_HDR_LEN 24
 #define IEEE80211_DATA_HDR3_LEN 24
@@ -61,8 +72,11 @@ struct hostap_80211_rx_status {
 	u32 mac_time;
 	u8 signal;
 	u8 noise;
-	u16 rate;
+	u16 rate; 
 };
+
+void hostap_80211_rx(struct net_device *dev, struct sk_buff *skb,
+		     struct hostap_80211_rx_status *rx_stats);
 
 enum {
 	PRISM2_RX_MONITOR, PRISM2_RX_MGMT, PRISM2_RX_NON_ASSOC,
@@ -77,11 +91,10 @@ void hostap_dump_rx_80211(const char *name, struct sk_buff *skb,
 			  struct hostap_80211_rx_status *rx_stats);
 
 void hostap_dump_tx_80211(const char *name, struct sk_buff *skb);
-netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
-				   struct net_device *dev);
-netdev_tx_t hostap_mgmt_start_xmit(struct sk_buff *skb,
-				   struct net_device *dev);
-netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
-				     struct net_device *dev);
+int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev);
+int hostap_mgmt_start_xmit(struct sk_buff *skb, struct net_device *dev);
+struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
+				   struct prism2_crypt_data *crypt);
+int hostap_master_start_xmit(struct sk_buff *skb, struct net_device *dev);
 
-#endif
+#endif 

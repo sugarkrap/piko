@@ -1,17 +1,16 @@
 #ifndef HOSTAP_AP_H
 #define HOSTAP_AP_H
 
-#include "hostap_80211.h"
-
 #define STA_MAX_TX_BUFFER 32
 
 #define WLAN_STA_AUTH BIT(0)
 #define WLAN_STA_ASSOC BIT(1)
 #define WLAN_STA_PS BIT(2)
-#define WLAN_STA_TIM BIT(3)
-#define WLAN_STA_PERM BIT(4)
-#define WLAN_STA_AUTHORIZED BIT(5)
-#define WLAN_STA_PENDING_POLL BIT(6)
+#define WLAN_STA_TIM BIT(3) 
+#define WLAN_STA_PERM BIT(4) 
+#define WLAN_STA_AUTHORIZED BIT(5) 
+
+#define WLAN_STA_PENDING_POLL BIT(6) 
 
 #define WLAN_RATE_1M BIT(0)
 #define WLAN_RATE_2M BIT(1)
@@ -27,15 +26,15 @@
 
 struct sta_info {
 	struct list_head list;
-	struct sta_info *hnext;
-	atomic_t users;
+	struct sta_info *hnext; 
+	atomic_t users; 
 	struct proc_dir_entry *proc;
 
 	u8 addr[6];
-	u16 aid;
+	u16 aid; 
 	u32 flags;
 	u16 capability;
-	u16 listen_interval;
+	u16 listen_interval; 
 	u8 supported_rates[WLAN_SUPP_RATES_MAX];
 
 	unsigned long last_auth;
@@ -45,43 +44,45 @@ struct sta_info {
 	unsigned long rx_packets, tx_packets;
 	unsigned long rx_bytes, tx_bytes;
 	struct sk_buff_head tx_buf;
+	
+	s8 last_rx_silence; 
+	s8 last_rx_signal; 
+	u8 last_rx_rate; 
+	u8 last_rx_updated; 
 
-	s8 last_rx_silence;
-	s8 last_rx_signal;
-	u8 last_rx_rate;
-	u8 last_rx_updated;
+	u8 tx_supp_rates; 
+	u8 tx_rate; 
+	u8 tx_rate_idx; 
+	u8 tx_max_rate; 
+	u32 tx_count[WLAN_RATE_COUNT]; 
+	u32 rx_count[WLAN_RATE_COUNT]; 
 
-	u8 tx_supp_rates;
-	u8 tx_rate;
-	u8 tx_rate_idx;
-	u8 tx_max_rate;
-	u32 tx_count[WLAN_RATE_COUNT];
-	u32 rx_count[WLAN_RATE_COUNT];
 	u32 tx_since_last_failure;
 	u32 tx_consecutive_exc;
 
-	struct lib80211_crypt_data *crypt;
+	struct prism2_crypt_data *crypt;
 
-	int ap;
+	int ap; 
 
 	local_info_t *local;
 
 #ifndef PRISM2_NO_KERNEL_IEEE80211_MGMT
 	union {
 		struct {
-			char *challenge;
+			char *challenge; 
+
 		} sta;
 		struct {
 			int ssid_len;
-			unsigned char ssid[MAX_SSID_LEN + 1];
+			unsigned char ssid[MAX_SSID_LEN + 1]; 
 			int channel;
-			unsigned long last_beacon;
+			unsigned long last_beacon; 
 		} ap;
 	} u;
 
 	struct timer_list timer;
 	enum { STA_NULLFUNC = 0, STA_DISASSOC, STA_DEAUTH } timeout_next;
-#endif
+#endif 
 };
 
 #define MAX_STA_COUNT 1024
@@ -130,17 +131,21 @@ struct wds_oper_data {
 };
 
 struct ap_data {
-	int initialized;
+	int initialized; 
 	local_info_t *local;
-	int bridge_packets;
-	unsigned int bridged_unicast;
-	unsigned int bridged_multicast;
-	unsigned int tx_drop_nonassoc;
-	int nullfunc_ack;
+	int bridge_packets; 
+
+	unsigned int bridged_unicast; 
+
+	unsigned int bridged_multicast; 
+
+	unsigned int tx_drop_nonassoc; 
+
+	int nullfunc_ack; 
 
 	spinlock_t sta_table_lock;
-	int num_sta;
-	struct list_head sta_list;
+	int num_sta; 
+	struct list_head sta_list; 
 	struct sta_info *sta_hash[STA_HASH_SIZE];
 
 	struct proc_dir_entry *proc;
@@ -149,25 +154,26 @@ struct ap_data {
 	unsigned int max_inactivity;
 	int autom_ap_wds;
 
-	struct mac_restrictions mac_restrictions;
+	struct mac_restrictions mac_restrictions; 
 	int last_tx_rate;
 
-	struct work_struct add_sta_proc_queue;
+	HOSTAP_QUEUE add_sta_proc_queue;
 	struct add_sta_proc_data *add_sta_proc_entries;
 
-	struct work_struct wds_oper_queue;
+	HOSTAP_QUEUE wds_oper_queue;
 	struct wds_oper_data *wds_oper_entries;
 
 	u16 tx_callback_idx;
 
 #ifndef PRISM2_NO_KERNEL_IEEE80211_MGMT
+	
 	struct sta_info *sta_aid[MAX_AID_TABLE_SIZE];
 
 	u16 tx_callback_auth, tx_callback_assoc, tx_callback_poll;
 
-	struct lib80211_crypto_ops *crypt;
+	struct hostap_crypto_ops *crypt;
 	void *crypt_priv;
-#endif
+#endif 
 };
 
 void hostap_rx(struct net_device *dev, struct sk_buff *skb,
@@ -184,13 +190,14 @@ typedef enum {
 struct hostap_tx_data {
 	struct sk_buff *skb;
 	int host_encrypt;
-	struct lib80211_crypt_data *crypt;
+	struct prism2_crypt_data *crypt;
 	void *sta_ptr;
 };
 ap_tx_ret hostap_handle_sta_tx(local_info_t *local, struct hostap_tx_data *tx);
 void hostap_handle_sta_release(void *ptr);
 void hostap_handle_sta_tx_exc(local_info_t *local, struct sk_buff *skb);
-int hostap_update_sta_ps(local_info_t *local, struct ieee80211_hdr *hdr);
+int hostap_update_sta_ps(local_info_t *local,
+			 struct hostap_ieee80211_hdr *hdr);
 typedef enum {
 	AP_RX_CONTINUE, AP_RX_DROP, AP_RX_EXIT, AP_RX_CONTINUE_NOT_AUTHORIZED
 } ap_rx_ret;
@@ -198,13 +205,14 @@ ap_rx_ret hostap_handle_sta_rx(local_info_t *local, struct net_device *dev,
 			       struct sk_buff *skb,
 			       struct hostap_80211_rx_status *rx_stats,
 			       int wds);
-int hostap_handle_sta_crypto(local_info_t *local, struct ieee80211_hdr *hdr,
-			     struct lib80211_crypt_data **crypt,
-			     void **sta_ptr);
+int hostap_handle_sta_crypto(local_info_t *local,
+			     struct hostap_ieee80211_hdr *hdr,
+			     struct prism2_crypt_data **crypt, void **sta_ptr);
 int hostap_is_sta_assoc(struct ap_data *ap, u8 *sta_addr);
 int hostap_is_sta_authorized(struct ap_data *ap, u8 *sta_addr);
 int hostap_add_sta(struct ap_data *ap, u8 *sta_addr);
-int hostap_update_rx_stats(struct ap_data *ap, struct ieee80211_hdr *hdr,
+int hostap_update_rx_stats(struct ap_data *ap,
+			   struct hostap_ieee80211_hdr *hdr,
 			   struct hostap_80211_rx_status *rx_stats);
 void hostap_update_rates(local_info_t *local);
 void hostap_add_wds_links(local_info_t *local);
@@ -213,6 +221,6 @@ void hostap_wds_link_oper(local_info_t *local, u8 *addr, wds_oper_type type);
 #ifndef PRISM2_NO_KERNEL_IEEE80211_MGMT
 void hostap_deauth_all_stas(struct net_device *dev, struct ap_data *ap,
 			    int resend);
-#endif
+#endif 
 
-#endif
+#endif 

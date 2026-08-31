@@ -3,11 +3,8 @@ static int prism2_enable_aux_port(struct net_device *dev, int enable)
 	u16 val, reg;
 	int i, tries;
 	unsigned long flags;
-	struct hostap_interface *iface;
-	local_info_t *local;
-
-	iface = netdev_priv(dev);
-	local = iface->local;
+	struct hostap_interface *iface = netdev_priv(dev);
+	local_info_t *local = iface->local;
 
 	if (local->no_pri) {
 		if (enable) {
@@ -98,15 +95,15 @@ static int hfa384x_from_aux(struct net_device *dev, unsigned int addr, int len,
 
 #ifdef PRISM2_PCI
 	{
-		__le16 *pos = (__le16 *) buf;
+		u16 *pos = (u16 *) buf;
 		while (len > 0) {
 			*pos++ = HFA384X_INW_DATA(HFA384X_AUXDATA_OFF);
 			len -= 2;
 		}
 	}
-#else
+#else 
 	HFA384X_INSW(HFA384X_AUXDATA_OFF, buf, len / 2);
-#endif
+#endif 
 
 	return 0;
 }
@@ -128,22 +125,22 @@ static int hfa384x_to_aux(struct net_device *dev, unsigned int addr, int len,
 
 #ifdef PRISM2_PCI
 	{
-		__le16 *pos = (__le16 *) buf;
+		u16 *pos = (u16 *) buf;
 		while (len > 0) {
 			HFA384X_OUTW_DATA(*pos++, HFA384X_AUXDATA_OFF);
 			len -= 2;
 		}
 	}
-#else
+#else 
 	HFA384X_OUTSW(HFA384X_AUXDATA_OFF, buf, len / 2);
-#endif
+#endif 
 
 	return 0;
 }
 
 static int prism2_pda_ok(u8 *buf)
 {
-	__le16 *pda = (__le16 *) buf;
+	u16 *pda = (u16 *) buf;
 	int pos;
 	u16 len, pdr;
 
@@ -159,6 +156,7 @@ static int prism2_pda_ok(u8 *buf)
 			return 0;
 
 		if (pdr == 0x0000 && len == 2) {
+			
 			return 1;
 		}
 
@@ -168,69 +166,19 @@ static int prism2_pda_ok(u8 *buf)
 	return 0;
 }
 
-#define prism2_download_aux_dump_npages 65536
-
-struct prism2_download_aux_dump {
-	local_info_t *local;
-	u16 page[0x80];
-};
-
-static int prism2_download_aux_dump_proc_show(struct seq_file *m, void *v)
+static int prism2_download_aux_dump(struct net_device *dev,
+				     unsigned int addr, int len, u8 *buf)
 {
-	struct prism2_download_aux_dump *ctx = m->private;
+	int res;
 
-	hfa384x_from_aux(ctx->local->dev, (unsigned long)v - 1, 0x80, ctx->page);
-	seq_write(m, ctx->page, 0x80);
+	prism2_enable_aux_port(dev, 1);
+	res = hfa384x_from_aux(dev, addr, len, buf);
+	prism2_enable_aux_port(dev, 0);
+	if (res)
+		return -1;
+
 	return 0;
 }
-
-static void *prism2_download_aux_dump_proc_start(struct seq_file *m, loff_t *_pos)
-{
-	struct prism2_download_aux_dump *ctx = m->private;
-	prism2_enable_aux_port(ctx->local->dev, 1);
-	if (*_pos >= prism2_download_aux_dump_npages)
-		return NULL;
-	return (void *)((unsigned long)*_pos + 1);
-}
-
-static void *prism2_download_aux_dump_proc_next(struct seq_file *m, void *v, loff_t *_pos)
-{
-	++*_pos;
-	if (*_pos >= prism2_download_aux_dump_npages)
-		return NULL;
-	return (void *)((unsigned long)*_pos + 1);
-}
-
-static void prism2_download_aux_dump_proc_stop(struct seq_file *m, void *v)
-{
-	struct prism2_download_aux_dump *ctx = m->private;
-	prism2_enable_aux_port(ctx->local->dev, 0);
-}
-
-static const struct seq_operations prism2_download_aux_dump_proc_seqops = {
-	.start	= prism2_download_aux_dump_proc_start,
-	.next	= prism2_download_aux_dump_proc_next,
-	.stop	= prism2_download_aux_dump_proc_stop,
-	.show	= prism2_download_aux_dump_proc_show,
-};
-
-static int prism2_download_aux_dump_proc_open(struct inode *inode, struct file *file)
-{
-	int ret = seq_open_private(file, &prism2_download_aux_dump_proc_seqops,
-				   sizeof(struct prism2_download_aux_dump));
-	if (ret == 0) {
-		struct seq_file *m = file->private_data;
-		m->private = pde_data(inode);
-	}
-	return ret;
-}
-
-static const struct proc_ops prism2_download_aux_dump_proc_ops = {
-	.proc_open		= prism2_download_aux_dump_proc_open,
-	.proc_read		= seq_read,
-	.proc_lseek		= seq_lseek,
-	.proc_release		= seq_release_private,
-};
 
 static u8 * prism2_read_pda(struct net_device *dev)
 {
@@ -238,13 +186,13 @@ static u8 * prism2_read_pda(struct net_device *dev)
 	int res, i, found = 0;
 #define NUM_PDA_ADDRS 4
 	unsigned int pda_addr[NUM_PDA_ADDRS] = {
-		0x7f0000  ,
-		0x3f0000  ,
-		0x390000  ,
-		0x7f0002  ,
+		0x7f0000 ,
+		0x3f0000 ,
+		0x390000 ,
+		0x7f0002 ,
 	};
 
-	buf = kmalloc(PRISM2_PDA_SIZE, GFP_KERNEL);
+	buf = (u8 *) kmalloc(PRISM2_PDA_SIZE, GFP_KERNEL);
 	if (buf == NULL)
 		return NULL;
 
@@ -346,12 +294,14 @@ static int prism2_download_volatile(local_info_t *local,
 		ret = -1;
 		goto out;
 	}
+	
 	mdelay(5);
 	HFA384X_OUTW(HFA384X_EV_CMD, HFA384X_EVACK_OFF);
 
 	if (prism2_enable_aux_port(dev, 0)) {
 		printk(KERN_DEBUG "%s: Disabling AUX port failed\n",
 		       dev->name);
+		
 	}
 
 	mdelay(5);
@@ -389,8 +339,10 @@ static int prism2_enable_genesis(local_info_t *local, int hcr)
 		       hcr);
 		return 0;
 	} else {
-		printk(KERN_DEBUG "Readback test failed, HCR 0x%02x write %4ph read %4ph\n",
-		       hcr, initseq, readbuf);
+		printk(KERN_DEBUG "Readback test failed, HCR 0x%02x "
+		       "write %02x %02x %02x %02x read %02x %02x %02x %02x\n",
+		       hcr, initseq[0], initseq[1], initseq[2], initseq[3],
+		       readbuf[0], readbuf[1], readbuf[2], readbuf[3]);
 		return 1;
 	}
 }
@@ -440,6 +392,7 @@ static int prism2_download_genesis(local_info_t *local,
 	}
 
 	if (local->sram_type == -1) {
+		
 		if (prism2_enable_genesis(local, 0x1f) == 0) {
 			ram16 = 0;
 			PDEBUG(DEBUG_EXTRA2, "%s: Genesis mode OK using x8 "
@@ -490,6 +443,7 @@ static int prism2_download_genesis(local_info_t *local,
 	local->hw_downloading = 0;
 
 	PDEBUG(DEBUG_EXTRA2, "Trying to initialize card\n");
+	
 	hfa384x_disable_interrupts(dev);
 	if (prism2_hw_init(dev, 1)) {
 		printk(KERN_DEBUG "%s: Initialization after genesis mode "
@@ -561,9 +515,9 @@ static int prism2_download_nonvolatile(local_info_t *local,
 	struct net_device *dev = local->dev;
 	int ret = 0, i;
 	struct {
-		__le16 page;
-		__le16 offset;
-		__le16 len;
+		u16 page;
+		u16 offset;
+		u16 len;
 	} dlbuffer;
 	u32 bufaddr;
 
@@ -582,12 +536,14 @@ static int prism2_download_nonvolatile(local_info_t *local,
 		goto out;
 	}
 
-	printk(KERN_DEBUG "Download buffer: %d bytes at 0x%04x:0x%04x\n",
-	       le16_to_cpu(dlbuffer.len),
-	       le16_to_cpu(dlbuffer.page),
-	       le16_to_cpu(dlbuffer.offset));
+	dlbuffer.page = le16_to_cpu(dlbuffer.page);
+	dlbuffer.offset = le16_to_cpu(dlbuffer.offset);
+	dlbuffer.len = le16_to_cpu(dlbuffer.len);
 
-	bufaddr = (le16_to_cpu(dlbuffer.page) << 7) + le16_to_cpu(dlbuffer.offset);
+	printk(KERN_DEBUG "Download buffer: %d bytes at 0x%04x:0x%04x\n",
+	       dlbuffer.len, dlbuffer.page, dlbuffer.offset);
+
+	bufaddr = (dlbuffer.page << 7) + dlbuffer.offset;
 
 	local->hw_downloading = 1;
 
@@ -647,6 +603,7 @@ static int prism2_download_nonvolatile(local_info_t *local,
 	if (prism2_enable_aux_port(dev, 0)) {
 		printk(KERN_DEBUG "%s: Disabling AUX port failed\n",
 		       dev->name);
+		
 	}
 
 	mdelay(5);
@@ -666,7 +623,7 @@ static int prism2_download_nonvolatile(local_info_t *local,
 	local->hw_downloading = 0;
 	return ret;
 }
-#endif
+#endif 
 
 static void prism2_download_free_data(struct prism2_download_data *dl)
 {
@@ -697,11 +654,14 @@ static int prism2_download(local_info_t *local,
 		goto out;
 	}
 
-	dl = kzalloc(struct_size(dl, data, param->num_areas), GFP_KERNEL);
+	dl = kmalloc(sizeof(*dl) + param->num_areas *
+		     sizeof(struct prism2_download_data_area), GFP_KERNEL);
 	if (dl == NULL) {
 		ret = -ENOMEM;
 		goto out;
 	}
+	memset(dl, 0, sizeof(*dl) + param->num_areas *
+	       sizeof(struct prism2_download_data_area));
 	dl->dl_cmd = param->dl_cmd;
 	dl->start_addr = param->start_addr;
 	dl->num_areas = param->num_areas;
@@ -746,18 +706,18 @@ static int prism2_download(local_info_t *local,
 	case PRISM2_DOWNLOAD_NON_VOLATILE:
 #ifdef PRISM2_NON_VOLATILE_DOWNLOAD
 		ret = prism2_download_nonvolatile(local, dl);
-#else
+#else 
 		printk(KERN_INFO "%s: non-volatile downloading not enabled\n",
 		       local->dev->name);
 		ret = -EOPNOTSUPP;
-#endif
+#endif 
 		break;
 	default:
 		printk(KERN_DEBUG "%s: unsupported download command %d\n",
 		       local->dev->name, param->dl_cmd);
 		ret = -EINVAL;
 		break;
-	}
+	};
 
  out:
 	if (ret == 0 && dl &&

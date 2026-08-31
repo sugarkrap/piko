@@ -207,7 +207,7 @@ static int find_master(const struct pikoemu_cfg *c, char *out, size_t cap)
         return stat(out, &st) == 0;
     }
 
-    pikoemu_zroot(c->rom, zroot, sizeof(zroot));
+    pikorom_media_root_for(c->rom, zroot, sizeof(zroot));
     roots[n++] = zroot;
     if (strcmp(zroot, "/usr/local/.zaurus") != 0)
         roots[n++] = "/usr/local/.zaurus";

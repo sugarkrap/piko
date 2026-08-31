@@ -392,6 +392,37 @@ x11_matchbox:
     if_exists: "${X11_PAYLOAD}"
 
 root_payload:
+  - type: put_file
+    local: "${REPO}/build/target/bin/pikoemu"
+    remote: /usr/local/bin/pikoemu
+    mode: "0755"
+    if_exists: "${REPO}/build/target/bin/pikoemu"
+  - type: put_file
+    local: "${REPO}/build/target/usr/lib/libpikovideo.so.1"
+    remote: /lib/libpikovideo.so.1
+    mode: "0755"
+    if_exists: "${REPO}/build/target/usr/lib/libpikovideo.so.1"
+  - type: put_file
+    local: "${REPO}/build/target/usr/lib/libpikorom.so.1"
+    remote: /lib/libpikorom.so.1
+    mode: "0755"
+    if_exists: "${REPO}/build/target/usr/lib/libpikorom.so.1"
+  - type: mkdir
+    remote: /usr/local/share/piko/ui
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/build/stage-ui/usr/local/share/piko/ui"
+    remote_base: /usr/local/share/piko/ui
+    recursive: "true"
+    mode: "0644"
+    if_exists: "${REPO}/build/stage-ui/usr/local/share/piko/ui/notify.pkui"
+  - type: mkdir
+    remote: /usr/local/.zaurus/bezels
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/build/stage-bezels/usr/local/.zaurus/bezels"
+    remote_base: /usr/local/.zaurus/bezels
+    recursive: "true"
+    mode: "0644"
+    if_exists: "${REPO}/build/stage-bezels/usr/local/.zaurus/bezels"
   - type: mkdir
     remote: /usr/share/timidity
   - type: put_tree_from_dir

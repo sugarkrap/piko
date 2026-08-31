@@ -6,10 +6,6 @@ config HOSTAP
 	select CRYPTO
 	select CRYPTO_MICHAEL_MIC
 	select CRC32
-	select LIB80211
-	select LIB80211_CRYPT_WEP
-	select LIB80211_CRYPT_TKIP
-	select LIB80211_CRYPT_CCMP
 	help
 	Shared driver code for IEEE 802.11b wireless cards based on
 	Intersil Prism2/2.5/3 chipset. This driver supports so called

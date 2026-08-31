@@ -17,6 +17,19 @@ const char *const PIXMAPS_DIR = "/usr/share/pixmaps";
 const char *const DEFAULT_ROM_ICON = "/usr/share/pixmaps/rom.png";
 const char FIELD_SEP = '|';
 
+inline std::string field_at(const std::string &line, int index)
+{
+    size_t start = 0;
+    for (int i = 0; i < index; i++) {
+        size_t sep = line.find(FIELD_SEP, start);
+        if (sep == std::string::npos)
+            return std::string();
+        start = sep + 1;
+    }
+    size_t stop = line.find(FIELD_SEP, start);
+    return line.substr(start, stop == std::string::npos ? std::string::npos : stop - start);
+}
+
 enum PartMedia {
     PART_NAND = 0,
     PART_SD   = 1,

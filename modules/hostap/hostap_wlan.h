@@ -1,17 +1,11 @@
 #ifndef HOSTAP_WLAN_H
 #define HOSTAP_WLAN_H
 
-#include <linux/interrupt.h>
-#include <linux/wireless.h>
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/mutex.h>
-#include <linux/refcount.h>
-#include <net/iw_handler.h>
-#include <net/ieee80211_radiotap.h>
-#include <net/lib80211.h>
-
 #include "hostap_config.h"
+#ifdef __KERNEL__
+#include "hostap_compat.h"
+#endif
+#include "hostap_crypt.h"
 #include "hostap_common.h"
 
 #define MAX_PARM_DEVICES 8
@@ -21,217 +15,213 @@
 
 #define ETH_P_HOSTAP ETH_P_CONTROL
 
+#ifndef ARPHRD_IEEE80211
+#define ARPHRD_IEEE80211 801
+#endif
+#ifndef ARPHRD_IEEE80211_PRISM
+#define ARPHRD_IEEE80211_PRISM 802
+#endif
+
 struct linux_wlan_ng_val {
 	u32 did;
 	u16 status, len;
 	u32 data;
-} __packed;
+} __attribute__ ((packed));
 
 struct linux_wlan_ng_prism_hdr {
 	u32 msgcode, msglen;
 	char devname[16];
 	struct linux_wlan_ng_val hosttime, mactime, channel, rssi, sq, signal,
 		noise, rate, istx, frmlen;
-} __packed;
+} __attribute__ ((packed));
 
 struct linux_wlan_ng_cap_hdr {
-	__be32 version;
-	__be32 length;
-	__be64 mactime;
-	__be64 hosttime;
-	__be32 phytype;
-	__be32 channel;
-	__be32 datarate;
-	__be32 antenna;
-	__be32 priority;
-	__be32 ssi_type;
-	__be32 ssi_signal;
-	__be32 ssi_noise;
-	__be32 preamble;
-	__be32 encoding;
-} __packed;
+	u32 version;
+	u32 length;
+	u64 mactime;
+	u64 hosttime;
+	u32 phytype;
+	u32 channel;
+	u32 datarate;
+	u32 antenna;
+	u32 priority;
+	u32 ssi_type;
+	s32 ssi_signal;
+	s32 ssi_noise;
+	u32 preamble;
+	u32 encoding;
+} __attribute__ ((packed));
 
-struct hostap_radiotap_rx {
-	struct ieee80211_radiotap_header hdr;
-	__le64 tsft;
-	u8 rate;
-	u8 padding;
-	__le16 chan_freq;
-	__le16 chan_flags;
-	s8 dbm_antsignal;
-	s8 dbm_antnoise;
-} __packed;
-
-#define LWNG_CAP_DID_BASE   (4 | (1 << 6))
+#define LWNG_CAP_DID_BASE   (4 | (1 << 6)) 
 #define LWNG_CAPHDR_VERSION 0x80211001
 
 struct hfa384x_rx_frame {
-	__le16 status;
-	__le32 time;
-	u8 silence;
-	u8 signal;
-	u8 rate;
+	
+	u16 status; 
+	u32 time; 
+	u8 silence; 
+	u8 signal; 
+	u8 rate; 
 	u8 rxflow;
-	__le32 reserved;
+	u32 reserved;
 
-	__le16 frame_control;
-	__le16 duration_id;
-	u8 addr1[ETH_ALEN];
-	u8 addr2[ETH_ALEN];
-	u8 addr3[ETH_ALEN];
-	__le16 seq_ctrl;
-	u8 addr4[ETH_ALEN];
-	__le16 data_len;
+	u16 frame_control;
+	u16 duration_id;
+	u8 addr1[6];
+	u8 addr2[6];
+	u8 addr3[6];
+	u16 seq_ctrl;
+	u8 addr4[6];
+	u16 data_len;
 
-	u8 dst_addr[ETH_ALEN];
-	u8 src_addr[ETH_ALEN];
-	__be16 len;
+	u8 dst_addr[6];
+	u8 src_addr[6];
+	u16 len;
 
-} __packed;
+} __attribute__ ((packed));
 
 struct hfa384x_tx_frame {
-	__le16 status;
-	__le16 reserved1;
-	__le16 reserved2;
-	__le32 sw_support;
-	u8 retry_count;
-	u8 tx_rate;
-	__le16 tx_control;
+	
+	u16 status; 
+	u16 reserved1;
+	u16 reserved2;
+	u32 sw_support;
+	u8 retry_count; 
+	u8 tx_rate; 
+	u16 tx_control; 
 
-	struct_group(header,
-		__le16 frame_control;
-		__le16 duration_id;
-		u8 addr1[ETH_ALEN];
-		u8 addr2[ETH_ALEN];
-		u8 addr3[ETH_ALEN];
-		__le16 seq_ctrl;
-	);
-	u8 addr4[ETH_ALEN];
-	__le16 data_len;
+	u16 frame_control; 
+	u16 duration_id;
+	u8 addr1[6];
+	u8 addr2[6]; 
+	u8 addr3[6];
+	u16 seq_ctrl; 
+	u8 addr4[6];
+	u16 data_len;
 
-	u8 dst_addr[ETH_ALEN];
-	u8 src_addr[ETH_ALEN];
-	__be16 len;
+	u8 dst_addr[6];
+	u8 src_addr[6];
+	u16 len;
 
-} __packed;
+} __attribute__ ((packed));
 
 struct hfa384x_rid_hdr
 {
-	__le16 len;
-	__le16 rid;
-} __packed;
+	u16 len;
+	u16 rid;
+} __attribute__ ((packed));
 
 #define HFA384X_LEVEL_TO_dBm(v) 0x100 + (v) * 100 / 255 - 100
 
 #define HFA384X_LEVEL_TO_dBm_sign(v) (v) * 100 / 255 - 100
 
 struct hfa384x_scan_request {
-	__le16 channel_list;
-	__le16 txrate;
-} __packed;
+	u16 channel_list;
+	u16 txrate; 
+} __attribute__ ((packed));
 
 struct hfa384x_hostscan_request {
-	__le16 channel_list;
-	__le16 txrate;
-	__le16 target_ssid_len;
+	u16 channel_list;
+	u16 txrate;
+	u16 target_ssid_len;
 	u8 target_ssid[32];
-} __packed;
+} __attribute__ ((packed));
 
 struct hfa384x_join_request {
-	u8 bssid[ETH_ALEN];
-	__le16 channel;
-} __packed;
+	u8 bssid[6];
+	u16 channel;
+} __attribute__ ((packed));
 
 struct hfa384x_info_frame {
-	__le16 len;
-	__le16 type;
-} __packed;
+	u16 len;
+	u16 type;
+} __attribute__ ((packed));
 
 struct hfa384x_comm_tallies {
-	__le16 tx_unicast_frames;
-	__le16 tx_multicast_frames;
-	__le16 tx_fragments;
-	__le16 tx_unicast_octets;
-	__le16 tx_multicast_octets;
-	__le16 tx_deferred_transmissions;
-	__le16 tx_single_retry_frames;
-	__le16 tx_multiple_retry_frames;
-	__le16 tx_retry_limit_exceeded;
-	__le16 tx_discards;
-	__le16 rx_unicast_frames;
-	__le16 rx_multicast_frames;
-	__le16 rx_fragments;
-	__le16 rx_unicast_octets;
-	__le16 rx_multicast_octets;
-	__le16 rx_fcs_errors;
-	__le16 rx_discards_no_buffer;
-	__le16 tx_discards_wrong_sa;
-	__le16 rx_discards_wep_undecryptable;
-	__le16 rx_message_in_msg_fragments;
-	__le16 rx_message_in_bad_msg_fragments;
-} __packed;
+	u16 tx_unicast_frames;
+	u16 tx_multicast_frames;
+	u16 tx_fragments;
+	u16 tx_unicast_octets;
+	u16 tx_multicast_octets;
+	u16 tx_deferred_transmissions;
+	u16 tx_single_retry_frames;
+	u16 tx_multiple_retry_frames;
+	u16 tx_retry_limit_exceeded;
+	u16 tx_discards;
+	u16 rx_unicast_frames;
+	u16 rx_multicast_frames;
+	u16 rx_fragments;
+	u16 rx_unicast_octets;
+	u16 rx_multicast_octets;
+	u16 rx_fcs_errors;
+	u16 rx_discards_no_buffer;
+	u16 tx_discards_wrong_sa;
+	u16 rx_discards_wep_undecryptable;
+	u16 rx_message_in_msg_fragments;
+	u16 rx_message_in_bad_msg_fragments;
+} __attribute__ ((packed));
 
 struct hfa384x_comm_tallies32 {
-	__le32 tx_unicast_frames;
-	__le32 tx_multicast_frames;
-	__le32 tx_fragments;
-	__le32 tx_unicast_octets;
-	__le32 tx_multicast_octets;
-	__le32 tx_deferred_transmissions;
-	__le32 tx_single_retry_frames;
-	__le32 tx_multiple_retry_frames;
-	__le32 tx_retry_limit_exceeded;
-	__le32 tx_discards;
-	__le32 rx_unicast_frames;
-	__le32 rx_multicast_frames;
-	__le32 rx_fragments;
-	__le32 rx_unicast_octets;
-	__le32 rx_multicast_octets;
-	__le32 rx_fcs_errors;
-	__le32 rx_discards_no_buffer;
-	__le32 tx_discards_wrong_sa;
-	__le32 rx_discards_wep_undecryptable;
-	__le32 rx_message_in_msg_fragments;
-	__le32 rx_message_in_bad_msg_fragments;
-} __packed;
+	u32 tx_unicast_frames;
+	u32 tx_multicast_frames;
+	u32 tx_fragments;
+	u32 tx_unicast_octets;
+	u32 tx_multicast_octets;
+	u32 tx_deferred_transmissions;
+	u32 tx_single_retry_frames;
+	u32 tx_multiple_retry_frames;
+	u32 tx_retry_limit_exceeded;
+	u32 tx_discards;
+	u32 rx_unicast_frames;
+	u32 rx_multicast_frames;
+	u32 rx_fragments;
+	u32 rx_unicast_octets;
+	u32 rx_multicast_octets;
+	u32 rx_fcs_errors;
+	u32 rx_discards_no_buffer;
+	u32 tx_discards_wrong_sa;
+	u32 rx_discards_wep_undecryptable;
+	u32 rx_message_in_msg_fragments;
+	u32 rx_message_in_bad_msg_fragments;
+} __attribute__ ((packed));
 
 struct hfa384x_scan_result_hdr {
-	__le16 reserved;
-	__le16 scan_reason;
-#define HFA384X_SCAN_IN_PROGRESS 0
+	u16 reserved;
+	u16 scan_reason;
+#define HFA384X_SCAN_IN_PROGRESS 0 
 #define HFA384X_SCAN_HOST_INITIATED 1
 #define HFA384X_SCAN_FIRMWARE_INITIATED 2
 #define HFA384X_SCAN_INQUIRY_FROM_HOST 3
-} __packed;
+} __attribute__ ((packed));
 
 #define HFA384X_SCAN_MAX_RESULTS 32
 
 struct hfa384x_scan_result {
-	__le16 chid;
-	__le16 anl;
-	__le16 sl;
-	u8 bssid[ETH_ALEN];
-	__le16 beacon_interval;
-	__le16 capability;
-	__le16 ssid_len;
+	u16 chid;
+	u16 anl;
+	u16 sl;
+	u8 bssid[6];
+	u16 beacon_interval;
+	u16 capability;
+	u16 ssid_len;
 	u8 ssid[32];
 	u8 sup_rates[10];
-	__le16 rate;
-} __packed;
+	u16 rate;
+} __attribute__ ((packed));
 
 struct hfa384x_hostscan_result {
-	__le16 chid;
-	__le16 anl;
-	__le16 sl;
-	u8 bssid[ETH_ALEN];
-	__le16 beacon_interval;
-	__le16 capability;
-	__le16 ssid_len;
+	u16 chid;
+	u16 anl;
+	u16 sl;
+	u8 bssid[6];
+	u16 beacon_interval;
+	u16 capability;
+	u16 ssid_len;
 	u8 ssid[32];
 	u8 sup_rates[10];
-	__le16 rate;
-	__le16 atim;
-} __packed;
+	u16 rate;
+	u16 atim;
+} __attribute__ ((packed));
 
 struct comm_tallies_sums {
 	unsigned int tx_unicast_frames;
@@ -266,6 +256,7 @@ struct hfa384x_regs {
 };
 
 #if defined(PRISM2_PCCARD) || defined(PRISM2_PLX)
+
 #define HFA384X_CMD_OFF 0x00
 #define HFA384X_PARAM0_OFF 0x02
 #define HFA384X_PARAM1_OFF 0x04
@@ -294,9 +285,10 @@ struct hfa384x_regs {
 #define HFA384X_AUXPAGE_OFF 0x3A
 #define HFA384X_AUXOFFSET_OFF 0x3C
 #define HFA384X_AUXDATA_OFF 0x3E
-#endif
+#endif 
 
 #ifdef PRISM2_PCI
+
 #define HFA384X_CMD_OFF 0x00
 #define HFA384X_PARAM0_OFF 0x04
 #define HFA384X_PARAM1_OFF 0x08
@@ -340,7 +332,7 @@ struct hfa384x_regs {
 #define HFA384X_PCI_CTL_FROM_BAP (BIT(5) | BIT(1) | BIT(0))
 #define HFA384X_PCI_CTL_TO_BAP (BIT(5) | BIT(0))
 
-#endif
+#endif 
 
 #define HFA384X_CMDCODE_INIT 0x00
 #define HFA384X_CMDCODE_ENABLE 0x01
@@ -393,7 +385,7 @@ struct hfa384x_regs {
 #ifdef PRISM2_PCI
 #define HFA384X_EV_PCI_M1 BIT(9)
 #define HFA384X_EV_PCI_M0 BIT(8)
-#endif
+#endif 
 #define HFA384X_EV_INFO BIT(7)
 #define HFA384X_EV_DTIM BIT(5)
 #define HFA384X_EV_CMD BIT(4)
@@ -402,17 +394,17 @@ struct hfa384x_regs {
 #define HFA384X_EV_TX BIT(1)
 #define HFA384X_EV_RX BIT(0)
 
-#define HFA384X_INFO_HANDOVERADDR 0xF000
-#define HFA384X_INFO_HANDOVERDEAUTHADDR 0xF001
+#define HFA384X_INFO_HANDOVERADDR 0xF000 
+#define HFA384X_INFO_HANDOVERDEAUTHADDR 0xF001 
 #define HFA384X_INFO_COMMTALLIES 0xF100
 #define HFA384X_INFO_SCANRESULTS 0xF101
-#define HFA384X_INFO_CHANNELINFORESULTS 0xF102
+#define HFA384X_INFO_CHANNELINFORESULTS 0xF102 
 #define HFA384X_INFO_HOSTSCANRESULTS 0xF103
 #define HFA384X_INFO_LINKSTATUS 0xF200
-#define HFA384X_INFO_ASSOCSTATUS 0xF201
-#define HFA384X_INFO_AUTHREQ 0xF202
-#define HFA384X_INFO_PSUSERCNT 0xF203
-#define HFA384X_INFO_KEYIDCHANGED 0xF204
+#define HFA384X_INFO_ASSOCSTATUS 0xF201 
+#define HFA384X_INFO_AUTHREQ 0xF202 
+#define HFA384X_INFO_PSUSERCNT 0xF203 
+#define HFA384X_INFO_KEYIDCHANGED 0xF204 
 
 enum { HFA384X_LINKSTATUS_CONNECTED = 1,
        HFA384X_LINKSTATUS_DISCONNECTED = 2,
@@ -464,11 +456,11 @@ enum { HFA384X_RX_MSGTYPE_NORMAL = 0, HFA384X_RX_MSGTYPE_RFC1042 = 1,
 #define HFA384X_TX_STATUS_DISCON BIT(2)
 #define HFA384X_TX_STATUS_FORMERR BIT(3)
 
-#define HFA386X_CR_TX_CONFIGURE 0x12
-#define HFA386X_CR_RX_CONFIGURE 0x14
-#define HFA386X_CR_A_D_TEST_MODES2 0x1A
-#define HFA386X_CR_MANUAL_TX_POWER 0x3E
-#define HFA386X_CR_MEASURED_TX_POWER 0x74
+#define HFA386X_CR_TX_CONFIGURE 0x12 
+#define HFA386X_CR_RX_CONFIGURE 0x14 
+#define HFA386X_CR_A_D_TEST_MODES2 0x1A 
+#define HFA386X_CR_MANUAL_TX_POWER 0x3E 
+#define HFA386X_CR_MEASURED_TX_POWER 0x74 
 
 #ifdef __KERNEL__
 
@@ -479,7 +471,7 @@ enum { HFA384X_RX_MSGTYPE_NORMAL = 0, HFA384X_RX_MSGTYPE_RFC1042 = 1,
 #define PRISM2_TXFID_RESERVED 0xfffe
 #define PRISM2_DUMMY_FID 0xffff
 #define MAX_SSID_LEN 32
-#define MAX_NAME_LEN 32
+#define MAX_NAME_LEN 32 
 
 #define PRISM2_DUMP_RX_HDR BIT(0)
 #define PRISM2_DUMP_TX_HDR BIT(1)
@@ -503,6 +495,13 @@ struct prism2_frag_entry {
 	u8 dst_addr[ETH_ALEN];
 };
 
+struct prism2_crypt_data {
+	struct list_head list; 
+	struct hostap_crypto_ops *ops;
+	void *priv;
+	atomic_t refcnt;
+};
+
 struct hostap_cmd_queue {
 	struct list_head list;
 	wait_queue_head_t compl;
@@ -514,7 +513,7 @@ struct hostap_cmd_queue {
 	u16 resp0, res;
 	volatile int issued, issuing;
 
-	refcount_t usecnt;
+	atomic_t usecnt;
 	int del_req;
 };
 
@@ -524,8 +523,11 @@ struct hostap_cmd_queue {
 typedef struct local_info local_info_t;
 
 struct prism2_helper_functions {
+	
 	int (*card_present)(local_info_t *local);
 	void (*cor_sreset)(local_info_t *local);
+	int (*dev_open)(local_info_t *local);
+	int (*dev_close)(local_info_t *local);
 	void (*genesis_reset)(local_info_t *local, int hcr);
 
 	int (*cmd)(struct net_device *dev, u16 cmd, u16 param0, u16 *param1,
@@ -544,9 +546,11 @@ struct prism2_helper_functions {
 			struct prism2_download_param *param);
 	int (*tx)(struct sk_buff *skb, struct net_device *dev);
 	int (*set_tim)(struct net_device *dev, int aid, int set);
-	const struct proc_ops *read_aux_proc_ops;
+	int (*read_aux)(struct net_device *dev, unsigned addr, int len,
+			u8 *buf);
 
-	int need_tx_headroom;
+	int need_tx_headroom; 
+
 	enum { HOSTAP_HW_PCCARD, HOSTAP_HW_PLX, HOSTAP_HW_PCI } hw_type;
 };
 
@@ -555,10 +559,10 @@ struct prism2_download_data {
 	u32 start_addr;
 	u32 num_areas;
 	struct prism2_download_data_area {
-		u32 addr;
+		u32 addr; 
 		u32 len;
-		u8 *data;
-	} data[] __counted_by(num_areas);
+		u8 *data; 
+	} data[0];
 };
 
 #define HOSTAP_MAX_BSS_COUNT 64
@@ -584,72 +588,80 @@ struct local_info {
 	struct module *hw_module;
 	int card_idx;
 	int dev_enabled;
-	int master_dev_auto_open;
-	int num_dev_open;
-	struct net_device *dev;
-	struct net_device *ddev;
-	struct list_head hostap_interfaces;
-	rwlock_t iface_lock;
-	spinlock_t cmdlock, baplock, lock, irq_init_lock;
-	struct mutex rid_bap_mtx;
-	u16 infofid;
+	int master_dev_auto_open; 
+	int num_dev_open; 
+	struct net_device *dev; 
+	struct net_device *ddev; 
+	struct list_head hostap_interfaces; 
+
+	rwlock_t iface_lock; 
+
+	spinlock_t cmdlock, baplock, lock;
+	struct semaphore rid_bap_sem;
+	u16 infofid; 
+	
 	spinlock_t txfidlock;
-	int txfid_len;
-	u16 txfid[PRISM2_TXFID_COUNT];
+	int txfid_len; 
+	u16 txfid[PRISM2_TXFID_COUNT]; 
+	
 	u16 intransmitfid[PRISM2_TXFID_COUNT];
-	int next_txfid;
-	int next_alloc;
+	int next_txfid; 
+
+	int next_alloc; 
 
 #define HOSTAP_BITS_TRANSMIT 0
 #define HOSTAP_BITS_BAP_TASKLET 1
 #define HOSTAP_BITS_BAP_TASKLET2 2
-	unsigned long bits;
+	long bits;
 
 	struct ap_data *ap;
 
 	char essid[MAX_SSID_LEN + 1];
 	char name[MAX_NAME_LEN + 1];
 	int name_set;
-	u16 channel_mask;
-	u16 scan_channel_mask;
+	u16 channel_mask; 
+	u16 scan_channel_mask; 
 	struct comm_tallies_sums comm_tallies;
+	struct net_device_stats stats;
 	struct proc_dir_entry *proc;
-	int iw_mode;
-	int pseudo_adhoc;
+	int iw_mode; 
+	int pseudo_adhoc; 
+
 	char bssid[ETH_ALEN];
 	int channel;
 	int beacon_int;
 	int dtim_period;
 	int mtu;
-	int frame_dump;
+	int frame_dump; 
 	int fw_tx_rate_control;
 	u16 tx_rate_control;
 	u16 basic_rates;
 	int hw_resetting;
 	int hw_ready;
-	int hw_reset_tries;
+	int hw_reset_tries; 
 	int hw_downloading;
 	int shutdown;
 	int pri_only;
-	int no_pri;
-	int sram_type;
+	int no_pri; 
+	int sram_type; 
 
 	enum {
 		PRISM2_TXPOWER_AUTO = 0, PRISM2_TXPOWER_OFF,
 		PRISM2_TXPOWER_FIXED, PRISM2_TXPOWER_UNKNOWN
 	} txpower_type;
-	int txpower;
+	int txpower; 
 
 	struct list_head cmd_queue;
+	
 #define HOSTAP_CMD_QUEUE_MAX_LEN 16
-	int cmd_queue_len;
+	int cmd_queue_len; 
 
-	struct work_struct reset_queue;
+	HOSTAP_QUEUE reset_queue;
 
 	int is_promisc;
-	struct work_struct set_multicast_list_queue;
+	HOSTAP_QUEUE set_multicast_list_queue;
 
-	struct work_struct set_tim_queue;
+	HOSTAP_QUEUE set_tim_queue;
 	struct list_head set_tim_list;
 	spinlock_t set_tim_lock;
 
@@ -659,19 +671,23 @@ struct local_info {
 #define HOSTAP_WDS_AP_CLIENT BIT(1)
 #define HOSTAP_WDS_STANDARD_FRAME BIT(2)
 	u32 wds_type;
-	u16 tx_control;
-	int manual_retry_count;
+	u16 tx_control; 
+	int manual_retry_count; 
 
 	struct iw_statistics wstats;
-	unsigned long scan_timestamp;
+	unsigned long scan_timestamp; 
 	enum {
 		PRISM2_MONITOR_80211 = 0, PRISM2_MONITOR_PRISM = 1,
-		PRISM2_MONITOR_CAPHDR = 2, PRISM2_MONITOR_RADIOTAP = 3
+		PRISM2_MONITOR_CAPHDR = 2
 	} monitor_type;
+	int (*saved_eth_header_parse)(struct sk_buff *skb,
+				      unsigned char *haddr);
 	int monitor_allow_fcserr;
 
-	int hostapd;
-	int hostapd_sta;
+	int hostapd; 
+
+	int hostapd_sta; 
+
 	struct net_device *apdev;
 	struct net_device_stats apdevstats;
 
@@ -681,29 +697,38 @@ struct local_info {
 
 #define WEP_KEYS 4
 #define WEP_KEY_LEN 13
-	struct lib80211_crypt_info crypt_info;
+	struct prism2_crypt_data *crypt[WEP_KEYS];
+	int tx_keyidx; 
+	struct timer_list crypt_deinit_timer;
+	struct list_head crypt_deinit_list;
 
-	int open_wep;
+	int open_wep; 
 	int host_encrypt;
 	int host_decrypt;
-	int privacy_invoked;
-	int fw_encrypt_ok;
-	int bcrx_sta_key;
+	int privacy_invoked; 
+
+	int fw_encrypt_ok; 
+
+	int bcrx_sta_key; 
 
 	struct prism2_frag_entry frag_cache[PRISM2_FRAG_CACHE_LEN];
 	unsigned int frag_next_idx;
 
-	int ieee_802_1x;
+	int ieee_802_1x; 
 
 	int antsel_tx, antsel_rx;
-	int rts_threshold;
-	int fragm_threshold;
-	int auth_algs;
+	int rts_threshold; 
+	int fragm_threshold; 
+	int auth_algs; 
 
-	int enh_sec;
-	int tallies32;
+	int enh_sec; 
+	int tallies32; 
 
 	struct prism2_helper_functions *func;
+
+	int bus_master_threshold_tx;
+	int bus_master_threshold_rx;
+	u8 *bus_m1_buf;
 
 	u8 *pda;
 	int fw_ap;
@@ -711,40 +736,41 @@ struct local_info {
 (((major) << 16) | ((minor) << 8) | variant)
 	u32 sta_fw_ver;
 
-	struct tasklet_struct bap_tasklet;
+	HOSTAP_TASKLET bap_tasklet;
 
-	struct tasklet_struct info_tasklet;
-	struct sk_buff_head info_list;
+	HOSTAP_TASKLET info_tasklet;
+	struct sk_buff_head info_list; 
 
-	struct hostap_tx_callback_info *tx_callback;
+	struct hostap_tx_callback_info *tx_callback; 
 
-	struct tasklet_struct rx_tasklet;
+	HOSTAP_TASKLET rx_tasklet;
 	struct sk_buff_head rx_list;
 
-	struct tasklet_struct sta_tx_exc_tasklet;
+	HOSTAP_TASKLET sta_tx_exc_tasklet;
 	struct sk_buff_head sta_tx_exc_list;
 
 	int host_roaming;
-	unsigned long last_join_time;
+	unsigned long last_join_time; 
 	struct hfa384x_hostscan_result *last_scan_results;
 	int last_scan_results_count;
 	enum { PRISM2_SCAN, PRISM2_HOSTSCAN } last_scan_type;
-	struct work_struct info_queue;
-	unsigned long pending_info;
+	HOSTAP_QUEUE info_queue;
+	long pending_info; 
 #define PRISM2_INFO_PENDING_LINKSTATUS 0
 #define PRISM2_INFO_PENDING_SCANRESULTS 1
-	int prev_link_status;
+	int prev_link_status; 
 	int prev_linkstatus_connected;
-	u8 preferred_ap[ETH_ALEN];
+	u8 preferred_ap[6]; 
 
 #ifdef PRISM2_CALLBACK
-	void *callback_data;
-#endif
+	void *callback_data; 
+
+#endif 
 
 	wait_queue_head_t hostscan_wq;
 
 	struct timer_list passive_scan_timer;
-	int passive_scan_interval;
+	int passive_scan_interval; 
 	int passive_scan_channel;
 	enum { PASSIVE_SCAN_WAIT, PASSIVE_SCAN_LISTEN } passive_scan_state;
 
@@ -753,42 +779,76 @@ struct local_info {
 	unsigned int sw_tick_stuck;
 
 	unsigned long last_comms_qual_update;
-	int comms_qual;
-	int avg_signal;
-	int avg_noise;
-	struct work_struct comms_qual_update;
+	int comms_qual; 
+	int avg_signal; 
+	int avg_noise; 
+	HOSTAP_QUEUE comms_qual_update;
 
-	int rssi_to_dBm;
+	int rssi_to_dBm; 
 
 	struct list_head bss_list;
 	int num_bss_info;
-	int wpa;
+	int wpa; 
 	int tkip_countermeasures;
 	int drop_unencrypted;
+	
 	u8 *generic_elem;
 	size_t generic_elem_len;
 
 #ifdef PRISM2_DOWNLOAD_SUPPORT
+	
 	struct prism2_download_data *dl_pri;
 	struct prism2_download_data *dl_sec;
-#endif
+#endif 
 
 #ifdef PRISM2_IO_DEBUG
 #define PRISM2_IO_DEBUG_SIZE 10000
 	u32 io_debug[PRISM2_IO_DEBUG_SIZE];
 	int io_debug_head;
 	int io_debug_enabled;
-#endif
+#endif 
 
+#ifdef PRISM2_PCCARD
+	struct pcmcia_device *link;
 	void *hw_priv;
+	spinlock_t irq_init_lock;
+	int sandisk_connectplus;
+#endif 
+
+#ifdef PRISM2_PLX
+	void *attr_mem;
+	unsigned int cor_offset;
+#endif 
+
+#ifdef PRISM2_PCI
+#ifdef PRISM2_BUS_MASTER
+	
+	int bus_m0_tx_idx;
+	u8 *bus_m0_buf;
+
+	struct sk_buff *rx_skb;
+#endif 
+#ifdef CONFIG_PM
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,10))
+	u32 pci_save_state[16];
+#endif
+#endif 
+#endif 
+
 };
 
 struct hostap_interface {
-	struct list_head list;
-	struct net_device *dev;
-	struct local_info *local;
+	struct list_head list; 
+	struct net_device *dev; 
+	struct local_info *local; 
 	struct net_device_stats stats;
-	struct iw_spy_data spy_data;
+#if WIRELESS_EXT > 15
+	
+	struct iw_spy_data spy_data; 
+#if WIRELESS_EXT > 16
+	
+#endif 
+#endif 
 
 	enum {
 		HOSTAP_INTERFACE_MASTER,
@@ -809,23 +869,17 @@ struct hostap_interface {
 
 struct hostap_skb_tx_data {
 	unsigned int __padding_for_default_qdiscs[2];
-	u32 magic;
-	u8 rate;
+	u32 magic; 
+	u8 rate; 
 #define HOSTAP_TX_FLAGS_WDS BIT(0)
 #define HOSTAP_TX_FLAGS_BUFFERED_FRAME BIT(1)
 #define HOSTAP_TX_FLAGS_ADD_MOREDATA BIT(2)
-	u8 flags;
+	u8 flags; 
 	u16 tx_cb_idx;
 	struct hostap_interface *iface;
-	unsigned long jiffies;
+	unsigned long jiffies; 
 	unsigned short ethertype;
 };
-
-static_assert(offsetof(struct hostap_skb_tx_data, magic) >= 8,
-	      "hostap_skb_tx_data.magic overlaps qdisc_skb_cb's fixed head; "
-	      "__padding_for_default_qdiscs is too small");
-static_assert(sizeof(struct hostap_skb_tx_data) <= 48,
-	      "hostap_skb_tx_data exceeds the 48-byte skb->cb limit");
 
 #ifndef PRISM2_NO_DEBUG
 
@@ -843,12 +897,12 @@ do { if ((n) & DEBUG_MASK) printk(KERN_DEBUG args); } while (0)
 #define PDEBUG2(n, args...) \
 do { if ((n) & DEBUG_MASK) printk(args); } while (0)
 
-#else
+#else 
 
 #define PDEBUG(n, args...)
 #define PDEBUG2(n, args...)
 
-#endif
+#endif 
 
 enum { BAP0 = 0, BAP1 = 1 };
 
@@ -902,7 +956,7 @@ static inline void prism2_io_debug_error(struct net_device *dev, int err)
 	spin_unlock_irqrestore(&local->lock, flags);
 }
 
-#else
+#else 
 
 static inline void prism2_io_debug_add(struct net_device *dev, int cmd,
 				       int reg, int value)
@@ -913,10 +967,11 @@ static inline void prism2_io_debug_error(struct net_device *dev, int err)
 {
 }
 
-#endif
+#endif 
 
 #ifdef PRISM2_CALLBACK
 enum {
+	
 	PRISM2_CALLBACK_ENABLE,
 
 	PRISM2_CALLBACK_DISABLE,
@@ -925,10 +980,10 @@ enum {
 	PRISM2_CALLBACK_TX_START, PRISM2_CALLBACK_TX_END
 };
 void prism2_callback(local_info_t *local, int event);
-#else
+#else 
 #define prism2_callback(d, e) do { } while (0)
-#endif
+#endif 
 
-#endif
+#endif 
 
-#endif
+#endif 

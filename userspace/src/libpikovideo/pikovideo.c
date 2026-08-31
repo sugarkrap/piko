@@ -243,6 +243,7 @@ int pikovideo_apply(enum pikovideo_mode m, enum pikovideo_driver drv)
     if (drv == PIKOVIDEO_DRIVER_X11) {
         if (!send_x_command(qvga ? "QVGA" : "VGA"))
             return 0;
+        mode_applied = 1;
         if (!wait_for_x_qvga(qvga)) {
             trace("pikovideo_apply: X did not reach %s", qvga ? "QVGA" : "VGA");
             return 0;
@@ -252,12 +253,12 @@ int pikovideo_apply(enum pikovideo_mode m, enum pikovideo_driver drv)
         ok = fb_set_size(w, h);
         if (!ok)
             return 0;
+        mode_applied = 1;
     }
 
     if (fast && set_fast_pll(1))
         pll_applied = 1;
 
-    mode_applied = 1;
     trace("pikovideo_apply: %s via %s", pikovideo_mode_key(m),
           drv == PIKOVIDEO_DRIVER_X11 ? "x11" : "fb");
     return ok;

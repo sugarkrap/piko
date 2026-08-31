@@ -33,11 +33,11 @@ if [ ! -f "$SRC/protocol.h" ]; then
 fi
 
 if [ "${PIKO_SYNC_SKIP_TESTS:-0}" = "0" ]; then
-    echo "==> running host tests (protocol, resume/collision, transfer queue, settings)"
+    echo "==> running host tests (protocol, resume/collision, transfer queue, settings, websocket, device info)"
     HOSTCXX="${HOSTCXX:-g++}"
     if command -v "$HOSTCXX" >/dev/null 2>&1; then
         testdir="$(mktemp -d)"
-        for t in protocol settings; do
+        for t in protocol settings websocket device-info; do
             "$HOSTCXX" -O2 -Wall -Wextra -o "$testdir/piko-sync-$t-test" \
                 "$SRC/tests/$t-test.cxx"
             "$testdir/piko-sync-$t-test"
@@ -53,6 +53,11 @@ IPK_PATH=""
 if [ "$BUILD_SERVER" = "1" ]; then
     if ! command -v "$TOOLCHAIN_BIN_DIR/$HOST-g++" >/dev/null 2>&1; then
         echo "tools/userspace/build-piko-sync.sh: no C++ cross compiler at $TOOLCHAIN_BIN_DIR/$HOST-g++" >&2
+        exit 1
+    fi
+    if [ ! -f "$STAGE/usr/lib/libpikorom.so.1" ]; then
+        echo "tools/userspace/build-piko-sync.sh: no libpikorom.so.1 at $STAGE/usr/lib" >&2
+        echo "  run tools/userspace/build-libpikorom.sh first" >&2
         exit 1
     fi
     if [ ! -f "$STAGE/usr/lib/libfltk.so.$FL_DSO_VERSION" ]; then
