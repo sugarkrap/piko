@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pikorom.h"
+
 #define PIKOEMU_MAXLINE 4096
 #define PIKOEMU_MAXVAL  512
 
@@ -29,24 +31,6 @@ static int pikoemu_hexval(char c)
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     return -1;
-}
-
-static void pikoemu_unescape(const char *in, char *out, size_t cap)
-{
-    size_t i = 0, o = 0;
-    while (in[i] != '\0' && o + 1 < cap) {
-        if (in[i] == '%' && in[i + 1] && in[i + 2]) {
-            int hi = pikoemu_hexval(in[i + 1]);
-            int lo = pikoemu_hexval(in[i + 2]);
-            if (hi >= 0 && lo >= 0) {
-                out[o++] = (char)((hi << 4) | lo);
-                i += 3;
-                continue;
-            }
-        }
-        out[o++] = in[i++];
-    }
-    out[o] = '\0';
 }
 
 struct pikoemu_named_color { const char *name; unsigned char r, g, b; };
@@ -92,20 +76,10 @@ static int pikoemu_parse_color(const char *v, unsigned char *r, unsigned char *g
     return 0;
 }
 
-static void pikoemu_zroot(const char *rom, char *out, size_t cap)
-{
-    if (strncmp(rom, "/mnt/card/", 10) == 0)
-        snprintf(out, cap, "/mnt/card/.zaurus");
-    else if (strncmp(rom, "/mnt/cf/", 8) == 0)
-        snprintf(out, cap, "/mnt/cf/.zaurus");
-    else
-        snprintf(out, cap, "/usr/local/.zaurus");
-}
-
 static void pikoemu_apply_option(struct pikoemu_cfg *c, const char *key, const char *raw)
 {
     char val[PIKOEMU_MAXVAL];
-    pikoemu_unescape(raw, val, sizeof(val));
+    pikorom_option_unescape(raw, val, sizeof(val));
 
     if (strcmp(key, "title") == 0) {
         snprintf(c->title, sizeof(c->title), "%s", val);
@@ -135,56 +109,18 @@ static void pikoemu_apply_option(struct pikoemu_cfg *c, const char *key, const c
     }
 }
 
-static void pikoemu_parse_options(struct pikoemu_cfg *c, char *opts)
+static const char *const pikoemu_option_keys[] = {
+    "title", "rotate", "canvas", "video", "bezel", NULL
+};
+
+static void pikoemu_parse_options(struct pikoemu_cfg *c, const char *opts)
 {
-    char *p = opts;
-    while (p != NULL && *p != '\0') {
-        char *comma = strchr(p, ',');
-        char *eq;
-        if (comma != NULL) *comma = '\0';
-        eq = strchr(p, '=');
-        if (eq != NULL) {
-            *eq = '\0';
-            pikoemu_apply_option(c, p, eq + 1);
-        }
-        p = (comma != NULL) ? comma + 1 : NULL;
+    int i;
+    for (i = 0; pikoemu_option_keys[i] != NULL; i++) {
+        char raw[PIKOEMU_MAXVAL];
+        if (pikorom_option_get(opts, pikoemu_option_keys[i], raw, sizeof(raw)))
+            pikoemu_apply_option(c, pikoemu_option_keys[i], raw);
     }
-}
-
-static int pikoemu_find_line(const char *path, const char *want,
-                             char *opts, size_t cap)
-{
-    char line[PIKOEMU_MAXLINE];
-    FILE *f = fopen(path, "r");
-    int found = 0;
-
-    if (f == NULL)
-        return 0;
-    while (fgets(line, sizeof(line), f) != NULL) {
-        char *fields[6];
-        int n = 0;
-        char *p = line;
-        size_t len = strlen(line);
-
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-        while (n < 6) {
-            char *bar = strchr(p, '|');
-            fields[n++] = p;
-            if (bar == NULL) break;
-            *bar = '\0';
-            p = bar + 1;
-        }
-        if (n < 1 || strcmp(fields[0], want) != 0)
-            continue;
-        opts[0] = '\0';
-        if (n > 5)
-            snprintf(opts, cap, "%s", fields[5]);
-        found = 1;
-        break;
-    }
-    fclose(f);
-    return found;
 }
 
 static void pikoemu_resolve_bezel(struct pikoemu_cfg *c)
@@ -202,65 +138,36 @@ static void pikoemu_resolve_bezel(struct pikoemu_cfg *c)
 
     if (c->backend[0] != '\0') {
         snprintf(want, sizeof(want), "@backend:%s", c->backend);
-        if (pikoemu_find_line(path, want, opts, sizeof(opts))) {
+        if (pikorom_entry_lookup(path, want, NULL, 0, NULL, 0, opts, sizeof(opts))) {
             pikoemu_parse_options(c, opts);
             if (c->has_bezel)
                 return;
         }
     }
-    if (pikoemu_find_line(path, "@global", opts, sizeof(opts)))
+    if (pikorom_entry_lookup(path, "@global", NULL, 0, NULL, 0, opts, sizeof(opts)))
         pikoemu_parse_options(c, opts);
 }
 
 static int pikoemu_load(const char *rom, struct pikoemu_cfg *c)
 {
-    char zroot[64];
     char path[PIKOEMU_MAXVAL];
-    char line[PIKOEMU_MAXLINE];
+    char opts[PIKOEMU_MAXLINE];
     const char *env = getenv("EMULATION_CFG");
-    FILE *f;
 
     memset(c, 0, sizeof(*c));
     snprintf(c->rom, sizeof(c->rom), "%s", rom);
 
-    if (env != NULL && env[0] != '\0') {
+    if (env != NULL && env[0] != '\0')
         snprintf(path, sizeof(path), "%s", env);
-    } else {
-        pikoemu_zroot(rom, zroot, sizeof(zroot));
-        snprintf(path, sizeof(path), "%s/emulation.cfg", zroot);
-    }
-
-    f = fopen(path, "r");
-    if (f == NULL)
+    else if (!pikorom_cfg_path_for(rom, path, sizeof(path)))
         return 0;
 
-    while (fgets(line, sizeof(line), f) != NULL) {
-        char *fields[6];
-        int n = 0;
-        char *p = line;
-        size_t len = strlen(line);
-
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-
-        while (n < 6) {
-            char *bar = strchr(p, '|');
-            fields[n++] = p;
-            if (bar == NULL) break;
-            *bar = '\0';
-            p = bar + 1;
-        }
-        if (n < 1 || strcmp(fields[0], rom) != 0)
-            continue;
-
-        if (n > 1) snprintf(c->machine, sizeof(c->machine), "%s", fields[1]);
-        if (n > 2) snprintf(c->backend, sizeof(c->backend), "%s", fields[2]);
-        if (n > 5) pikoemu_parse_options(c, fields[5]);
+    if (pikorom_entry_lookup(path, rom, c->machine, sizeof(c->machine),
+                             c->backend, sizeof(c->backend), opts, sizeof(opts))) {
+        pikoemu_parse_options(c, opts);
         c->found = 1;
-        break;
     }
 
-    fclose(f);
     pikoemu_resolve_bezel(c);
     return c->found;
 }

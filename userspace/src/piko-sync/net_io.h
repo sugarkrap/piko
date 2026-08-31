@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -16,6 +17,7 @@
 #include <string>
 
 #include "protocol.h"
+#include "websocket.h"
 
 namespace piko_sync {
 
@@ -26,20 +28,25 @@ inline void set_nonblock(int fd)
         fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+const int WRITE_STALL_SECONDS = 30;
+
 inline bool write_all(int fd, const char *data, size_t len)
 {
     size_t sent = 0;
-    int stalls = 0;
+    time_t last_progress = time(0);
     while (sent < len) {
         ssize_t n = write(fd, data + sent, len - sent);
         if (n > 0) {
             sent += static_cast<size_t>(n);
-            stalls = 0;
+            last_progress = time(0);
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            if (++stalls > 500)
+            if (time(0) - last_progress >= WRITE_STALL_SECONDS) {
+                fprintf(stderr, "piko-sync: write stalled %d s with %lu of %lu bytes sent\n",
+                        WRITE_STALL_SECONDS, (unsigned long)sent, (unsigned long)len);
                 return false;
+            }
             fd_set wfds;
             FD_ZERO(&wfds);
             FD_SET(fd, &wfds);
@@ -60,6 +67,18 @@ inline bool send_frame_blocking(int fd, uint32_t type, const std::string &payloa
 {
     std::string f = encode_frame(type, payload);
     return write_all(fd, f.data(), f.size());
+}
+
+inline bool ws_send_frame_blocking(int fd, uint32_t type, const std::string &payload, bool mask)
+{
+    std::string m = ws_encode(WS_BINARY, encode_frame(type, payload), mask);
+    return write_all(fd, m.data(), m.size());
+}
+
+inline bool ws_send_control(int fd, int opcode, const std::string &body, bool mask)
+{
+    std::string m = ws_encode(opcode, body, mask);
+    return write_all(fd, m.data(), m.size());
 }
 
 inline std::string wlan0_address()

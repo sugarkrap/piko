@@ -10,7 +10,8 @@ HOSTCXXFLAGS       ?= -O2 -Wall -Wextra
 HOST_FLTK_CXXFLAGS ?=
 HOST_FLTK_LDFLAGS  ?= -lfltk
 
-COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h jar_meta.h rom_detect.h
+COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h jar_meta.h rom_detect.h sha1.h base64.h websocket.h
+PIKOROM_DIR := ../libpikorom
 
 SERVER := $(TARGETBIN)/piko-sync-server
 CLIENT := $(HOSTBIN)/piko-sync-client
@@ -21,13 +22,13 @@ all: server client
 
 server: $(SERVER)
 
-$(SERVER): piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS)
+$(SERVER): piko-sync-server.cxx transfer_table.cxx $(COMMON_HDRS) $(PIKOROM_DIR)/pikorom.h
 	@mkdir -p $(TARGETBIN)
 	$(CXX) $(CXXFLAGS) \
-	    -isystem $(STAGE)/usr/include \
+	    -isystem $(STAGE)/usr/include -I$(PIKOROM_DIR) \
 	    -o $@ piko-sync-server.cxx transfer_table.cxx \
 	    -L$(STAGE)/usr/lib -Wl,-rpath-link=$(STAGE)/usr/lib \
-	    -lfltk_images -lpng -lz -lfltk $(FLTK_LDLIBS)
+	    -lpikorom -lfltk $(FLTK_LDLIBS)
 
 client: $(CLIENT)
 
@@ -46,3 +47,7 @@ test:
 	/tmp/piko-sync-protocol-test
 	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-settings-test tests/settings-test.cxx
 	/tmp/piko-sync-settings-test
+	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-websocket-test tests/websocket-test.cxx
+	/tmp/piko-sync-websocket-test
+	$(HOSTCXX) $(HOSTCXXFLAGS) -o /tmp/piko-sync-device-info-test tests/device-info-test.cxx
+	/tmp/piko-sync-device-info-test

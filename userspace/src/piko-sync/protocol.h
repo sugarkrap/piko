@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <string>
+#include <vector>
 
 namespace piko_sync {
 
@@ -65,7 +66,32 @@ enum MessageType {
     MSG_BEZEL_SET_RECT     = 42,
     MSG_BEZEL_SET_RECT_ACK = 43,
     MSG_ROM_SET_OPTION     = 44,
-    MSG_ROM_SET_OPTION_ACK = 45
+    MSG_ROM_SET_OPTION_ACK = 45,
+
+    MSG_PING               = 46,
+    MSG_PONG               = 47,
+
+    MSG_DEVICE_INFO        = 48,
+    MSG_DEVICE_INFO_ACK    = 49,
+    MSG_DEVICE_STATS       = 50,
+    MSG_DEVICE_STATS_ACK   = 51,
+    MSG_WALLPAPER          = 52,
+    MSG_WALLPAPER_INFO     = 53,
+
+    MSG_ROM_GET_ICONS      = 54,
+    MSG_ROM_ICONS_INFO     = 55,
+
+    MSG_BACKEND_LIST       = 56,
+    MSG_BACKEND_LIST_ACK   = 57,
+
+    MSG_ROM_SET_BACKEND    = 58,
+    MSG_ROM_SET_BACKEND_ACK = 59,
+
+    MSG_ROM_APPLY          = 60,
+    MSG_ROM_APPLY_ACK      = 61,
+
+    MSG_BEZEL_GET_MANY     = 62,
+    MSG_BEZEL_MANY_INFO    = 63
 };
 
 enum PutPolicy {
@@ -803,6 +829,198 @@ inline bool decode_rom_list_ack(const std::string &p, RomListAckMsg &m)
     return true;
 }
 
+struct RomApplyMsg {
+    std::string path;
+    std::string backend;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::string icon;
+};
+inline std::string encode(const RomApplyMsg &m)
+{
+    std::string p;
+    put_str16(p, m.path);
+    put_str16(p, m.backend);
+    put_u16(p, static_cast<uint16_t>(m.keys.size()));
+    for (size_t i = 0; i < m.keys.size(); i++) {
+        put_str16(p, m.keys[i]);
+        put_str16(p, i < m.values.size() ? m.values[i] : std::string());
+    }
+    put_u32(p, static_cast<uint32_t>(m.icon.size()));
+    p.append(m.icon);
+    return p;
+}
+inline bool decode_rom_apply(const std::string &p, RomApplyMsg &m)
+{
+    size_t pos = 0;
+    uint16_t count;
+    uint32_t len;
+    if (!get_str16(p, pos, m.path) || !get_str16(p, pos, m.backend))
+        return false;
+    if (!get_u16(p, pos, count))
+        return false;
+    for (uint16_t i = 0; i < count; i++) {
+        std::string key, value;
+        if (!get_str16(p, pos, key) || !get_str16(p, pos, value))
+            return false;
+        m.keys.push_back(key);
+        m.values.push_back(value);
+    }
+    if (!get_u32(p, pos, len))
+        return false;
+    if (p.size() - pos < len)
+        return false;
+    m.icon.assign(p, pos, len);
+    return true;
+}
+
+struct RomBackendMsg {
+    std::string path;
+    std::string backend;
+};
+inline std::string encode(const RomBackendMsg &m)
+{
+    std::string p;
+    put_str16(p, m.path);
+    put_str16(p, m.backend);
+    return p;
+}
+inline bool decode_rom_backend(const std::string &p, RomBackendMsg &m)
+{
+    size_t pos = 0;
+    if (!get_str16(p, pos, m.path))
+        return false;
+    return get_str16(p, pos, m.backend);
+}
+
+struct BackendListAckMsg {
+    std::string records;
+};
+inline std::string encode(const BackendListAckMsg &m)
+{
+    std::string p;
+    put_u32(p, static_cast<uint32_t>(m.records.size()));
+    p.append(m.records);
+    return p;
+}
+inline bool decode_backend_list_ack(const std::string &p, BackendListAckMsg &m)
+{
+    size_t pos = 0;
+    uint32_t len;
+    if (!get_u32(p, pos, len))
+        return false;
+    if (p.size() - pos < len)
+        return false;
+    m.records.assign(p, pos, len);
+    return true;
+}
+
+struct RomIconsMsg {
+    std::vector<std::string> paths;
+};
+inline std::string encode(const RomIconsMsg &m)
+{
+    std::string p;
+    put_u16(p, static_cast<uint16_t>(m.paths.size()));
+    for (size_t i = 0; i < m.paths.size(); i++)
+        put_str16(p, m.paths[i]);
+    return p;
+}
+inline bool decode_rom_icons(const std::string &p, RomIconsMsg &m)
+{
+    size_t pos = 0;
+    uint16_t count;
+    if (!get_u16(p, pos, count))
+        return false;
+    for (uint16_t i = 0; i < count; i++) {
+        std::string path;
+        if (!get_str16(p, pos, path))
+            return false;
+        m.paths.push_back(path);
+    }
+    return true;
+}
+
+struct RomIconsInfoMsg {
+    bool ok;
+    uint32_t entry_count;
+    uint32_t byte_count;
+    std::string reason;
+    RomIconsInfoMsg() : ok(false), entry_count(0), byte_count(0) {}
+};
+inline std::string encode(const RomIconsInfoMsg &m)
+{
+    std::string p;
+    p.append(1, m.ok ? 1 : 0);
+    put_u32(p, m.entry_count);
+    put_u32(p, m.byte_count);
+    put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_rom_icons_info(const std::string &p, RomIconsInfoMsg &m)
+{
+    if (p.empty())
+        return false;
+    m.ok = p[0] != 0;
+    size_t pos = 1;
+    if (!get_u32(p, pos, m.entry_count) || !get_u32(p, pos, m.byte_count))
+        return false;
+    return get_str16(p, pos, m.reason);
+}
+
+struct BezelManyMsg {
+    std::vector<std::string> names;
+};
+inline std::string encode(const BezelManyMsg &m)
+{
+    std::string p;
+    put_u16(p, static_cast<uint16_t>(m.names.size()));
+    for (size_t i = 0; i < m.names.size(); i++)
+        put_str16(p, m.names[i]);
+    return p;
+}
+inline bool decode_bezel_many(const std::string &p, BezelManyMsg &m)
+{
+    size_t pos = 0;
+    uint16_t count;
+    if (!get_u16(p, pos, count))
+        return false;
+    for (uint16_t i = 0; i < count; i++) {
+        std::string name;
+        if (!get_str16(p, pos, name))
+            return false;
+        m.names.push_back(name);
+    }
+    return true;
+}
+
+struct BezelManyInfoMsg {
+    bool ok;
+    uint32_t entry_count;
+    uint32_t byte_count;
+    std::string reason;
+    BezelManyInfoMsg() : ok(false), entry_count(0), byte_count(0) {}
+};
+inline std::string encode(const BezelManyInfoMsg &m)
+{
+    std::string p;
+    p.append(1, m.ok ? 1 : 0);
+    put_u32(p, m.entry_count);
+    put_u32(p, m.byte_count);
+    put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_bezel_many_info(const std::string &p, BezelManyInfoMsg &m)
+{
+    if (p.empty())
+        return false;
+    m.ok = p[0] != 0;
+    size_t pos = 1;
+    if (!get_u32(p, pos, m.entry_count) || !get_u32(p, pos, m.byte_count))
+        return false;
+    return get_str16(p, pos, m.reason);
+}
+
 struct ScreenshotInfoMsg {
     bool ok;
     std::string reason;
@@ -833,6 +1051,126 @@ inline bool decode_screenshot_info(const std::string &p, ScreenshotInfoMsg &m)
         !get_u32(p, pos, m.bpp) || !get_u32(p, pos, m.byte_count))
         return false;
     return get_str16(p, pos, m.reason);
+}
+
+
+struct DeviceMount {
+    std::string mount_point;
+    std::string device;
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+    DeviceMount() : total_bytes(0), free_bytes(0) {}
+};
+
+struct DeviceInfoAckMsg {
+    std::string hostname;
+    std::string model;
+    uint64_t memory_total;
+    std::vector<DeviceMount> mounts;
+    DeviceInfoAckMsg() : memory_total(0) {}
+};
+inline std::string encode(const DeviceInfoAckMsg &m)
+{
+    std::string p;
+    put_str16(p, m.hostname);
+    put_str16(p, m.model);
+    put_u64(p, m.memory_total);
+    put_u32(p, static_cast<uint32_t>(m.mounts.size()));
+    for (size_t i = 0; i < m.mounts.size(); i++) {
+        put_str16(p, m.mounts[i].mount_point);
+        put_str16(p, m.mounts[i].device);
+        put_u64(p, m.mounts[i].total_bytes);
+        put_u64(p, m.mounts[i].free_bytes);
+    }
+    return p;
+}
+inline bool decode_device_info_ack(const std::string &p, DeviceInfoAckMsg &m)
+{
+    size_t pos = 0;
+    uint32_t count = 0;
+    if (!get_str16(p, pos, m.hostname) || !get_str16(p, pos, m.model))
+        return false;
+    if (!get_u64(p, pos, m.memory_total) || !get_u32(p, pos, count))
+        return false;
+    m.mounts.clear();
+    for (uint32_t i = 0; i < count; i++) {
+        DeviceMount mount;
+        if (!get_str16(p, pos, mount.mount_point) || !get_str16(p, pos, mount.device))
+            return false;
+        if (!get_u64(p, pos, mount.total_bytes) || !get_u64(p, pos, mount.free_bytes))
+            return false;
+        m.mounts.push_back(mount);
+    }
+    return true;
+}
+
+struct DeviceStatsAckMsg {
+    uint32_t cpu_percent;
+    uint64_t memory_total;
+    uint64_t memory_available;
+    DeviceStatsAckMsg() : cpu_percent(0), memory_total(0), memory_available(0) {}
+};
+inline std::string encode(const DeviceStatsAckMsg &m)
+{
+    std::string p;
+    put_u32(p, m.cpu_percent);
+    put_u64(p, m.memory_total);
+    put_u64(p, m.memory_available);
+    return p;
+}
+inline bool decode_device_stats_ack(const std::string &p, DeviceStatsAckMsg &m)
+{
+    size_t pos = 0;
+    return get_u32(p, pos, m.cpu_percent) && get_u64(p, pos, m.memory_total)
+        && get_u64(p, pos, m.memory_available);
+}
+
+struct WallpaperMsg {
+    uint32_t known_checksum;
+    WallpaperMsg() : known_checksum(0) {}
+};
+inline std::string encode(const WallpaperMsg &m)
+{
+    std::string p;
+    put_u32(p, m.known_checksum);
+    return p;
+}
+inline bool decode_wallpaper(const std::string &p, WallpaperMsg &m)
+{
+    size_t pos = 0;
+    return get_u32(p, pos, m.known_checksum);
+}
+
+struct WallpaperInfoMsg {
+    bool ok;
+    bool unchanged;
+    uint32_t checksum;
+    uint32_t byte_count;
+    std::string path;
+    std::string reason;
+    WallpaperInfoMsg() : ok(false), unchanged(false), checksum(0), byte_count(0) {}
+};
+inline std::string encode(const WallpaperInfoMsg &m)
+{
+    std::string p;
+    p.append(1, m.ok ? 1 : 0);
+    p.append(1, m.unchanged ? 1 : 0);
+    put_u32(p, m.checksum);
+    put_u32(p, m.byte_count);
+    put_str16(p, m.path);
+    put_str16(p, m.reason);
+    return p;
+}
+inline bool decode_wallpaper_info(const std::string &p, WallpaperInfoMsg &m)
+{
+    if (p.size() < 2)
+        return false;
+    m.ok = p[0] != 0;
+    m.unchanged = p[1] != 0;
+    size_t pos = 2;
+    if (!get_u32(p, pos, m.checksum) || !get_u32(p, pos, m.byte_count))
+        return false;
+    return get_str16(p, pos, m.path) && get_str16(p, pos, m.reason);
 }
 
 }

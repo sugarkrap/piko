@@ -47,13 +47,24 @@ done
 WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
 $SD_MODULES
 $NAND_MODULES
-$CPUFREQ_MODULES"
+$CPUFREQ_MODULES
+$USB_MODULES"
 for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
     dst="$OVERLAY/lib/modules/$KVER/$relpath"
     mkdir -p "$(dirname "$dst")"
     cp "$KERNEL_DIR/$src_rel" "$dst"
 done
+
+MODULE_STRIP="${MODULE_STRIP:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin/arm-unknown-linux-uclibcgnueabi-strip}"
+if [ -x "$MODULE_STRIP" ]; then
+    before="$(du -sk "$OVERLAY/lib/modules/$KVER" | while read -r n _; do echo "$n"; break; done)"
+    find "$OVERLAY/lib/modules/$KVER" -name '*.ko' -exec "$MODULE_STRIP" --strip-debug {} +
+    after="$(du -sk "$OVERLAY/lib/modules/$KVER" | while read -r n _; do echo "$n"; break; done)"
+    echo "    modules: stripped ${before}K -> ${after}K"
+else
+    echo "build-rootfs: no strip at $MODULE_STRIP -- shipping unstripped modules" >&2
+fi
 
 ( cd "$REPO/rootfs" && find . -type f ) | sed 's#^\./##' | while read -r rel; do
     dst="$OVERLAY/$rel"
@@ -72,6 +83,8 @@ if [ "${SKIP_X11:-0}" -ne 1 ]; then
     "$REPO/tools/userspace/build-matchbox-payload.sh"
     cp -a "$PAYLOAD_DIR/." "$OVERLAY/"
 
+    echo "==> building libpikorom (tools/userspace/build-libpikorom.sh)"
+    "$REPO/tools/userspace/build-libpikorom.sh"
     echo "==> building piko-sync-server (tools/userspace/build-piko-sync.sh --server-only)"
     PIKO_SYNC_IPK_OUT="$STAGE/ipk"
     mkdir -p "$PIKO_SYNC_IPK_OUT"
@@ -175,6 +188,29 @@ mkdir -p "$OVERLAY/lib"
 cp "$PIKOVIDEO_LIB" "$OVERLAY/lib/libpikovideo.so.1"
 chmod 0755 "$OVERLAY/lib/libpikovideo.so.1"
 echo "    pikoemu: /usr/local/bin/pikoemu + /lib/libpikovideo.so.1"
+
+PIKOROM_LIB="$REPO/build/target/usr/lib/libpikorom.so.1"
+if [ ! -f "$PIKOROM_LIB" ]; then
+    echo "build-rootfs: missing $PIKOROM_LIB -- run tools/userspace/build-libpikorom.sh first" >&2
+    exit 1
+fi
+cp "$PIKOROM_LIB" "$OVERLAY/lib/libpikorom.so.1"
+chmod 0755 "$OVERLAY/lib/libpikorom.so.1"
+echo "    rom/applet install: /lib/libpikorom.so.1"
+
+UI_STAGE="${UI_STAGE:-$REPO/build/stage-ui}"
+if [ ! -f "$UI_STAGE/usr/local/share/piko/ui/notify.pkui" ]; then
+    echo "==> baking the emu ui (tools/userspace/build-emu-ui.sh)"
+    "$REPO/tools/userspace/build-emu-ui.sh"
+fi
+if [ ! -f "$UI_STAGE/usr/local/share/piko/ui/notify.pkui" ]; then
+    echo "build-rootfs: build-emu-ui.sh succeeded but there is no $UI_STAGE/usr/local/share/piko/ui/notify.pkui" >&2
+    exit 1
+fi
+mkdir -p "$OVERLAY/usr/local/share/piko/ui"
+cp "$UI_STAGE"/usr/local/share/piko/ui/* "$OVERLAY/usr/local/share/piko/ui/"
+chmod 0644 "$OVERLAY"/usr/local/share/piko/ui/*
+echo "    pikoemu ui: /usr/local/share/piko/ui ($(ls "$UI_STAGE/usr/local/share/piko/ui" | wc -l) files)"
 
 SDL_STAGE="${SDL_STAGE:-$REPO/build/stage-sdl-runtime}"
 if [ -d "$SDL_STAGE" ]; then

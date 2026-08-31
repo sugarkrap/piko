@@ -6,6 +6,8 @@ const path = require('path');
 const zlib = require('zlib');
 const img = require('./piko-image');
 
+const UPRIGHT_BEZELS = ['N-Gage'];
+
 const MASTER_W = 960;
 const MASTER_H = 720;
 const SHADER_TAGS = ['ADV', 'SMOOTH-ADV', 'LCD-GRID', 'GDV', 'Guest'];
@@ -139,6 +141,28 @@ const bake = (zip, preset, w, h) => {
     return { image: out, rect };
 };
 
+const rotateCcw = (image, rect) => {
+    const w = image.width;
+    const h = image.height;
+    const out = img.blank(h, w);
+
+    for (let y = 0; y < w; y++) {
+        for (let x = 0; x < h; x++) {
+            const from = (x * w + (w - 1 - y)) * 4;
+            const to = (y * h + x) * 4;
+            out.data[to] = image.data[from];
+            out.data[to + 1] = image.data[from + 1];
+            out.data[to + 2] = image.data[from + 2];
+            out.data[to + 3] = image.data[from + 3];
+        }
+    }
+
+    return {
+        image: out,
+        rect: { x: rect.y, y: w - rect.x - rect.w, w: rect.h, h: rect.w },
+    };
+};
+
 const toPkbz = (image, rect, source) => {
     const src = Buffer.from(source, 'utf8');
     const head = Buffer.alloc(36);
@@ -208,11 +232,17 @@ const main = () => {
     for (const preset of presets) {
         const rel = preset.slice(root.length + 1);
         const name = bezelName(preset);
-        const baked = bake(zip, preset, width, height);
+        let baked = bake(zip, preset, width, height);
         if (!baked) {
             skipped++;
             console.log(`    skip ${rel} (procedural bezel, no device image)`);
             continue;
+        }
+        const upright = UPRIGHT_BEZELS.some((one) => name === one || name.startsWith(`${one}-`));
+        if (baked.rect.h > baked.rect.w && !upright) {
+            const transposed = bake(zip, preset, height, width);
+            baked = rotateCcw(transposed.image, transposed.rect);
+            console.log(`    ${name}: rotated 90 CCW (portrait screen)`);
         }
         const key = zlib.crc32(baked.image.data).toString(16) + ':' + baked.image.data.length;
         if (seen.has(key)) {

@@ -17,12 +17,18 @@ if ! command -v "$HOSTCXX" >/dev/null 2>&1; then
 fi
 
 if [ "${PIKO_SYNC_DEPLOY_SKIP_TESTS:-0}" = "0" ]; then
-    echo "==> running host tests (piko-sync protocol + yaml_lite + manifest)"
+    echo "==> running host tests (piko-sync protocol + websocket + yaml_lite + manifest)"
     protocol_testbin="$(mktemp -d)/protocol-test"
     "$HOSTCXX" -O2 -Wall -Wextra -std=c++98 \
         -o "$protocol_testbin" "$REPO/userspace/src/piko-sync/tests/protocol-test.cxx"
     "$protocol_testbin"
     rm -rf "$(dirname "$protocol_testbin")"
+
+    websocket_testbin="$(mktemp -d)/websocket-test"
+    "$HOSTCXX" -O2 -Wall -Wextra -std=c++98 \
+        -o "$websocket_testbin" "$REPO/userspace/src/piko-sync/tests/websocket-test.cxx"
+    "$websocket_testbin"
+    rm -rf "$(dirname "$websocket_testbin")"
 
     manifest_testbin="$(mktemp -d)/manifest-test"
     "$HOSTCXX" -O2 -Wall -Wextra -std=c++98 -I"$SRC" \
