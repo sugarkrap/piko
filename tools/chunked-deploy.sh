@@ -4,6 +4,7 @@ set -eu
 ADAPTER=""
 TARGET=""
 KERNEL_ONLY=0
+ONLY=""
 NO_USERSPACE=0
 CREATE_BACKUP_FILES=0
 REPLACE_DROPBEAR=0
@@ -30,6 +31,14 @@ while [ $# -gt 0 ]; do
             KERNEL_ONLY=1
             shift
             ;;
+        --only)
+            if [ $# -lt 2 ]; then
+                echo "FAILED: --only requires a name or glob" >&2
+                exit 1
+            fi
+            ONLY="$ONLY $2"
+            shift 2
+            ;;
         --no-userspace)
             NO_USERSPACE=1
             shift
@@ -52,6 +61,7 @@ while [ $# -gt 0 ]; do
             echo "  --adapter IFACE"
             echo "  --target user@host"
             echo "  --kernel-only"
+            echo "  --only NAME|GLOB         deploy just the matching files (repeatable)"
             echo "  --no-userspace"
             echo "  --create-backup-files"
             echo "  --replace-dropbear"
@@ -74,7 +84,8 @@ while [ $# -gt 0 ]; do
 done
 TARGET="${TARGET:-root@10.43.112.72}"
 KEY="${HOME}/.ssh/zaurus_ed25519"
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new"
+SSH_CONTROL="${TMPDIR:-/tmp}/piko-deploy-%r@%h:%p"
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o ControlPath=$SSH_CONTROL -o ControlPersist=120"
 if [ -n "$ADAPTER" ]; then
     SSH_OPTS="$SSH_OPTS -B $ADAPTER"
 fi
@@ -176,11 +187,48 @@ manifest_push() {
     fi
 }
 
+DEFERRED=""
+
+defer() {
+    DEFERRED="$DEFERRED
+$1"
+}
+
+flush_deferred() {
+    if [ -n "$DEFERRED" ]; then
+        echo "==> applying deferred permissions in one pass"
+        ssh_do "$(printf '%s\n' "$DEFERRED" | sed '/^$/d; s/$/ 2>\/dev\/null || true/')"
+        DEFERRED=""
+    fi
+}
+
+wants() {
+    if [ -z "$ONLY" ]; then
+        return 0
+    fi
+    for pattern in $ONLY; do
+        case "$1" in $pattern) return 0 ;; esac
+        case "$2" in $pattern) return 0 ;; esac
+    done
+    return 1
+}
+
 send_file() {
     local_path="$1"
     remote_path="$2"
     name="$(basename "$remote_path")"
+
+    if [ "$remote_path" != "/usr/bin/md5sum" ] && ! wants "$name" "$remote_path"; then
+        return
+    fi
+
+    remote_dir="$(dirname "$remote_path")"
+    if [ "$remote_dir" != "/" ]; then
+        ssh_do "mkdir -p '$remote_dir'"
+    fi
+
     local_size=$(wc -c < "$local_path")
+    local_mode="$(stat -c %a "$local_path")"
     chunk_dir="$STAGE/$name.chunks"
     remote_chunk_dir="$REMOTE_STAGE/$name.chunks"
     file_attempt=1
@@ -276,18 +324,20 @@ send_file() {
     if [ "$CREATE_BACKUP_FILES" -eq 1 ]; then
         ssh_do "
             set -e
+            chmod '$local_mode' '$remote_new'
+            rm -rf '$remote_chunk_dir'
             if [ -f '$remote_path' ]; then
                 cp '$remote_path' '$remote_path.bak'
             fi
             mv '$remote_new' '$remote_path'
-            rm -rf '$remote_chunk_dir'
         "
         echo "==> $name: deployed to $remote_path (previous copy at $remote_path.bak)"
     else
         ssh_do "
             set -e
-            mv '$remote_new' '$remote_path'
+            chmod '$local_mode' '$remote_new'
             rm -rf '$remote_chunk_dir'
+            mv '$remote_new' '$remote_path'
         "
         echo "==> $name: deployed to $remote_path"
     fi
@@ -312,7 +362,10 @@ ssh_do "mount '$CARD_MNT' 2>/dev/null || true"
 if ssh_do "grep -q ' $CARD_MNT ' /proc/mounts && echo yes || echo no" | grep -q yes; then
     REMOTE_STAGE="$CARD_TMP"
     X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-$CARD_TMP/x11-payload.tar}"
-    echo "==> staging transfers on the card ($REMOTE_STAGE)"
+    if [ -n "$ONLY" ]; then
+    echo "==> filtered deploy:$ONLY"
+fi
+echo "==> staging transfers on the card ($REMOTE_STAGE)"
 else
     X11_PAYLOAD_REMOTE="${X11_PAYLOAD_REMOTE:-/tmp/x11-payload.tar}"
     echo "==> no card at $CARD_MNT -- staging on the root ($REMOTE_STAGE)" >&2
@@ -335,7 +388,7 @@ fi
 MD5SUM_BIN="$REPO/build/target/bin/md5sum"
 if [ -f "$MD5SUM_BIN" ] && [ -n "$MD5SUM_LOCAL" ]; then
     send_file "$MD5SUM_BIN" "/usr/bin/md5sum"
-    ssh_do "chmod 0755 /usr/bin/md5sum" || true
+    defer "chmod 0755 /usr/bin/md5sum" || true
 fi
 if [ "$(ssh_do "if [ -x /usr/bin/md5sum ]; then echo 1; else echo 0; fi")" = "1" ]; then
     HAVE_REMOTE_MD5=1
@@ -375,7 +428,6 @@ for m in $MODULES; do
         exit 1
     fi
     b="$(basename "$m")"
-    ssh_do "mkdir -p '/lib/modules/$KVER_LOCAL/zaurus-audio'"
     send_file "$m" "/lib/modules/$KVER_LOCAL/zaurus-audio/$b"
 done
 
@@ -386,7 +438,6 @@ for relpath in $WIFI_MODULES; do
         exit 1
     fi
     remote_path="/lib/modules/$KVER_LOCAL/$relpath"
-    ssh_do "mkdir -p '$(dirname "$remote_path")'"
     send_file "$local_path" "$remote_path"
 done
 
@@ -397,7 +448,6 @@ for relpath in $SD_MODULES $NAND_MODULES; do
         exit 1
     fi
     remote_path="/lib/modules/$KVER_LOCAL/$relpath"
-    ssh_do "mkdir -p '$(dirname "$remote_path")'"
     send_file "$local_path" "$remote_path"
 done
 
@@ -419,46 +469,46 @@ for rel in $(cd "$REPO/rootfs" && find . -type f | sed 's#^\./##' | sort); do
     fi
     send_file "$REPO/rootfs/$rel" "/$rel"
 done
-ssh_do "chmod 0755 $(cd "$REPO/rootfs" && find . -type f -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
-ssh_do "chmod 0644 $(cd "$REPO/rootfs" && find . -type f ! -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
+defer "chmod 0755 $(cd "$REPO/rootfs" && find . -type f -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
+defer "chmod 0644 $(cd "$REPO/rootfs" && find . -type f ! -perm -100 | sed 's#^\.##' | tr '\n' ' ')"
 
 if [ -f "$REPO/build/target/bin/brightd" ]; then
     send_file "$REPO/build/target/bin/brightd" "/usr/sbin/brightd"
-    ssh_do "chmod 0755 /usr/sbin/brightd"
+    defer "chmod 0755 /usr/sbin/brightd"
 else
     echo "==> skipping brightd (not built -- run tools/userspace/build-userspace.sh)"
 fi
 
 if [ -f "$REPO/build/target/bin/piko-splash" ]; then
     send_file "$REPO/build/target/bin/piko-splash" "/usr/sbin/piko-splash"
-    ssh_do "chmod 0755 /usr/sbin/piko-splash"
+    defer "chmod 0755 /usr/sbin/piko-splash"
 else
     echo "==> skipping piko-splash (not built -- run tools/userspace/build-userspace.sh)"
 fi
 
 if [ -f "$REPO/build/target/bin/mhz" ]; then
     send_file "$REPO/build/target/bin/mhz" "/usr/sbin/mhz"
-    ssh_do "chmod 0755 /usr/sbin/mhz"
+    defer "chmod 0755 /usr/sbin/mhz"
 else
     echo "==> skipping mhz (not built -- run tools/userspace/build-userspace.sh)"
 fi
 if [ -f "$REPO/build/target/bin/flipd" ]; then
     send_file "$REPO/build/target/bin/flipd" "/usr/sbin/flipd"
-    ssh_do "chmod 0755 /usr/sbin/flipd"
+    defer "chmod 0755 /usr/sbin/flipd"
 else
     echo "==> skipping flipd (not built -- run tools/userspace/build-userspace.sh)"
 fi
 for clock_tool in hwclock ntpsync; do
     if [ -f "$REPO/build/target/bin/$clock_tool" ]; then
         send_file "$REPO/build/target/bin/$clock_tool" "/usr/sbin/$clock_tool"
-        ssh_do "chmod 0755 /usr/sbin/$clock_tool"
+        defer "chmod 0755 /usr/sbin/$clock_tool"
     else
         echo "==> skipping $clock_tool (not built -- run tools/userspace/build-userspace.sh)"
     fi
 done
 if [ -x "$REPO/build/target/bin/cardswap" ]; then
     send_file "$REPO/build/target/bin/cardswap" "/usr/sbin/cardswap"
-    ssh_do "chmod 0755 /usr/sbin/cardswap"
+    defer "chmod 0755 /usr/sbin/cardswap"
 else
     echo "==> no built cardswap -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it an inserted card mounts, but gets no swap area"
@@ -466,7 +516,7 @@ fi
 
 if [ -x "$REPO/build/target/bin/zramswap" ]; then
     send_file "$REPO/build/target/bin/zramswap" "/usr/sbin/zramswap"
-    ssh_do "chmod 0755 /usr/sbin/zramswap"
+    defer "chmod 0755 /usr/sbin/zramswap"
 else
     echo "==> no built zramswap -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it the machine falls back to card-only swap"
@@ -487,7 +537,7 @@ usr/bin/dropbearkey:usr/bin/dropbearkey:755"
         mode="${rest#*:}"
         ssh_do "mkdir -p '$(dirname "$dest")'"
         send_file "$src" "$dest"
-        ssh_do "chmod 0$mode '$dest'"
+        defer "chmod 0$mode '$dest'"
     done
 
     if [ "$REPLACE_DROPBEAR" -eq 1 ]; then
@@ -497,7 +547,7 @@ usr/bin/dropbearkey:usr/bin/dropbearkey:755"
         echo "==> replacing $srv_dest (rename-aside, effective next boot)"
         ssh_do "if [ -f '$srv_dest' ]; then mv -f '$srv_dest' '$srv_dest.prev'; fi"
         send_file "$srv_src" "$srv_dest"
-        ssh_do "chmod 0${srv_rest#*:} '$srv_dest'"
+        defer "chmod 0${srv_rest#*:} '$srv_dest'"
         echo "    old server at /usr/sbin/dropbear.prev, effective next boot"
     fi
 elif [ "$KERNEL_ONLY" -eq 0 ]; then
@@ -507,22 +557,63 @@ fi
 if [ -x "$REPO/build/target/usr/bin/opkg" ]; then
     ssh_do "mkdir -p /etc/opkg /var/lib/opkg/info /var/cache/opkg"
     send_file "$REPO/build/target/usr/bin/opkg" "/usr/bin/opkg"
-    ssh_do "chmod 0755 /usr/bin/opkg"
+    defer "chmod 0755 /usr/bin/opkg"
 else
     echo "==> no staged opkg -- skipping (build it with tools/userspace/build-opkg.sh)"
 fi
 
 if [ -x "$REPO/build/target/bin/kill" ]; then
     send_file "$REPO/build/target/bin/kill" "/usr/bin/kill"
-    ssh_do "chmod 0755 /usr/bin/kill"
+    defer "chmod 0755 /usr/bin/kill"
     ssh_do "mkdir -p /usr/local/bin && ln -sf /usr/bin/kill /usr/local/bin/kill"
+fi
+
+for lib in libpikovideo.so.1 libpikorom.so.1; do
+    if [ -f "$REPO/build/target/usr/lib/$lib" ]; then
+        send_file "$REPO/build/target/usr/lib/$lib" "/lib/$lib"
+        defer "chmod 0755 /lib/$lib"
+    else
+        echo "==> no built $lib -- skipping (run tools/userspace/build-pikoemu.sh and build-libpikorom.sh)"
+        echo "    without it pikoemu and piko-sync-server will not start"
+    fi
+done
+
+if [ -x "$REPO/build/target/bin/pikoemu" ]; then
+    send_file "$REPO/build/target/bin/pikoemu" "/usr/local/bin/pikoemu"
+    defer "chmod 0755 /usr/local/bin/pikoemu"
+else
+    echo "==> no built pikoemu -- skipping (run tools/userspace/build-pikoemu.sh)"
+fi
+
+UI_STAGE="$REPO/build/stage-ui/usr/local/share/piko/ui"
+if [ -f "$UI_STAGE/notify.pkui" ]; then
+    ssh_do "mkdir -p /usr/local/share/piko/ui"
+    for f in "$UI_STAGE"/*; do
+        send_file "$f" "/usr/local/share/piko/ui/$(basename "$f")"
+    done
+    defer "chmod 0644 /usr/local/share/piko/ui/*"
+else
+    echo "==> no baked pikoemu ui -- skipping (tools/scripts/ui-bake.js, font-to-pkfn.js)"
+    echo "    without it pikoemu draws no notifications"
+fi
+
+BEZEL_STAGE="$REPO/build/stage-bezels/usr/local/.zaurus/bezels"
+if [ -d "$BEZEL_STAGE" ]; then
+    ssh_do "mkdir -p /usr/local/.zaurus/bezels"
+    for f in "$BEZEL_STAGE"/*.pkbz; do
+        [ -f "$f" ] || continue
+        send_file "$f" "/usr/local/.zaurus/bezels/$(basename "$f")"
+    done
+    defer "chmod 0644 /usr/local/.zaurus/bezels/*.pkbz"
+else
+    echo "==> no baked bezels -- skipping (run tools/userspace/build-bezels.sh)"
 fi
 
 if [ -x "$REPO/build/target/bin/piko-sync-server" ]; then
     echo "==> piko-sync-server (stopping it first -- it cannot replace itself)"
     ssh_do "for p in \$(ps | grep '[p]iko-sync-server' | while read a b; do echo \$a; done); do /usr/local/bin/kill -15 \$p 2>/dev/null; done; sleep 1" || true
     send_file "$REPO/build/target/bin/piko-sync-server" "/usr/bin/piko-sync-server"
-    ssh_do "chmod 0755 /usr/bin/piko-sync-server"
+    defer "chmod 0755 /usr/bin/piko-sync-server"
     if [ -f "$REPO/userspace/desktop/piko-sync-server.desktop" ]; then
         send_file "$REPO/userspace/desktop/piko-sync-server.desktop" "/usr/share/applications/piko-sync-server.desktop"
     fi
@@ -535,7 +626,7 @@ fi
 
 if [ -x "$REPO/build/target/bin/pkillx" ]; then
     send_file "$REPO/build/target/bin/pkillx" "/usr/sbin/pkillx"
-    ssh_do "chmod 0755 /usr/sbin/pkillx"
+    defer "chmod 0755 /usr/sbin/pkillx"
 else
     echo "==> no built pkillx -- skipping (run tools/userspace/build-userspace.sh)"
     echo "    without it /usr/sbin/gototty is a no-op: 'pkillx: not found'"
@@ -543,14 +634,14 @@ fi
 
 if [ -x "$REPO/build/target/bin/vol" ]; then
     send_file "$REPO/build/target/bin/vol" "/usr/sbin/vol"
-    ssh_do "chmod 0755 /usr/sbin/vol"
+    defer "chmod 0755 /usr/sbin/vol"
 else
     echo "==> no built vol -- skipping (run tools/userspace/build-userspace.sh)"
 fi
 
 if [ -x "$REPO/build/target/bin/fbtext" ]; then
     send_file "$REPO/build/target/bin/fbtext" "/usr/sbin/fbtext"
-    ssh_do "chmod 0755 /usr/sbin/fbtext"
+    defer "chmod 0755 /usr/sbin/fbtext"
 else
     echo "==> no built fbtext -- skipping (run tools/userspace/build-userspace.sh)"
 fi
@@ -602,14 +693,14 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
             for b in bin/aplay bin/amixer sbin/alsactl; do
                 [ -f "$ALSA_STAGE/usr/$b" ] || continue
                 send_file "$ALSA_STAGE/usr/$b" "/usr/$b"
-                ssh_do "chmod 0755 /usr/$b"
+                defer "chmod 0755 /usr/$b"
             done
         fi
         if [ -n "$SDL_SO_REAL" ]; then
             if [ -f "$TCROOT/lib/ld-uClibc-1.0.54.so" ] && [ -f "$TCROOT/lib/libuClibc-1.0.54.so" ]; then
                 send_file "$TCROOT/lib/ld-uClibc-1.0.54.so" "/lib/ld-uClibc-1.0.54.so"
                 send_file "$TCROOT/lib/libuClibc-1.0.54.so" "/lib/libuClibc-1.0.54.so"
-                ssh_do "chmod 0755 /lib/ld-uClibc-1.0.54.so /lib/libuClibc-1.0.54.so"
+                defer "chmod 0755 /lib/ld-uClibc-1.0.54.so /lib/libuClibc-1.0.54.so"
                 ssh_do "
                     set -e
                     ln -sf ld-uClibc-1.0.54.so /lib/ld-uClibc.so.1
@@ -635,21 +726,23 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
             if [ -f "$PHONEME_HOME/bin/runMidlet" ]; then
                 ssh_do "mkdir -p /usr/local/lib/phoneme/bin"
                 send_file "$PHONEME_HOME/bin/runMidlet" "/usr/local/lib/phoneme/bin/runMidlet"
-                ssh_do "chmod 0755 /usr/local/lib/phoneme/bin/runMidlet"
-                tar -C "$PHONEME_HOME" -cf "$STAGE/phoneme-data.tar" lib appdb
-                send_file "$STAGE/phoneme-data.tar" "$CARD_TMP/phoneme-data.tar"
-                ssh_do "/usr/local/bin/untar '$CARD_TMP/phoneme-data.tar' /usr/local/lib/phoneme && rm -f '$CARD_TMP/phoneme-data.tar'"
+                defer "chmod 0755 /usr/local/lib/phoneme/bin/runMidlet"
+                if wants "phoneme-data.tar" "$CARD_TMP/phoneme-data.tar"; then
+                    tar -C "$PHONEME_HOME" -cf "$STAGE/phoneme-data.tar" lib appdb
+                    send_file "$STAGE/phoneme-data.tar" "$CARD_TMP/phoneme-data.tar"
+                    ssh_do "/usr/local/bin/untar '$CARD_TMP/phoneme-data.tar' /usr/local/lib/phoneme && rm -f '$CARD_TMP/phoneme-data.tar'"
+                fi
                 send_file "$REPO/userspace/src/phoneme-run" "/usr/local/bin/phoneme-run"
-                ssh_do "chmod 0755 /usr/local/bin/phoneme-run"
+                defer "chmod 0755 /usr/local/bin/phoneme-run"
             fi
 
             if [ -f "$SDL_STAGE/usr/bin/sdltest" ]; then
                 send_file "$SDL_STAGE/usr/bin/sdltest" "/usr/bin/sdltest"
-                ssh_do "chmod 0755 /usr/bin/sdltest"
+                defer "chmod 0755 /usr/bin/sdltest"
             fi
             if [ -f "$SDL_STAGE/usr/bin/pikalibrate" ]; then
                 send_file "$SDL_STAGE/usr/bin/pikalibrate" "/usr/bin/pikalibrate"
-                ssh_do "chmod 0755 /usr/bin/pikalibrate"
+                defer "chmod 0755 /usr/bin/pikalibrate"
             fi
         fi
         if [ -f "$MPLAYER_STAGE/usr/bin/mplayer" ]; then
@@ -659,14 +752,14 @@ if [ "$NO_USERSPACE" -eq 0 ] && [ -d "$MPLAYER_STAGE" -o -d "$ALSA_STAGE" -o -d 
                 if ssh_do "grep -q ' $CARD_MNT ' /proc/mounts && echo yes || echo no" | grep -q yes; then
                     ssh_do "mkdir -p '$(dirname "$MPLAYER_DEST")'"
                     send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
-                    ssh_do "chmod 0755 '$MPLAYER_DEST'"
+                    defer "chmod 0755 '$MPLAYER_DEST'"
                 else
                     echo "==> no card at $CARD_MNT -- SKIPPING MPlayer (set MPLAYER_DEST to force)"
                 fi
                 ;;
             *)
                 send_file "$MPLAYER_STAGE/usr/bin/mplayer" "$MPLAYER_DEST"
-                ssh_do "chmod 0755 '$MPLAYER_DEST'"
+                defer "chmod 0755 '$MPLAYER_DEST'"
                 ;;
             esac
         fi
@@ -676,8 +769,14 @@ fi
 ssh_do "rm -rf '$REMOTE_STAGE'"
 
 X11_PAYLOAD="${X11_PAYLOAD:-/tmp/matchbox-payload.tar}"
-if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ]; then
+if [ "$KERNEL_ONLY" -eq 0 ] && [ -f "$X11_PAYLOAD" ] \
+   && wants "x11-payload.tar" "$X11_PAYLOAD_REMOTE"; then
     echo "==> X11/Matchbox payload ($(wc -c < "$X11_PAYLOAD") bytes)"
+    if [ -f "$REPO/build/target/bin/untar" ]; then
+        send_file "$REPO/build/target/bin/untar" "/usr/local/bin/untar"
+        defer "chmod 0755 /usr/local/bin/untar"
+    fi
+
     if [ "$(ssh_do "if [ -x /usr/local/bin/untar ]; then echo 1; else echo 0; fi")" != "1" ]; then
         echo "FAILED: no /usr/local/bin/untar on the device" >&2
         exit 1
@@ -695,4 +794,5 @@ fi
 manifest_push
 
 echo ""
+flush_deferred
 echo "deployed, not rebooted: ssh -i $KEY $TARGET reboot"

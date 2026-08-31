@@ -930,7 +930,7 @@ static int pullup(struct pxa25x_udc *udc)
 	if (is_active) {
 		if (!udc->active) {
 			udc->active = 1;
-			clk_enable(udc->clk);
+			clk_prepare_enable(udc->clk);
 			udc_enable(udc);
 		}
 	} else {
@@ -942,7 +942,7 @@ static int pullup(struct pxa25x_udc *udc)
 				stop_activity(udc, udc->driver);
 			}
 			udc_disable(udc);
-			clk_disable(udc->clk);
+			clk_disable_unprepare(udc->clk);
 			udc->active = 0;
 		}
 
@@ -1978,7 +1978,7 @@ static int pxa25x_udc_probe(struct platform_device *pdev)
 	udc_disable(dev);
 	udc_reinit(dev);
 
-	dev->vbus = 0;
+	dev->vbus = IS_ERR_OR_NULL(dev->transceiver);
 
 	retval = devm_request_irq(&pdev->dev, irq, pxa25x_udc_irq, 0,
 				  driver_name, dev);

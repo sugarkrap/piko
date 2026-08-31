@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -17,6 +18,7 @@
 
 #include "../piko-sync/protocol.h"
 #include "../piko-sync/net_io.h"
+#include "../piko-sync/websocket.h"
 #include "manifest.h"
 
 using namespace piko_sync;
@@ -47,10 +49,60 @@ static bool get_interface_address(const std::string &iface, struct in_addr &out)
     return found;
 }
 
-static int connect_blocking(std::string &error)
+struct Conn {
+    int fd;
+    WsReader ws;
+    FrameReader frames;
+    Conn() : fd(-1) { ws.expect_masked(false); }
+};
+
+static void close_conn(Conn &c)
+{
+    if (c.fd < 0)
+        return;
+    ws_send_control(c.fd, WS_CLOSE, std::string("\x03\xe8", 2), true);
+    close(c.fd);
+    c.fd = -1;
+}
+
+static bool ws_handshake(int fd, std::string &leftover, std::string &error)
+{
+    std::string key = ws_random_key();
+    std::string req = ws_request(g_host, g_port, key);
+    if (!write_all(fd, req.data(), req.size())) {
+        error = "sending the WebSocket upgrade failed";
+        return false;
+    }
+
+    std::string head;
+    for (;;) {
+        size_t end = head.find("\r\n\r\n");
+        if (end != std::string::npos) {
+            leftover = head.substr(end + 4);
+            head.erase(end + 4);
+            break;
+        }
+        if (head.size() > WS_MAX_HANDSHAKE) {
+            error = "the device sent an oversized handshake response";
+            return false;
+        }
+        char buf[2048];
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n <= 0) {
+            error = "the device closed the connection during the WebSocket handshake"
+                    " (is its piko-sync-server new enough to speak WebSocket?)";
+            return false;
+        }
+        head.append(buf, static_cast<size_t>(n));
+    }
+
+    return ws_check_response(head, key, error);
+}
+
+static bool connect_blocking(Conn &c, std::string &error)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { error = "socket() failed"; return -1; }
+    if (fd < 0) { error = "socket() failed"; return false; }
 
     if (!g_adapter.empty()) {
         struct in_addr local_addr;
@@ -79,43 +131,75 @@ static int connect_blocking(std::string &error)
     if (inet_pton(AF_INET, g_host.c_str(), &addr.sin_addr) != 1) {
         error = "invalid device address: " + g_host;
         close(fd);
-        return -1;
+        return false;
     }
 
     if (connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
         error = std::string("connect to ") + g_host + " failed: " + strerror(errno)
                 + " (is piko-sync-server open on the device?)";
         close(fd);
-        return -1;
+        return false;
     }
-    return fd;
+
+    std::string leftover;
+    if (!ws_handshake(fd, leftover, error)) {
+        close(fd);
+        return false;
+    }
+
+    c.fd = fd;
+    if (!leftover.empty())
+        c.ws.feed(leftover.data(), leftover.size());
+    return true;
 }
 
-static bool recv_frame_blocking(int fd, FrameReader &reader, uint32_t &type, std::string &payload)
+static bool send_msg(Conn &c, uint32_t type, const std::string &payload)
+{
+    return c.fd >= 0 && ws_send_frame_blocking(c.fd, type, payload, true);
+}
+
+static bool recv_msg(Conn &c, uint32_t &type, std::string &payload)
 {
     for (;;) {
-        FrameReader::Result r = reader.next(type, payload);
-        if (r == FrameReader::GOT_FRAME)
+        FrameReader::Result fr = c.frames.next(type, payload);
+        if (fr == FrameReader::GOT_FRAME)
             return true;
-        if (r == FrameReader::DESYNC)
+        if (fr == FrameReader::DESYNC)
             return false;
+
+        std::string message;
+        WsReader::Result wr = c.ws.next(message);
+        if (wr == WsReader::GOT_MESSAGE) {
+            c.frames.feed(message.data(), message.size());
+            continue;
+        }
+        if (wr == WsReader::GOT_PING) {
+            if (!ws_send_control(c.fd, WS_PONG, message, true))
+                return false;
+            continue;
+        }
+        if (wr == WsReader::GOT_PONG)
+            continue;
+        if (wr == WsReader::GOT_CLOSE || wr == WsReader::PROTOCOL_ERROR)
+            return false;
+
         char buf[16384];
-        ssize_t n = read(fd, buf, sizeof(buf));
+        ssize_t n = read(c.fd, buf, sizeof(buf));
         if (n <= 0)
             return false;
-        reader.feed(buf, static_cast<size_t>(n));
+        c.ws.feed(buf, static_cast<size_t>(n));
     }
 }
 
-static bool do_hello(int fd, FrameReader &reader, std::string &error, HelloAckMsg *media = 0)
+static bool do_hello(Conn &c, std::string &error, HelloAckMsg *media = 0)
 {
     HelloMsg h;
     h.version = PROTO_VERSION;
-    if (!send_frame_blocking(fd, MSG_HELLO, encode(h))) { error = "send HELLO failed"; return false; }
+    if (!send_msg(c, MSG_HELLO, encode(h))) { error = "send HELLO failed"; return false; }
 
     uint32_t type;
     std::string payload;
-    if (!recv_frame_blocking(fd, reader, type, payload)) { error = "no HELLO_ACK"; return false; }
+    if (!recv_msg(c, type, payload)) { error = "no HELLO_ACK"; return false; }
     if (type == MSG_ERROR) {
         ErrorMsg em;
         decode_error(payload, em);
@@ -136,17 +220,16 @@ static bool do_hello(int fd, FrameReader &reader, std::string &error, HelloAckMs
 static bool simple_request(uint32_t req_type, const std::string &req_payload,
                             uint32_t expect_ack_type, std::string &resp_payload, std::string &error)
 {
-    int fd = connect_blocking(error);
-    if (fd < 0)
+    Conn c;
+    if (!connect_blocking(c, error))
         return false;
 
-    FrameReader reader;
-    if (!do_hello(fd, reader, error)) { close(fd); return false; }
-    if (!send_frame_blocking(fd, req_type, req_payload)) { close(fd); error = "send failed"; return false; }
+    if (!do_hello(c, error)) { close_conn(c); return false; }
+    if (!send_msg(c, req_type, req_payload)) { close_conn(c); error = "send failed"; return false; }
 
     uint32_t type;
-    if (!recv_frame_blocking(fd, reader, type, resp_payload)) { close(fd); error = "no response"; return false; }
-    close(fd);
+    if (!recv_msg(c, type, resp_payload)) { close_conn(c); error = "no response"; return false; }
+    close_conn(c);
 
     if (type == MSG_ERROR) {
         ErrorMsg em;
@@ -195,10 +278,9 @@ static bool send_put_file(const Step &s, std::string &error)
             sleep(static_cast<unsigned>(delay));
         }
 
-        int fd = connect_blocking(error);
-        if (fd < 0) continue;
-        FrameReader reader;
-        if (!do_hello(fd, reader, error)) { close(fd); continue; }
+        Conn c;
+        if (!connect_blocking(c, error)) continue;
+        if (!do_hello(c, error)) { close_conn(c); continue; }
 
         PutOfferMsg po;
         po.path = s.remote_path;
@@ -208,26 +290,26 @@ static bool send_put_file(const Step &s, std::string &error)
         po.crc32 = crc;
         po.backup = s.backup;
         po.staging = g_staging;
-        if (!send_frame_blocking(fd, MSG_PUT_OFFER, encode(po))) { close(fd); continue; }
+        if (!send_msg(c, MSG_PUT_OFFER, encode(po))) { close_conn(c); continue; }
 
         uint32_t type;
         std::string payload;
-        if (!recv_frame_blocking(fd, reader, type, payload)) { close(fd); continue; }
+        if (!recv_msg(c, type, payload)) { close_conn(c); continue; }
         if (type == MSG_ERROR) {
             ErrorMsg em; decode_error(payload, em);
-            error = em.message; close(fd); return false;
+            error = em.message; close_conn(c); return false;
         }
-        if (type != MSG_PUT_OFFER_ACK) { close(fd); continue; }
+        if (type != MSG_PUT_OFFER_ACK) { close_conn(c); continue; }
         PutOfferAckMsg ack;
-        if (!decode_put_offer_ack(payload, ack)) { close(fd); continue; }
+        if (!decode_put_offer_ack(payload, ack)) { close_conn(c); continue; }
 
-        if (ack.outcome == PUT_REJECTED) { error = ack.reason; close(fd); return false; }
-        if (ack.outcome == PUT_ALREADY_SATISFIED) { close(fd); return true; }
+        if (ack.outcome == PUT_REJECTED) { error = ack.reason; close_conn(c); return false; }
+        if (ack.outcome == PUT_ALREADY_SATISFIED) { close_conn(c); return true; }
 
         FILE *f = fopen(s.local_path.c_str(), "rb");
-        if (!f) { error = "cannot reopen " + s.local_path; close(fd); return false; }
+        if (!f) { error = "cannot reopen " + s.local_path; close_conn(c); return false; }
         if (fseek(f, static_cast<long>(ack.resume_offset), SEEK_SET) != 0) {
-            fclose(f); close(fd); continue;
+            fclose(f); close_conn(c); continue;
         }
 
         uint64_t offset = ack.resume_offset;
@@ -240,9 +322,9 @@ static bool send_put_file(const Step &s, std::string &error)
             DataChunkMsg dc;
             dc.offset = offset;
             dc.data.assign(buf, n);
-            if (!send_frame_blocking(fd, MSG_DATA_CHUNK, encode(dc))) { dropped = true; break; }
+            if (!send_msg(c, MSG_DATA_CHUNK, encode(dc))) { dropped = true; break; }
 
-            if (!recv_frame_blocking(fd, reader, type, payload) || type != MSG_CHUNK_ACK) {
+            if (!recv_msg(c, type, payload) || type != MSG_CHUNK_ACK) {
                 dropped = true;
                 break;
             }
@@ -252,17 +334,17 @@ static bool send_put_file(const Step &s, std::string &error)
         }
         fclose(f);
 
-        if (dropped) { close(fd); continue; }
+        if (dropped) { close_conn(c); continue; }
 
         FileCompleteMsg fc;
         fc.crc32 = crc;
-        if (!send_frame_blocking(fd, MSG_FILE_COMPLETE, encode(fc))) { close(fd); continue; }
-        if (!recv_frame_blocking(fd, reader, type, payload) || type != MSG_FILE_COMPLETE_ACK) {
-            close(fd); continue;
+        if (!send_msg(c, MSG_FILE_COMPLETE, encode(fc))) { close_conn(c); continue; }
+        if (!recv_msg(c, type, payload) || type != MSG_FILE_COMPLETE_ACK) {
+            close_conn(c); continue;
         }
         FileCompleteAckMsg fca;
-        if (!decode_file_complete_ack(payload, fca)) { close(fd); continue; }
-        close(fd);
+        if (!decode_file_complete_ack(payload, fca)) { close_conn(c); continue; }
+        close_conn(c);
 
         if (fca.ok)
             return true;
@@ -487,13 +569,12 @@ static const int PROBE_ATTEMPTS = 4;
 
 static bool resolve_media(DeployContext &ctx, std::string &error)
 {
-    int fd = connect_blocking(error);
-    if (fd < 0)
+    Conn c;
+    if (!connect_blocking(c, error))
         return false;
-    FrameReader reader;
     HelloAckMsg media;
-    bool ok = do_hello(fd, reader, error, &media);
-    close(fd);
+    bool ok = do_hello(c, error, &media);
+    close_conn(c);
     if (!ok)
         return false;
     if (media.kernel.empty()) {
@@ -513,28 +594,26 @@ static bool resolve_media(DeployContext &ctx, std::string &error)
 static int run_probe()
 {
     std::string error;
-    int fd = -1;
+    Conn c;
     for (int attempt = 0; attempt < PROBE_ATTEMPTS; attempt++) {
         if (attempt > 0) {
             fprintf(stderr, "  (retrying, attempt %d/%d)\n", attempt + 1, PROBE_ATTEMPTS);
             sleep(2);
         }
-        fd = connect_blocking(error);
-        if (fd >= 0)
+        if (connect_blocking(c, error))
             break;
     }
-    if (fd < 0) {
+    if (c.fd < 0) {
         fprintf(stderr, "FAILED: %s\n", error.c_str());
         return 1;
     }
-    FrameReader reader;
     HelloAckMsg media;
-    if (!do_hello(fd, reader, error, &media)) {
+    if (!do_hello(c, error, &media)) {
         fprintf(stderr, "FAILED: %s\n", error.c_str());
-        close(fd);
+        close_conn(c);
         return 1;
     }
-    close(fd);
+    close_conn(c);
     printf("%s:%d is reachable and speaking the piko-sync protocol.\n", g_host.c_str(), g_port);
     if (media.kernel.empty()) {
         printf("  it reports no medium -- an older server, or no readable /etc/piko-media;\n");
@@ -551,6 +630,7 @@ static int run_probe()
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
+    srand(static_cast<unsigned>(time(0)) ^ static_cast<unsigned>(getpid()));
 
     DeployContext ctx;
     char cwd[4096];

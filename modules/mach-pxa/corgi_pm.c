@@ -124,7 +124,7 @@ static unsigned long corgipm_read_devdata(int type)
 {
 	switch(type) {
 	case SHARPSL_STATUS_ACIN: {
-		return !gpio_get_value(CORGI_GPIO_AC_IN);
+		return gpio_get_value(CORGI_GPIO_AC_IN);
 	}
 	case SHARPSL_STATUS_LOCK:
 		return gpio_get_value(sharpsl_pm.machinfo->gpio_batlock);

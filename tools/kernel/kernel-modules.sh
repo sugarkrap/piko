@@ -21,10 +21,6 @@ sound/core/oss/snd-pcm-oss.ko
 WIFI_MODULES="
 kernel/drivers/net/wireless/intersil/hostap/hostap.ko
 kernel/drivers/net/wireless/intersil/hostap/hostap_cs.ko
-kernel/net/wireless/lib80211.ko
-kernel/net/wireless/lib80211_crypt_wep.ko
-kernel/net/wireless/lib80211_crypt_ccmp.ko
-kernel/net/wireless/lib80211_crypt_tkip.ko
 kernel/lib/crypto/libarc4.ko
 "
 
@@ -37,4 +33,8 @@ kernel/drivers/mtd/nand/raw/sharpsl.ko
 
 CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
+"
+
+USB_MODULES="
+kernel/drivers/usb/gadget/udc/pxa25x_udc.ko
 "

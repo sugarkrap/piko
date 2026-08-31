@@ -151,6 +151,23 @@ fi
 
 echo "==> using cross-compiler prefix: $CROSS_COMPILE"
 
+STAGE2_CPIO="$REPO/build/initramfs/initramfs-stage2-built.cpio.gz"
+if [ ! -f "$STAGE2_CPIO" ]; then
+    echo "==> building the stage-2 initramfs"
+    "$REPO/tools/kernel/build-initramfs.sh" --stage2
+fi
+CUR_CPIO="$(sed -n 's/^CONFIG_INITRAMFS_SOURCE="\(.*\)"$/\1/p' "$KERNEL_DIR/.config" 2>/dev/null)"
+if [ "$CUR_CPIO" != "$STAGE2_CPIO" ]; then
+    echo "==> pointing CONFIG_INITRAMFS_SOURCE at the stage-2 initramfs"
+    ( cd "$KERNEL_DIR" && ./scripts/config --set-str CONFIG_INITRAMFS_SOURCE "$STAGE2_CPIO" )
+    ( cd "$KERNEL_DIR" && make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" olddefconfig >/dev/null )
+fi
+if [ ! -s "$STAGE2_CPIO" ]; then
+    echo "FAILED: no stage-2 initramfs at $STAGE2_CPIO -- a kernel built now would" >&2
+    echo "        panic with 'Requested init /init failed' after kexec." >&2
+    exit 1
+fi
+
 if [ "$KERNEL_ONLY" -eq 1 ]; then
     BUILD_TARGETS="zImage"
     echo "==> --kernel-only: building zImage only (skipping modules) with -j$JOBS (full log: $BUILD_LOG)..."

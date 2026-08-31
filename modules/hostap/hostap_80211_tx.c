@@ -1,24 +1,9 @@
-#include <linux/slab.h>
-#include <linux/export.h>
-#include <linux/etherdevice.h>
-
-#include "hostap_80211.h"
-#include "hostap_common.h"
-#include "hostap_wlan.h"
-#include "hostap.h"
-#include "hostap_ap.h"
-
-static unsigned char rfc1042_header[] =
-{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00 };
-static unsigned char bridge_tunnel_header[] =
-{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0xf8 };
-
 void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 {
-	struct ieee80211_hdr *hdr;
+	struct hostap_ieee80211_hdr *hdr;
 	u16 fc;
 
-	hdr = (struct ieee80211_hdr *) skb->data;
+	hdr = (struct hostap_ieee80211_hdr *) skb->data;
 
 	printk(KERN_DEBUG "%s: TX len=%d jiffies=%ld\n",
 	       name, skb->len, jiffies);
@@ -28,10 +13,9 @@ void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 
 	fc = le16_to_cpu(hdr->frame_control);
 	printk(KERN_DEBUG "   FC=0x%04x (type=%d:%d)%s%s",
-	       fc, (fc & IEEE80211_FCTL_FTYPE) >> 2,
-	       (fc & IEEE80211_FCTL_STYPE) >> 4,
-	       fc & IEEE80211_FCTL_TODS ? " [ToDS]" : "",
-	       fc & IEEE80211_FCTL_FROMDS ? " [FromDS]" : "");
+	       fc, WLAN_FC_GET_TYPE(fc), WLAN_FC_GET_STYPE(fc),
+	       fc & WLAN_FC_TODS ? " [ToDS]" : "",
+	       fc & WLAN_FC_FROMDS ? " [FromDS]" : "");
 
 	if (skb->len < IEEE80211_DATA_HDR3_LEN) {
 		printk("\n");
@@ -41,21 +25,19 @@ void hostap_dump_tx_80211(const char *name, struct sk_buff *skb)
 	printk(" dur=0x%04x seq=0x%04x\n", le16_to_cpu(hdr->duration_id),
 	       le16_to_cpu(hdr->seq_ctrl));
 
-	printk(KERN_DEBUG "   A1=%pM", hdr->addr1);
-	printk(" A2=%pM", hdr->addr2);
-	printk(" A3=%pM", hdr->addr3);
+	printk(KERN_DEBUG "   A1=" MACSTR " A2=" MACSTR " A3=" MACSTR,
+	       MAC2STR(hdr->addr1), MAC2STR(hdr->addr2), MAC2STR(hdr->addr3));
 	if (skb->len >= 30)
-		printk(" A4=%pM", hdr->addr4);
+		printk(" A4=" MACSTR, MAC2STR(hdr->addr4));
 	printk("\n");
 }
 
-netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
-				   struct net_device *dev)
+int hostap_data_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct hostap_interface *iface;
-	local_info_t *local;
+	struct hostap_interface *iface = netdev_priv(dev);
+	local_info_t *local = iface->local;
 	int need_headroom, need_tailroom = 0;
-	struct ieee80211_hdr hdr;
+	struct hostap_ieee80211_hdr hdr;
 	u16 fc, ethertype = 0;
 	enum {
 		WDS_NO = 0, WDS_OWN_FRAME, WDS_COMPLIANT_FRAME
@@ -65,14 +47,11 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 	int to_assoc_ap = 0;
 	struct hostap_skb_tx_data *meta;
 
-	iface = netdev_priv(dev);
-	local = iface->local;
-
 	if (skb->len < ETH_HLEN) {
 		printk(KERN_DEBUG "%s: hostap_data_start_xmit: short skb "
 		       "(len=%d)\n", dev->name, skb->len);
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return 0;
 	}
 
 	if (local->ddev != dev) {
@@ -86,17 +65,19 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 			printk(KERN_DEBUG "%s: prism2_tx: trying to use "
 			       "AP device with Ethernet net dev\n", dev->name);
 			kfree_skb(skb);
-			return NETDEV_TX_OK;
+			return 0;
 		}
 	} else {
 		if (local->iw_mode == IW_MODE_REPEAT) {
 			printk(KERN_DEBUG "%s: prism2_tx: trying to use "
 			       "non-WDS link in Repeater mode\n", dev->name);
 			kfree_skb(skb);
-			return NETDEV_TX_OK;
+			return 0;
 		} else if (local->iw_mode == IW_MODE_INFRA &&
 			   (local->wds_type & HOSTAP_WDS_AP_CLIENT) &&
-			   !ether_addr_equal(skb->data + ETH_ALEN, dev->dev_addr)) {
+			   memcmp(skb->data + ETH_ALEN, dev->dev_addr,
+				  ETH_ALEN) != 0) {
+			
 			use_wds = WDS_COMPLIANT_FRAME;
 		}
 	}
@@ -118,51 +99,51 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 		skip_header_bytes -= 2;
 	}
 
-	fc = IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA;
+	fc = (WLAN_FC_TYPE_DATA << 2) | (WLAN_FC_STYPE_DATA << 4);
 	hdr_len = IEEE80211_DATA_HDR3_LEN;
 
 	if (use_wds != WDS_NO) {
-
+		
 		if (use_wds == WDS_COMPLIANT_FRAME) {
-			fc |= IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS;
-			skb_copy_from_linear_data_offset(skb, ETH_ALEN,
-							 &hdr.addr4, ETH_ALEN);
+			fc |= WLAN_FC_FROMDS | WLAN_FC_TODS;
+			
+			memcpy(&hdr.addr4, skb->data + ETH_ALEN, ETH_ALEN);
 			hdr_len += ETH_ALEN;
 		} else {
-			fc |= IEEE80211_FCTL_TODS;
-
-			skb_copy_from_linear_data_offset(skb, ETH_ALEN,
-							 &hdr.addr4, ETH_ALEN);
+			
+			fc |= WLAN_FC_TODS;
+			
+			memcpy(&hdr.addr4, skb->data + ETH_ALEN, ETH_ALEN);
 			need_tailroom += ETH_ALEN;
 		}
 
 		if ((local->wds_type & HOSTAP_WDS_BROADCAST_RA) &&
-		    is_multicast_ether_addr(skb->data))
-			eth_broadcast_addr(hdr.addr1);
+		    skb->data[0] & 0x01)
+			memset(&hdr.addr1, 0xff, ETH_ALEN);
 		else if (iface->type == HOSTAP_INTERFACE_WDS)
 			memcpy(&hdr.addr1, iface->u.wds.remote_addr,
 			       ETH_ALEN);
 		else
 			memcpy(&hdr.addr1, local->bssid, ETH_ALEN);
 		memcpy(&hdr.addr2, dev->dev_addr, ETH_ALEN);
-		skb_copy_from_linear_data(skb, &hdr.addr3, ETH_ALEN);
+		memcpy(&hdr.addr3, skb->data, ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_MASTER && !to_assoc_ap) {
-		fc |= IEEE80211_FCTL_FROMDS;
-		skb_copy_from_linear_data(skb, &hdr.addr1, ETH_ALEN);
+		fc |= WLAN_FC_FROMDS;
+		
+		memcpy(&hdr.addr1, skb->data, ETH_ALEN);
 		memcpy(&hdr.addr2, dev->dev_addr, ETH_ALEN);
-		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr3,
-						 ETH_ALEN);
+		memcpy(&hdr.addr3, skb->data + ETH_ALEN, ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_INFRA || to_assoc_ap) {
-		fc |= IEEE80211_FCTL_TODS;
+		fc |= WLAN_FC_TODS;
+		
 		memcpy(&hdr.addr1, to_assoc_ap ?
 		       local->assoc_ap_addr : local->bssid, ETH_ALEN);
-		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr2,
-						 ETH_ALEN);
-		skb_copy_from_linear_data(skb, &hdr.addr3, ETH_ALEN);
+		memcpy(&hdr.addr2, skb->data + ETH_ALEN, ETH_ALEN);
+		memcpy(&hdr.addr3, skb->data, ETH_ALEN);
 	} else if (local->iw_mode == IW_MODE_ADHOC) {
-		skb_copy_from_linear_data(skb, &hdr.addr1, ETH_ALEN);
-		skb_copy_from_linear_data_offset(skb, ETH_ALEN, &hdr.addr2,
-						 ETH_ALEN);
+		
+		memcpy(&hdr.addr1, skb->data, ETH_ALEN);
+		memcpy(&hdr.addr2, skb->data + ETH_ALEN, ETH_ALEN);
 		memcpy(&hdr.addr3, local->bssid, ETH_ALEN);
 	}
 
@@ -174,13 +155,13 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 		skb = skb_unshare(skb, GFP_ATOMIC);
 		if (skb == NULL) {
 			iface->stats.tx_dropped++;
-			return NETDEV_TX_OK;
+			return 0;
 		}
 		if (pskb_expand_head(skb, need_headroom, need_tailroom,
 				     GFP_ATOMIC)) {
 			kfree_skb(skb);
 			iface->stats.tx_dropped++;
-			return NETDEV_TX_OK;
+			return 0;
 		}
 	} else if (skb_headroom(skb) < need_headroom) {
 		struct sk_buff *tmp = skb;
@@ -188,13 +169,13 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 		kfree_skb(tmp);
 		if (skb == NULL) {
 			iface->stats.tx_dropped++;
-			return NETDEV_TX_OK;
+			return 0;
 		}
 	} else {
 		skb = skb_unshare(skb, GFP_ATOMIC);
 		if (skb == NULL) {
 			iface->stats.tx_dropped++;
-			return NETDEV_TX_OK;
+			return 0;
 		}
 	}
 
@@ -202,7 +183,7 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 		memcpy(skb_push(skb, encaps_len), encaps_data, encaps_len);
 	memcpy(skb_push(skb, hdr_len), &hdr, hdr_len);
 	if (use_wds == WDS_OWN_FRAME) {
-		skb_put_data(skb, &hdr.addr4, ETH_ALEN);
+		memcpy(skb_put(skb, ETH_ALEN), &hdr.addr4, ETH_ALEN);
 	}
 
 	iface->stats.tx_packets++;
@@ -219,26 +200,22 @@ netdev_tx_t hostap_data_start_xmit(struct sk_buff *skb,
 
 	skb->dev = local->dev;
 	dev_queue_xmit(skb);
-	return NETDEV_TX_OK;
+	return 0;
 }
 
-netdev_tx_t hostap_mgmt_start_xmit(struct sk_buff *skb,
-				   struct net_device *dev)
+int hostap_mgmt_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct hostap_interface *iface;
-	local_info_t *local;
+	struct hostap_interface *iface = netdev_priv(dev);
+	local_info_t *local = iface->local;
 	struct hostap_skb_tx_data *meta;
-	struct ieee80211_hdr *hdr;
+	struct hostap_ieee80211_hdr *hdr;
 	u16 fc;
-
-	iface = netdev_priv(dev);
-	local = iface->local;
 
 	if (skb->len < 10) {
 		printk(KERN_DEBUG "%s: hostap_mgmt_start_xmit: short skb "
 		       "(len=%d)\n", dev->name, skb->len);
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return 0;
 	}
 
 	iface->stats.tx_packets++;
@@ -250,10 +227,10 @@ netdev_tx_t hostap_mgmt_start_xmit(struct sk_buff *skb,
 	meta->iface = iface;
 
 	if (skb->len >= IEEE80211_DATA_HDR3_LEN + sizeof(rfc1042_header) + 2) {
-		hdr = (struct ieee80211_hdr *) skb->data;
+		hdr = (struct hostap_ieee80211_hdr *) skb->data;
 		fc = le16_to_cpu(hdr->frame_control);
-		if (ieee80211_is_data(hdr->frame_control) &&
-		    (fc & IEEE80211_FCTL_STYPE) == IEEE80211_STYPE_DATA) {
+		if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_DATA &&
+		    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_DATA) {
 			u8 *pos = &skb->data[IEEE80211_DATA_HDR3_LEN +
 					     sizeof(rfc1042_header)];
 			meta->ethertype = (pos[0] << 8) | pos[1];
@@ -262,19 +239,17 @@ netdev_tx_t hostap_mgmt_start_xmit(struct sk_buff *skb,
 
 	skb->dev = local->dev;
 	dev_queue_xmit(skb);
-	return NETDEV_TX_OK;
+	return 0;
 }
 
-static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
-					  struct lib80211_crypt_data *crypt)
+struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
+				   struct prism2_crypt_data *crypt)
 {
-	struct hostap_interface *iface;
-	local_info_t *local;
-	struct ieee80211_hdr *hdr;
-	int prefix_len, postfix_len, hdr_len, res;
-
-	iface = netdev_priv(skb->dev);
-	local = iface->local;
+	struct hostap_interface *iface = netdev_priv(skb->dev);
+	local_info_t *local = iface->local;
+	struct hostap_ieee80211_hdr *hdr;
+	u16 fc;
+	int hdr_len, res;
 
 	if (skb->len < IEEE80211_DATA_HDR3_LEN) {
 		kfree_skb(skb);
@@ -282,12 +257,12 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	}
 
 	if (local->tkip_countermeasures &&
-	    strcmp(crypt->ops->name, "TKIP") == 0) {
-		hdr = (struct ieee80211_hdr *) skb->data;
+	    crypt && crypt->ops && strcmp(crypt->ops->name, "TKIP") == 0) {
+		hdr = (struct hostap_ieee80211_hdr *) skb->data;
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "%s: TKIP countermeasures: dropped "
-			       "TX packet to %pM\n",
-			       local->dev->name, hdr->addr1);
+			       "TX packet to " MACSTR "\n",
+			       local->dev->name, MAC2STR(hdr->addr1));
 		}
 		kfree_skb(skb);
 		return NULL;
@@ -297,19 +272,17 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	if (skb == NULL)
 		return NULL;
 
-	prefix_len = crypt->ops->extra_mpdu_prefix_len +
-		crypt->ops->extra_msdu_prefix_len;
-	postfix_len = crypt->ops->extra_mpdu_postfix_len +
-		crypt->ops->extra_msdu_postfix_len;
-	if ((skb_headroom(skb) < prefix_len ||
-	     skb_tailroom(skb) < postfix_len) &&
-	    pskb_expand_head(skb, prefix_len, postfix_len, GFP_ATOMIC)) {
+	if ((skb_headroom(skb) < crypt->ops->extra_prefix_len ||
+	     skb_tailroom(skb) < crypt->ops->extra_postfix_len) &&
+	    pskb_expand_head(skb, crypt->ops->extra_prefix_len,
+			     crypt->ops->extra_postfix_len, GFP_ATOMIC)) {
 		kfree_skb(skb);
 		return NULL;
 	}
 
-	hdr = (struct ieee80211_hdr *) skb->data;
-	hdr_len = hostap_80211_get_hdrlen(hdr->frame_control);
+	hdr = (struct hostap_ieee80211_hdr *) skb->data;
+ 	fc = le16_to_cpu(hdr->frame_control);
+	hdr_len = hostap_80211_get_hdrlen(fc);
 
 	atomic_inc(&crypt->refcnt);
 	res = 0;
@@ -326,21 +299,17 @@ static struct sk_buff * hostap_tx_encrypt(struct sk_buff *skb,
 	return skb;
 }
 
-netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
-				     struct net_device *dev)
+int hostap_master_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct hostap_interface *iface;
-	local_info_t *local;
-	netdev_tx_t ret = NETDEV_TX_BUSY;
+	struct hostap_interface *iface = netdev_priv(dev);
+	local_info_t *local = iface->local;
+	int ret = 1;
 	u16 fc;
 	struct hostap_tx_data tx;
 	ap_tx_ret tx_ret;
 	struct hostap_skb_tx_data *meta;
 	int no_encrypt = 0;
-	struct ieee80211_hdr *hdr;
-
-	iface = netdev_priv(dev);
-	local = iface->local;
+	struct hostap_ieee80211_hdr *hdr;
 
 	tx.skb = skb;
 	tx.sta_ptr = NULL;
@@ -350,13 +319,14 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 		printk(KERN_DEBUG "%s: invalid skb->cb magic (0x%08x, "
 		       "expected 0x%08x)\n",
 		       dev->name, meta->magic, HOSTAP_SKB_TX_DATA_MAGIC);
-		ret = NETDEV_TX_OK;
+		ret = 0;
 		iface->stats.tx_dropped++;
 		goto fail;
 	}
 
 	if (local->host_encrypt) {
-		tx.crypt = local->crypt_info.crypt[local->crypt_info.tx_keyidx];
+		
+		tx.crypt = local->crypt[local->tx_keyidx];
 		tx.host_encrypt = 1;
 	} else {
 		tx.crypt = NULL;
@@ -366,7 +336,7 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 	if (skb->len < 24) {
 		printk(KERN_DEBUG "%s: hostap_master_start_xmit: short skb "
 		       "(len=%d)\n", dev->name, skb->len);
-		ret = NETDEV_TX_OK;
+		ret = 0;
 		iface->stats.tx_dropped++;
 		goto fail;
 	}
@@ -374,14 +344,14 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 	tx_ret = hostap_handle_sta_tx(local, &tx);
 	skb = tx.skb;
 	meta = (struct hostap_skb_tx_data *) skb->cb;
-	hdr = (struct ieee80211_hdr *) skb->data;
-	fc = le16_to_cpu(hdr->frame_control);
+	hdr = (struct hostap_ieee80211_hdr *) skb->data;
+ 	fc = le16_to_cpu(hdr->frame_control);
 	switch (tx_ret) {
 	case AP_TX_CONTINUE:
 		break;
 	case AP_TX_CONTINUE_NOT_AUTHORIZED:
 		if (local->ieee_802_1x &&
-		    ieee80211_is_data(hdr->frame_control) &&
+		    WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_DATA &&
 		    meta->ethertype != ETH_P_PAE &&
 		    !(meta->flags & HOSTAP_TX_FLAGS_WDS)) {
 			printk(KERN_DEBUG "%s: dropped frame to unauthorized "
@@ -389,59 +359,59 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 			       dev->name, meta->ethertype);
 			hostap_dump_tx_80211(dev->name, skb);
 
-			ret = NETDEV_TX_OK;
+			ret = 0; 
 			iface->stats.tx_dropped++;
 			goto fail;
 		}
 		break;
 	case AP_TX_DROP:
-		ret = NETDEV_TX_OK;
+		ret = 0; 
 		iface->stats.tx_dropped++;
 		goto fail;
 	case AP_TX_RETRY:
 		goto fail;
 	case AP_TX_BUFFERED:
-		ret = NETDEV_TX_OK;
+		
+		ret = 0;
 		goto tx_exit;
 	}
 
-	if (((fc & IEEE80211_FCTL_VERS) == BIT(1)) &&
+	if (((fc & WLAN_FC_PVER) == BIT(1)) &&
 	    local->ap && local->ap->tx_callback_idx && meta->tx_cb_idx == 0) {
 		meta->tx_cb_idx = local->ap->tx_callback_idx;
 
-		fc &= ~IEEE80211_FCTL_VERS;
+		fc &= ~WLAN_FC_PVER;
 		hdr->frame_control = cpu_to_le16(fc);
 	}
 
-	if (!ieee80211_is_data(hdr->frame_control)) {
+	if (WLAN_FC_GET_TYPE(fc) != WLAN_FC_TYPE_DATA) {
 		no_encrypt = 1;
 		tx.crypt = NULL;
 	}
 
 	if (local->ieee_802_1x && meta->ethertype == ETH_P_PAE && tx.crypt &&
-	    !(fc & IEEE80211_FCTL_PROTECTED)) {
+	    !(fc & WLAN_FC_ISWEP)) {
 		no_encrypt = 1;
 		PDEBUG(DEBUG_EXTRA2, "%s: TX: IEEE 802.1X - passing "
 		       "unencrypted EAPOL frame\n", dev->name);
-		tx.crypt = NULL;
+		tx.crypt = NULL; 
 	}
 
 	if (tx.crypt && (!tx.crypt->ops || !tx.crypt->ops->encrypt_mpdu))
 		tx.crypt = NULL;
-	else if ((tx.crypt ||
-		 local->crypt_info.crypt[local->crypt_info.tx_keyidx]) &&
-		 !no_encrypt) {
-		fc |= IEEE80211_FCTL_PROTECTED;
+	else if ((tx.crypt || local->crypt[local->tx_keyidx]) && !no_encrypt) {
+		
+		fc |= WLAN_FC_ISWEP;
 		hdr->frame_control = cpu_to_le16(fc);
 	} else if (local->drop_unencrypted &&
-		   ieee80211_is_data(hdr->frame_control) &&
+		   WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_DATA &&
 		   meta->ethertype != ETH_P_PAE) {
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "%s: dropped unencrypted TX data "
 			       "frame (drop_unencrypted=1)\n", dev->name);
 		}
 		iface->stats.tx_dropped++;
-		ret = NETDEV_TX_OK;
+		ret = 0;
 		goto fail;
 	}
 
@@ -450,7 +420,7 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 		if (skb == NULL) {
 			printk(KERN_DEBUG "%s: TX - encryption failed\n",
 			       dev->name);
-			ret = NETDEV_TX_OK;
+			ret = 0;
 			goto fail;
 		}
 		meta = (struct hostap_skb_tx_data *) skb->cb;
@@ -459,23 +429,23 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 			       "expected 0x%08x) after hostap_tx_encrypt\n",
 			       dev->name, meta->magic,
 			       HOSTAP_SKB_TX_DATA_MAGIC);
-			ret = NETDEV_TX_OK;
+			ret = 0;
 			iface->stats.tx_dropped++;
 			goto fail;
 		}
 	}
 
 	if (local->func->tx == NULL || local->func->tx(skb, dev)) {
-		ret = NETDEV_TX_OK;
+		ret = 0;
 		iface->stats.tx_dropped++;
 	} else {
-		ret = NETDEV_TX_OK;
+		ret = 0;
 		iface->stats.tx_packets++;
 		iface->stats.tx_bytes += skb->len;
 	}
 
  fail:
-	if (ret == NETDEV_TX_OK && skb)
+	if (!ret && skb)
 		dev_kfree_skb(skb);
  tx_exit:
 	if (tx.sta_ptr)
@@ -483,4 +453,6 @@ netdev_tx_t hostap_master_start_xmit(struct sk_buff *skb,
 	return ret;
 }
 
+EXPORT_SYMBOL(hostap_dump_tx_80211);
+EXPORT_SYMBOL(hostap_tx_encrypt);
 EXPORT_SYMBOL(hostap_master_start_xmit);

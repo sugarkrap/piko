@@ -1,13 +1,4 @@
 
-#include <linux/if_arp.h>
-#include <linux/sched.h>
-#include <linux/slab.h>
-#include <linux/export.h>
-#include <linux/etherdevice.h>
-#include "hostap_wlan.h"
-#include "hostap.h"
-#include "hostap_ap.h"
-
 static void prism2_info_commtallies16(local_info_t *local, unsigned char *buf,
 				      int left)
 {
@@ -114,7 +105,7 @@ static const char* hfa384x_linkstatus_str(u16 linkstatus)
 		return "Unknown";
 	}
 }
-#endif
+#endif 
 
 static void prism2_info_linkstatus(local_info_t *local, unsigned char *buf,
 				    int left)
@@ -148,7 +139,7 @@ static void prism2_info_linkstatus(local_info_t *local, unsigned char *buf,
 
 	set_bit(PRISM2_INFO_PENDING_LINKSTATUS, &local->pending_info);
 	local->prev_link_status = val;
-	schedule_work(&local->info_queue);
+	PRISM2_SCHEDULE_TASK(&local->info_queue);
 }
 
 static void prism2_host_roaming(local_info_t *local)
@@ -181,8 +172,9 @@ static void prism2_host_roaming(local_info_t *local)
 	if (local->preferred_ap[0] || local->preferred_ap[1] ||
 	    local->preferred_ap[2] || local->preferred_ap[3] ||
 	    local->preferred_ap[4] || local->preferred_ap[5]) {
-		PDEBUG(DEBUG_EXTRA, "%s: Preferred AP BSSID %pM\n",
-		       dev->name, local->preferred_ap);
+		
+		PDEBUG(DEBUG_EXTRA, "%s: Preferred AP BSSID " MACSTR "\n",
+		       dev->name, MAC2STR(local->preferred_ap));
 		for (i = 0; i < local->last_scan_results_count; i++) {
 			entry = &local->last_scan_results[i];
 			if (memcmp(local->preferred_ap, entry->bssid, 6) == 0)
@@ -195,13 +187,12 @@ static void prism2_host_roaming(local_info_t *local)
 		}
 	}
 
-	memcpy(req.bssid, selected->bssid, ETH_ALEN);
+	memcpy(req.bssid, selected->bssid, 6);
 	req.channel = selected->chid;
 	spin_unlock_irqrestore(&local->lock, flags);
 
-	PDEBUG(DEBUG_EXTRA, "%s: JoinRequest: BSSID=%pM"
-	       " channel=%d\n",
-	       dev->name, req.bssid, le16_to_cpu(req.channel));
+	PDEBUG(DEBUG_EXTRA, "%s: JoinRequest: BSSID=" MACSTR " channel=%d\n",
+	       dev->name, MAC2STR(req.bssid), le16_to_cpu(req.channel));
 	if (local->func->set_rid(dev, HFA384X_RID_JOINREQUEST, &req,
 				 sizeof(req))) {
 		printk(KERN_DEBUG "%s: JoinRequest failed\n", dev->name);
@@ -241,9 +232,8 @@ static void prism2_info_scanresults(local_info_t *local, unsigned char *buf,
 	left -= 4;
 
 	new_count = left / sizeof(struct hfa384x_scan_result);
-	results = kmalloc_array(new_count,
-				sizeof(struct hfa384x_hostscan_result),
-				GFP_ATOMIC);
+	results = kmalloc(new_count * sizeof(struct hfa384x_hostscan_result),
+			  GFP_ATOMIC);
 	if (results == NULL)
 		return;
 
@@ -265,7 +255,7 @@ static void prism2_info_scanresults(local_info_t *local, unsigned char *buf,
 	hostap_report_scan_complete(local);
 
 	set_bit(PRISM2_INFO_PENDING_SCANRESULTS, &local->pending_info);
-	schedule_work(&local->info_queue);
+	PRISM2_SCHEDULE_TASK(&local->info_queue);
 }
 
 static void prism2_info_hostscanresults(local_info_t *local,
@@ -274,7 +264,7 @@ static void prism2_info_hostscanresults(local_info_t *local,
 	int i, result_size, copy_len, new_count;
 	struct hfa384x_hostscan_result *results, *prev;
 	unsigned long flags;
-	__le16 *pos;
+	u16 *pos;
 	u8 *ptr;
 
 	wake_up_interruptible(&local->hostscan_wq);
@@ -285,7 +275,7 @@ static void prism2_info_hostscanresults(local_info_t *local,
 		return;
 	}
 
-	pos = (__le16 *) buf;
+	pos = (u16 *) buf;
 	copy_len = result_size = le16_to_cpu(*pos);
 	if (result_size == 0) {
 		printk(KERN_DEBUG "%s: invalid result_size (0) in "
@@ -301,10 +291,11 @@ static void prism2_info_hostscanresults(local_info_t *local,
 	ptr = (u8 *) pos;
 
 	new_count = left / result_size;
-	results = kcalloc(new_count, sizeof(struct hfa384x_hostscan_result),
+	results = kmalloc(new_count * sizeof(struct hfa384x_hostscan_result),
 			  GFP_ATOMIC);
 	if (results == NULL)
 		return;
+	memset(results, 0, new_count * sizeof(struct hfa384x_hostscan_result));
 
 	for (i = 0; i < new_count; i++) {
 		memcpy(&results[i], ptr, copy_len);
@@ -326,8 +317,11 @@ static void prism2_info_hostscanresults(local_info_t *local,
 	kfree(prev);
 
 	hostap_report_scan_complete(local);
+
+	set_bit(PRISM2_INFO_PENDING_SCANRESULTS, &local->pending_info);
+	PRISM2_SCHEDULE_TASK(&local->info_queue);
 }
-#endif
+#endif 
 
 void hostap_info_process(local_info_t *local, struct sk_buff *skb)
 {
@@ -336,13 +330,13 @@ void hostap_info_process(local_info_t *local, struct sk_buff *skb)
 	int left;
 #ifndef PRISM2_NO_DEBUG
 	int i;
-#endif
+#endif 
 
 	info = (struct hfa384x_info_frame *) skb->data;
 	buf = skb->data + sizeof(*info);
 	left = skb->len - sizeof(*info);
 
-	switch (le16_to_cpu(info->type)) {
+	switch (info->type) {
 	case HFA384X_INFO_COMMTALLIES:
 		prism2_info_commtallies(local, buf, left);
 		break;
@@ -359,19 +353,18 @@ void hostap_info_process(local_info_t *local, struct sk_buff *skb)
 	case HFA384X_INFO_HOSTSCANRESULTS:
 		prism2_info_hostscanresults(local, buf, left);
 		break;
-#endif
+#endif 
 
 #ifndef PRISM2_NO_DEBUG
 	default:
 		PDEBUG(DEBUG_EXTRA, "%s: INFO - len=%d type=0x%04x\n",
-		       local->dev->name, le16_to_cpu(info->len),
-		       le16_to_cpu(info->type));
+		       local->dev->name, info->len, info->type);
 		PDEBUG(DEBUG_EXTRA, "Unknown info frame:");
 		for (i = 0; i < (left < 100 ? left : 100); i++)
 			PDEBUG2(DEBUG_EXTRA, " %02x", buf[i]);
 		PDEBUG2(DEBUG_EXTRA, "\n");
 		break;
-#endif
+#endif 
 	}
 }
 
@@ -392,9 +385,9 @@ static void handle_info_queue_linkstatus(local_info_t *local)
 		printk(KERN_DEBUG "%s: could not read CURRENTBSSID after "
 		       "LinkStatus event\n", local->dev->name);
 	} else {
-		PDEBUG(DEBUG_EXTRA, "%s: LinkStatus: BSSID=%pM\n",
+		PDEBUG(DEBUG_EXTRA, "%s: LinkStatus: BSSID=" MACSTR "\n",
 		       local->dev->name,
-		       (unsigned char *) local->bssid);
+		       MAC2STR((unsigned char *) local->bssid));
 		if (local->wds_type & HOSTAP_WDS_AP_CLIENT)
 			hostap_add_sta(local->ap, local->bssid);
 	}
@@ -406,7 +399,7 @@ static void handle_info_queue_linkstatus(local_info_t *local)
 	} else {
 		netif_carrier_off(local->dev);
 		netif_carrier_off(local->ddev);
-		eth_zero_addr(wrqu.ap_addr.sa_data);
+		memset(wrqu.ap_addr.sa_data, 0, ETH_ALEN);
 	}
 	wrqu.ap_addr.sa_family = ARPHRD_ETHER;
 
@@ -421,14 +414,17 @@ static void handle_info_queue_scanresults(local_info_t *local)
 		prism2_host_roaming(local);
 
 	if (local->host_roaming == 2 && local->iw_mode == IW_MODE_INFRA &&
-	    !is_zero_ether_addr(local->preferred_ap)) {
+	    memcmp(local->preferred_ap, "\x00\x00\x00\x00\x00\x00",
+		   ETH_ALEN) != 0) {
+		
 		prism2_host_roaming(local);
 	}
 }
 
 static void handle_info_queue(struct work_struct *work)
 {
-	local_info_t *local = container_of(work, local_info_t, info_queue);
+	local_info_t *data = container_of(work, local_info_t, info_queue);
+	local_info_t *local = (local_info_t *) data;
 
 	if (test_and_clear_bit(PRISM2_INFO_PENDING_LINKSTATUS,
 			       &local->pending_info))
@@ -437,15 +433,19 @@ static void handle_info_queue(struct work_struct *work)
 	if (test_and_clear_bit(PRISM2_INFO_PENDING_SCANRESULTS,
 			       &local->pending_info))
 		handle_info_queue_scanresults(local);
-}
+
+#ifndef NEW_MODULE_CODE
+	MOD_DEC_USE_COUNT;
 #endif
+}
+#endif 
 
 void hostap_info_init(local_info_t *local)
 {
 	skb_queue_head_init(&local->info_list);
 #ifndef PRISM2_NO_STATION_MODES
 	INIT_WORK(&local->info_queue, handle_info_queue);
-#endif
+#endif 
 }
 
 EXPORT_SYMBOL(hostap_info_init);

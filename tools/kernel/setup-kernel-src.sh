@@ -15,12 +15,6 @@ TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linu
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
-if [ "$FORCE" -eq 0 ] && [ -f "$MARKER" ]; then
-    echo "==> $KERNEL_DIR already patched (marker present), nothing to do"
-    echo "    (pass --force to redo it)"
-    exit 0
-fi
-
 mkdir -p "$KERNEL_SRC_DIR" "$KERNEL_TARBALL_DIR"
 
 if [ -f "$TARBALL" ] && ! xz -t "$TARBALL" 2>/dev/null; then
@@ -140,18 +134,13 @@ copy_in "$REPO/modules/nand/sharpsl.h"              include/linux/mtd/sharpsl.h
 echo "==> rate-limiting JFFS2's per-block ECC warning (see modules/jffs2/wbuf.c)"
 copy_in "$REPO/modules/jffs2/wbuf.c"        fs/jffs2/wbuf.c
 
-echo "==> applying hostap_cs (PCMCIA WiFi) + lib80211 + michael_mic"
+echo "==> applying hostap_cs (PCMCIA WiFi)"
 HOSTAP_DEST=drivers/net/wireless/intersil/hostap
 for f in "$REPO"/modules/hostap/hostap*.c "$REPO"/modules/hostap/hostap*.h; do
     copy_in "$f" "$HOSTAP_DEST/$(basename "$f")"
 done
 copy_in "$REPO/modules/hostap/Kconfig"  "$HOSTAP_DEST/Kconfig"
 copy_in "$REPO/modules/hostap/Makefile" "$HOSTAP_DEST/Makefile"
-for f in "$REPO"/modules/hostap/lib80211*.c; do
-    copy_in "$f" "net/wireless/$(basename "$f")"
-done
-copy_in "$REPO/modules/hostap/lib80211.h" include/net/lib80211.h
-copy_in "$REPO/modules/hostap/michael_mic.c" crypto/michael_mic.c
 
 ensure_kconfig_source() {
     file="$1"; source_line="$2"
@@ -204,36 +193,41 @@ copy_in "$REPO/modules/sound-pxa/Kconfig"   sound/soc/pxa/Kconfig
 copy_in "$REPO/modules/sound-pxa/Makefile"  sound/soc/pxa/Makefile
 copy_in "$REPO/modules/sound-pxa/pxa2xx-i2s.c" sound/soc/pxa/pxa2xx-i2s.c
 
-echo "==> applying $KERNEL_CONFIG"
-copy_in "$REPO/$KERNEL_CONFIG" .config
+if [ "$FORCE" -eq 1 ] || [ ! -f "$MARKER" ]; then
+    echo "==> applying $KERNEL_CONFIG"
+    copy_in "$REPO/$KERNEL_CONFIG" .config
 
-if [ -n "${TOOLCHAIN_BIN_DIR}" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
-    PATH="$TOOLCHAIN_BIN_DIR:$PATH"
+    if [ -n "${TOOLCHAIN_BIN_DIR}" ] && [ -d "$TOOLCHAIN_BIN_DIR" ]; then
+        PATH="$TOOLCHAIN_BIN_DIR:$PATH"
+    fi
+
+    if [ -z "${CROSS_COMPILE:-}" ]; then
+        for prefix in arm-buildroot-linux-uclibcgnueabi- arm-unknown-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
+            if command -v "${prefix}gcc" >/dev/null 2>&1; then
+                CROSS_COMPILE="$prefix"
+                break
+            fi
+        done
+    fi
+
+    if [ -z "${CROSS_COMPILE:-}" ]; then
+        echo "tools/kernel/setup-kernel-src.sh: no ARM cross compiler found in PATH." >&2
+        echo "Expected one of: arm-buildroot-linux-uclibcgnueabi-gcc, arm-unknown-linux-uclibcgnueabi-gcc, arm-linux-gnueabi-gcc, arm-unknown-linux-gnueabi-gcc" >&2
+        echo "Set TOOLCHAIN_BIN_DIR to your toolchain bin path, or export CROSS_COMPILE explicitly." >&2
+        exit 1
+    fi
+
+    echo "==> using cross-compiler prefix for oldconfig: $CROSS_COMPILE"
+
+    echo "==> oldconfig (non-interactive, accepting defaults for anything new)"
+    ( cd "$KERNEL_DIR" && yes "" | make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" oldconfig >/tmp/piko-oldconfig.log 2>&1 ) || {
+        echo "tools/kernel/setup-kernel-src.sh: oldconfig failed, see /tmp/piko-oldconfig.log" >&2
+        exit 1
+    }
+
+    touch "$MARKER"
+else
+    echo "==> keeping the existing .config ($MARKER present; pass --force to re-apply $KERNEL_CONFIG)"
 fi
 
-if [ -z "${CROSS_COMPILE:-}" ]; then
-    for prefix in arm-buildroot-linux-uclibcgnueabi- arm-unknown-linux-uclibcgnueabi- arm-linux-gnueabi- arm-unknown-linux-gnueabi-; do
-        if command -v "${prefix}gcc" >/dev/null 2>&1; then
-            CROSS_COMPILE="$prefix"
-            break
-        fi
-    done
-fi
-
-if [ -z "${CROSS_COMPILE:-}" ]; then
-    echo "tools/kernel/setup-kernel-src.sh: no ARM cross compiler found in PATH." >&2
-    echo "Expected one of: arm-buildroot-linux-uclibcgnueabi-gcc, arm-unknown-linux-uclibcgnueabi-gcc, arm-linux-gnueabi-gcc, arm-unknown-linux-gnueabi-gcc" >&2
-    echo "Set TOOLCHAIN_BIN_DIR to your toolchain bin path, or export CROSS_COMPILE explicitly." >&2
-    exit 1
-fi
-
-echo "==> using cross-compiler prefix for oldconfig: $CROSS_COMPILE"
-
-echo "==> oldconfig (non-interactive, accepting defaults for anything new)"
-( cd "$KERNEL_DIR" && yes "" | make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" oldconfig >/tmp/piko-oldconfig.log 2>&1 ) || {
-    echo "tools/kernel/setup-kernel-src.sh: oldconfig failed, see /tmp/piko-oldconfig.log" >&2
-    exit 1
-}
-
-touch "$MARKER"
 echo "==> $KERNEL_DIR ready to build"

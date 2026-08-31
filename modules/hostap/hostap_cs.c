@@ -22,8 +22,7 @@
 static char *dev_info = "hostap_cs";
 
 MODULE_AUTHOR("Jouni Malinen");
-MODULE_DESCRIPTION("Support for Intersil Prism2-based 802.11 wireless LAN "
-		   "cards (PC Card).");
+MODULE_DESCRIPTION("hostap 0.4.7 core with modern PCMCIA glue (piko experiment)");
 MODULE_LICENSE("GPL");
 
 static int ignore_cis_vcc;
@@ -381,8 +380,20 @@ static void prism2_pccard_genesis_reset(local_info_t *local, int hcr)
 	mdelay(10);
 }
 
+static int prism2_pccard_dev_open(local_info_t *local)
+{
+	return 0;
+}
+
+static int prism2_pccard_dev_close(local_info_t *local)
+{
+	return 0;
+}
+
 static struct prism2_helper_functions prism2_pccard_funcs =
 {
+	.dev_open	= prism2_pccard_dev_open,
+	.dev_close	= prism2_pccard_dev_close,
 	.card_present	= prism2_pccard_card_present,
 	.cor_sreset	= prism2_pccard_cor_sreset,
 	.genesis_reset	= prism2_pccard_genesis_reset,
