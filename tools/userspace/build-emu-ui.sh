@@ -9,7 +9,7 @@ piko_seed_dl_cache "$REPO" "$DL_DIR"
 FONT_VERSION="${FONT_VERSION:-2.1.5-1}"
 FONT_DEB="$DL_DIR/fonts-liberation2_${FONT_VERSION}_all.deb"
 FONT_URL="https://deb.debian.org/debian/pool/main/f/fonts-liberation2/fonts-liberation2_${FONT_VERSION}_all.deb"
-FONT_SHA256="787ae3c986eb6d61daa383aa7c3be2e55e4f9bf0f903047caeb4c066038ccaec"
+FONT_SHA256="35ffaa54f117e633e89a5da89af235a073b34dbe582726fbf6989568f7fd9bda"
 FONT_SRC="$REPO/build/src/liberation2-$FONT_VERSION"
 FONT_DIR="$FONT_SRC/usr/share/fonts/truetype/liberation2"
 

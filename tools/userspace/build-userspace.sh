@@ -118,6 +118,8 @@ if [ "$SKIP_SDL" -eq 0 ]; then
     sh "$REPO/tools/userspace/build-sdl-image.sh" $FORCE_ARG
     echo "==> building SDL_mixer"
     sh "$REPO/tools/userspace/build-sdl-mixer.sh" $FORCE_ARG
+    echo "==> building libpikorom"
+    sh "$REPO/tools/userspace/build-libpikorom.sh"
     echo "==> building pikoemu"
     sh "$REPO/tools/userspace/build-pikoemu.sh"
 else

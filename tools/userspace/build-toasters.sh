@@ -56,6 +56,7 @@ if [ "$FORCE" -eq 0 ] && [ -x "$BIN" ] && [ ! "$SRC" -nt "$BIN" ] \
 fi
 
 echo "==> building toasters against $STAGE"
+mkdir -p "$(dirname "$BIN")"
 "$CC" -march=armv5te -O2 -Wall -Wextra \
     -I"$STAGE/usr/include" \
     -o "$BIN" "$SRC" \

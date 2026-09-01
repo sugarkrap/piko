@@ -35,6 +35,4 @@ CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
 "
 
-USB_MODULES="
-kernel/drivers/usb/gadget/udc/pxa25x_udc.ko
-"
+USB_MODULES=""

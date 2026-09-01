@@ -4,7 +4,6 @@ config HOSTAP
 	select WEXT_SPY
 	select WEXT_PRIV
 	select CRYPTO
-	select CRYPTO_MICHAEL_MIC
 	select CRC32
 	help
 	Shared driver code for IEEE 802.11b wireless cards based on

@@ -121,7 +121,7 @@ fetch() {
     url="$1"; want="$2"; out="$3"
     if [ ! -f "$out" ]; then
         echo "    downloading $(basename "$out")"
-        curl -fL --http1.1 --retry 3 -o "$out.partial" "$url"
+        curl -fL --http1.1 --retry 6 --retry-delay 5 --retry-all-errors -o "$out.partial" "$url"
         mv "$out.partial" "$out"
     fi
     got="$(sha256sum "$out" | cut -d' ' -f1)"
