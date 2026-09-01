@@ -715,6 +715,30 @@ int main()
               "nand keeps its db out of the flashed tree");
         check(media_present(PART_NAND), "nand is always present");
 
+        check(applications_dir_for(PART_SD) == "/mnt/card/.zaurus/usr/share/applications",
+              "an sd rom's launcher lives on the card");
+        check(applications_dir_for(PART_CF) == "/mnt/cf/.zaurus/usr/share/applications",
+              "a cf rom's launcher lives on the cf card");
+        check(applications_dir_for(PART_NAND) == APPLICATIONS_DIR,
+              "a nand rom's launcher stays in the flashed tree -- it's rebuilt on update anyway");
+
+        check(pixmaps_dir_for(PART_SD) == "/mnt/card/.zaurus/usr/share/pixmaps",
+              "an sd rom's icon lives on the card");
+        check(pixmaps_dir_for(PART_CF) == "/mnt/cf/.zaurus/usr/share/pixmaps",
+              "a cf rom's icon lives on the cf card");
+        check(pixmaps_dir_for(PART_NAND) == PIXMAPS_DIR,
+              "a nand rom's icon stays in the flashed tree -- it's rebuilt on update anyway");
+
+        check(icon_path_for("SNES", "/mnt/card/Emulation/game.smc")
+                  == "/mnt/card/.zaurus/usr/share/pixmaps/snes-game.png",
+              "an sd rom's icon path follows the rom onto the card");
+        check(icon_path_for("SNES", "/mnt/cf/Emulation/game.smc")
+                  == "/mnt/cf/.zaurus/usr/share/pixmaps/snes-game.png",
+              "a cf rom's icon path follows the rom onto the cf card");
+        check(icon_path_for("J2ME", "/usr/local/lib/phoneme/bundled.jar")
+                  == std::string(PIXMAPS_DIR) + "/j2me-bundled.png",
+              "a nand rom's icon path stays in the flashed tree");
+
         RomEntry r;
         r.path = "/mnt/card/Emulation/game.smc";
         r.machine = "SNES";

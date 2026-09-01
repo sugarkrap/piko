@@ -12,8 +12,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define TOUCHSCREEN_CFG     "/etc/piko/touchscreen.cfg"
-#define TOUCHSCREEN_CFG_TMP "/etc/piko/touchscreen.cfg.new"
+/* The factory default shipped in the rootfs image -- read-only fallback
+ * for a card that has never been calibrated. Calibrating always writes
+ * to TOUCHSCREEN_CFG_CARD instead: piko-root.img is replaced wholesale
+ * on every update, so anything written under /etc here would be lost
+ * the moment the user drops a new update package on the card. */
+#define TOUCHSCREEN_CFG_DEFAULT  "/etc/piko/touchscreen.cfg"
+#define TOUCHSCREEN_CFG_CARD     "/mnt/card/.zaurus/etc/piko/touchscreen.cfg"
+#define TOUCHSCREEN_CFG_CARD_TMP "/mnt/card/.zaurus/etc/piko/touchscreen.cfg.new"
 #define PIKALIBRATE_FIFO    "/tmp/.pikalibrate-ctl"
 #define TOUCHSCREEN_NAME    "ADS7846 Touchscreen"
 #define KEYBOARD_NAME       "matrix-keypad"
@@ -360,9 +366,9 @@ poll_input (int ts_fd, int kbd_fd, TouchState *ts, int timeout_ms, Input *ev)
 }
 
 static void
-load_calibration (void)
+load_calibration_from (const char *path)
 {
-    FILE *f = fopen (TOUCHSCREEN_CFG, "r");
+    FILE *f = fopen (path, "r");
     char line[128];
     int v;
 
@@ -378,23 +384,34 @@ load_calibration (void)
     fclose (f);
 }
 
+static void
+load_calibration (void)
+{
+    struct stat st;
+
+    load_calibration_from (TOUCHSCREEN_CFG_DEFAULT);
+    if (stat (TOUCHSCREEN_CFG_CARD, &st) == 0)
+        load_calibration_from (TOUCHSCREEN_CFG_CARD);
+}
+
 static int
 write_config (int xmin, int xmax, int ymin, int ymax)
 {
     FILE *f;
 
-    mkdir ("/etc/piko", 0755);
+    mkdir ("/mnt/card/.zaurus/etc", 0755);
+    mkdir ("/mnt/card/.zaurus/etc/piko", 0755);
 
-    f = fopen (TOUCHSCREEN_CFG_TMP, "w");
+    f = fopen (TOUCHSCREEN_CFG_CARD_TMP, "w");
     if (!f) {
-        fprintf (stderr, "pikalibrate: fopen %s: %s\n", TOUCHSCREEN_CFG_TMP, strerror (errno));
+        fprintf (stderr, "pikalibrate: fopen %s: %s\n", TOUCHSCREEN_CFG_CARD_TMP, strerror (errno));
         return -1;
     }
     fprintf (f, "XMIN=%d\nXMAX=%d\nYMIN=%d\nYMAX=%d\n", xmin, xmax, ymin, ymax);
     fclose (f);
 
-    if (rename (TOUCHSCREEN_CFG_TMP, TOUCHSCREEN_CFG) != 0) {
-        fprintf (stderr, "pikalibrate: rename to %s: %s\n", TOUCHSCREEN_CFG, strerror (errno));
+    if (rename (TOUCHSCREEN_CFG_CARD_TMP, TOUCHSCREEN_CFG_CARD) != 0) {
+        fprintf (stderr, "pikalibrate: rename to %s: %s\n", TOUCHSCREEN_CFG_CARD, strerror (errno));
         return -1;
     }
     return 0;

@@ -133,6 +133,20 @@ inline std::string emulation_cfg_for(int media)
     return std::string(media_zaurus_root(media)) + "/emulation.cfg";
 }
 
+inline std::string applications_dir_for(int media)
+{
+    if (media == PART_NAND)
+        return APPLICATIONS_DIR;
+    return std::string(part_media_base(media)) + "/share/applications";
+}
+
+inline std::string pixmaps_dir_for(int media)
+{
+    if (media == PART_NAND)
+        return PIXMAPS_DIR;
+    return std::string(part_media_base(media)) + "/share/pixmaps";
+}
+
 struct RomEntry {
     std::string path;
     std::string machine;
@@ -432,7 +446,7 @@ inline bool migrate_legacy_emulation_db()
 
 inline std::string icon_path_for(const std::string &machine, const std::string &rom_path)
 {
-    return std::string(PIXMAPS_DIR) + "/" + lowercase(machine) + "-"
+    return pixmaps_dir_for(media_of_path(rom_path)) + "/" + lowercase(machine) + "-"
            + slugify(strip_extension(basename_of_path(rom_path))) + ".png";
 }
 

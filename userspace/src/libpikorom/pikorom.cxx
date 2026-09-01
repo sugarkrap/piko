@@ -97,8 +97,9 @@ void copy_out(const std::string &s, char *out, size_t outlen)
 
 bool write_desktop_file(const RomEntry &e, std::string &err)
 {
-    mkdir_p(APPLICATIONS_DIR);
-    std::string dpath = std::string(APPLICATIONS_DIR) + "/" + e.desktop;
+    std::string adir = applications_dir_for(media_of_path(e.path));
+    mkdir_p(adir);
+    std::string dpath = adir + "/" + e.desktop;
     std::string contents = desktop_contents(e);
     int fd = open_retry(dpath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) { err = "cannot write " + dpath; return false; }
@@ -109,9 +110,9 @@ bool write_desktop_file(const RomEntry &e, std::string &err)
     return true;
 }
 
-int prune_rom_launchers(const std::vector<RomEntry> &db)
+static int prune_rom_launchers_in(const std::string &adir, const std::vector<RomEntry> &db)
 {
-    DIR *d = opendir(APPLICATIONS_DIR);
+    DIR *d = opendir(adir.c_str());
     if (!d)
         return 0;
 
@@ -122,7 +123,7 @@ int prune_rom_launchers(const std::vector<RomEntry> &db)
         if (name == "." || name == "..")
             continue;
 
-        std::string dpath = std::string(APPLICATIONS_DIR) + "/" + name;
+        std::string dpath = adir + "/" + name;
         std::string rom = desktop_rom_path(read_file(dpath));
         if (rom.empty())
             continue;
@@ -135,6 +136,14 @@ int prune_rom_launchers(const std::vector<RomEntry> &db)
             removed++;
     }
     closedir(d);
+    return removed;
+}
+
+int prune_rom_launchers(const std::vector<RomEntry> &db)
+{
+    int removed = 0;
+    for (int m = PART_NAND; m <= PART_CF; m++)
+        removed += prune_rom_launchers_in(applications_dir_for(m), db);
     return removed;
 }
 
@@ -401,7 +410,7 @@ int pikorom_remove(const char *rom_path, char *err, size_t errlen)
     }
 
     if (!found.desktop.empty())
-        unlink((std::string(APPLICATIONS_DIR) + "/" + found.desktop).c_str());
+        unlink((applications_dir_for(media_of_path(found.path)) + "/" + found.desktop).c_str());
 
     if (!save_emulation_db(db)) {
         copy_out("rom deleted but " + emulation_cfg_for(media_of_path(found.path))
@@ -431,7 +440,7 @@ int pikorom_set_icon(const char *rom_path, const void *png, size_t len,
     }
 
     std::string ipath = icon_path_for(db[idx].machine, db[idx].path);
-    mkdir_p(PIXMAPS_DIR);
+    mkdir_p(pixmaps_dir_for(media_of_path(db[idx].path)));
     int fd = open_retry(ipath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) {
         copy_out("cannot write " + ipath + ": " + strerror(errno), err, errlen);
@@ -624,7 +633,7 @@ int pikorom_sync_launchers(void)
             db[i].desktop = desktop_name_for(db[i].machine, db[i].path);
             db_changed = true;
         }
-        std::string dpath = std::string(APPLICATIONS_DIR) + "/" + db[i].desktop;
+        std::string dpath = applications_dir_for(media_of_path(db[i].path)) + "/" + db[i].desktop;
         if (read_file(dpath) == desktop_contents(db[i]))
             continue;
         std::string err;
