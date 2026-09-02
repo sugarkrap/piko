@@ -835,12 +835,16 @@ void Connection::handle_complete(const std::string &payload)
     TransferKey key(original_name_, total_size_);
 
     if (already_fully_done_) {
+        std::string final_path = dest_dir_ + "/" + final_name_;
+        if (!rom_machine_.empty())
+            register_rom(final_path);
+
         FileCompleteAckMsg ack; ack.ok = true;
+        phase_ = WAIT_OFFER;
         send(MSG_FILE_COMPLETE_ACK, encode(ack));
         app_->queue().set_status(row_, XFER_DONE);
         app_->queue().set_progress(row_, total_size_);
         app_->sync_table();
-        close_connection();
         return;
     }
 
