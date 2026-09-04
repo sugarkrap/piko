@@ -295,7 +295,7 @@ public:
     void close_connection();
 
 private:
-    enum Phase { WAIT_UPGRADE, WAIT_HELLO, WAIT_OFFER, RECEIVING, CLOSED };
+    enum Phase { WAIT_UPGRADE, WAIT_HELLO, WAIT_OFFER, RECEIVING, RECEIVING_BEZEL, CLOSED };
 
     static void read_cb(int, void *v) { static_cast<Connection *>(v)->on_read(); }
     void on_read();
@@ -323,6 +323,7 @@ private:
     void handle_rom_set_icon(const std::string &payload);
     void handle_rom_get_icon(const std::string &payload);
     void handle_rom_get_icons(const std::string &payload);
+    void handle_rom_get(const std::string &payload);
     void handle_backend_list(const std::string &payload);
     void handle_rom_set_backend(const std::string &payload);
     void handle_rom_apply(const std::string &payload);
@@ -332,6 +333,13 @@ private:
     void handle_bezel_get(const std::string &payload);
     void handle_bezel_get_many(const std::string &payload);
     void handle_bezel_set_rect(const std::string &payload);
+    void handle_bg_list(const std::string &payload);
+    void handle_bg_get(const std::string &payload);
+    void handle_rom_ensure_delete(const std::string &payload);
+    void handle_bezel_ensure_delete(const std::string &payload);
+    void handle_bezel_chunk(const std::string &payload);
+    void handle_bezel_complete(const std::string &payload);
+
     void handle_rom_set_option(const std::string &payload);
     void handle_ping(const std::string &payload);
     bool send_special_transfer(const std::string &bytes);
@@ -364,6 +372,10 @@ private:
 
     uint64_t cpu_busy_;
     uint64_t cpu_total_;
+    std::string bezel_recv_name_;
+    std::string bezel_recv_buf_;
+    uint32_t    bezel_recv_media_;
+    uint32_t    bezel_recv_total_;
     bool is_deploy_;
     uint32_t deploy_mode_;
     bool deploy_backup_;
@@ -445,6 +457,7 @@ Connection::Connection(int fd, ServerApp *app)
       total_size_(0), next_offset_(0), already_fully_done_(false),
       row_(-1), part_fd_(-1),
       cpu_busy_(0), cpu_total_(0),
+      bezel_recv_media_(0), bezel_recv_total_(0),
       is_deploy_(false), deploy_mode_(0644), deploy_backup_(false)
 {
     ws_.expect_masked(true);
@@ -648,6 +661,11 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         case MSG_BEZEL_GET:        handle_bezel_get(payload); return;
         case MSG_BEZEL_GET_MANY:   handle_bezel_get_many(payload); return;
         case MSG_BEZEL_SET_RECT:   handle_bezel_set_rect(payload); return;
+        case MSG_BG_LIST:          handle_bg_list(payload); return;
+        case MSG_BG_GET:           handle_bg_get(payload); return;
+        case MSG_ROM_ENSURE_DELETE:   handle_rom_ensure_delete(payload); return;
+        case MSG_BEZEL_ENSURE_DELETE: handle_bezel_ensure_delete(payload); return;
+        case MSG_ROM_GET:             handle_rom_get(payload); return;
         case MSG_ROM_SET_OPTION:   handle_rom_set_option(payload); return;
         case MSG_PING:             handle_ping(payload); return;
         case MSG_DEVICE_INFO:      handle_device_info(payload); return;
@@ -661,6 +679,11 @@ void Connection::handle_frame(uint32_t type, const std::string &payload)
         if (type == MSG_DATA_CHUNK) { handle_chunk(payload); return; }
         if (type == MSG_FILE_COMPLETE) { handle_complete(payload); return; }
         fail("expected DATA_CHUNK or FILE_COMPLETE");
+        return;
+    case RECEIVING_BEZEL:
+        if (type == MSG_DATA_CHUNK) { handle_bezel_chunk(payload); return; }
+        if (type == MSG_FILE_COMPLETE) { handle_bezel_complete(payload); return; }
+        fail("expected DATA_CHUNK or FILE_COMPLETE for the bezel");
         return;
     case CLOSED:
         return;
@@ -840,6 +863,8 @@ void Connection::handle_complete(const std::string &payload)
             register_rom(final_path);
 
         FileCompleteAckMsg ack; ack.ok = true;
+        if (!rom_machine_.empty())
+            ack.path = final_path;
         phase_ = WAIT_OFFER;
         send(MSG_FILE_COMPLETE_ACK, encode(ack));
         app_->queue().set_status(row_, XFER_DONE);
@@ -908,6 +933,8 @@ void Connection::handle_complete(const std::string &payload)
         register_rom(final_path);
 
     FileCompleteAckMsg ack; ack.ok = true;
+    if (!rom_machine_.empty())
+        ack.path = final_path;
     phase_ = WAIT_OFFER;
     send(MSG_FILE_COMPLETE_ACK, encode(ack));
     app_->queue().set_status(row_, XFER_DONE);
@@ -1075,6 +1102,55 @@ void Connection::handle_rom_get_icons(const std::string &payload)
     send_special_transfer(bundle);
 }
 
+void Connection::handle_bg_list(const std::string &payload)
+{
+    (void)payload;
+    pikorom_bg_list *all = pikobg_list();
+    pikorom_blob *recs = pikobg_records(all);
+    BezelListAckMsg ack;
+    ack.records.assign(static_cast<const char *>(pikorom_blob_data(recs)),
+                       pikorom_blob_size(recs));
+    pikorom_blob_free(recs);
+    pikobg_list_free(all);
+    send(MSG_BG_LIST_ACK, encode(ack));
+}
+
+void Connection::handle_bg_get(const std::string &payload)
+{
+    BezelManyMsg m;
+    if (!decode_bezel_many(payload, m)) { fail("malformed BG_GET"); return; }
+
+    pikorom_bg_list *all = pikobg_list();
+    std::vector<std::string> wanted = m.names;
+    if (wanted.empty())
+        for (int i = 0; i < pikobg_count(all); i++)
+            wanted.push_back(pikobg_at(all, i)->name);
+    pikobg_list_free(all);
+
+    std::string bundle;
+    uint32_t entries = 0;
+    for (size_t i = 0; i < wanted.size(); i++) {
+        if (!pikobg_name_safe(wanted[i].c_str()))
+            continue;
+        pikorom_blob *b = pikobg_read(wanted[i].c_str());
+        if (!b)
+            continue;
+        put_str16(bundle, wanted[i]);
+        put_u32(bundle, static_cast<uint32_t>(pikorom_blob_size(b)));
+        bundle.append(static_cast<const char *>(pikorom_blob_data(b)), pikorom_blob_size(b));
+        pikorom_blob_free(b);
+        entries++;
+    }
+
+    BezelManyInfoMsg info;
+    info.ok = true;
+    info.entry_count = entries;
+    info.byte_count = static_cast<uint32_t>(bundle.size());
+    if (!send(MSG_BG_GET_ACK, encode(info)))
+        return;
+    send_special_transfer(bundle);
+}
+
 void Connection::handle_bezel_list(const std::string &payload)
 {
     (void)payload;
@@ -1090,20 +1166,71 @@ void Connection::handle_bezel_list(const std::string &payload)
 
 void Connection::handle_bezel_put(const std::string &payload)
 {
-    BezelBlobMsg m;
-    OkReasonMsg ack;
-    if (!decode_bezel_blob(payload, m)) { fail("malformed BEZEL_PUT"); return; }
+    BezelPutMsg m;
+    if (!decode_bezel_put(payload, m)) { fail("malformed BEZEL_PUT"); return; }
+    if (!pikobezel_name_safe(m.name.c_str())) { fail("bad bezel name"); return; }
+    if (m.total == 0 || m.total > MAX_BEZEL_BYTES) { fail("bezel too large"); return; }
 
+    bezel_recv_name_ = m.name;
+    bezel_recv_media_ = m.media;
+    bezel_recv_total_ = m.total;
+    bezel_recv_buf_.clear();
+    bezel_recv_buf_.reserve(m.total);
+    phase_ = RECEIVING_BEZEL;
+    app_->set_status("receiving bezel " + m.name);
+}
+
+void Connection::handle_bezel_chunk(const std::string &payload)
+{
+    DataChunkMsg dc;
+    if (!decode_data_chunk(payload, dc)) { fail("malformed DATA_CHUNK"); return; }
+    if (dc.offset != bezel_recv_buf_.size()) { fail("unexpected bezel chunk offset"); return; }
+    if (bezel_recv_buf_.size() + dc.data.size() > bezel_recv_total_) {
+        fail("bezel chunk exceeds the announced size");
+        return;
+    }
+    bezel_recv_buf_.append(dc.data);
+
+    ChunkAckMsg ack;
+    ack.bytes_written = bezel_recv_buf_.size();
+    send(MSG_CHUNK_ACK, encode(ack));
+}
+
+void Connection::handle_bezel_complete(const std::string &payload)
+{
+    FileCompleteMsg fc;
+    OkReasonMsg ack;
     char err[256];
+
+    if (!decode_file_complete(payload, fc)) { fail("malformed FILE_COMPLETE"); return; }
+    phase_ = WAIT_OFFER;
+
+    if (bezel_recv_buf_.size() != bezel_recv_total_) {
+        ack.ok = false;
+        ack.reason = "short bezel transfer";
+        send(MSG_BEZEL_PUT_ACK, encode(ack));
+        return;
+    }
+
+    Crc32 crc;
+    crc.update(bezel_recv_buf_.data(), bezel_recv_buf_.size());
+    if (crc.final_value() != fc.crc32) {
+        ack.ok = false;
+        ack.reason = "bezel checksum mismatch";
+        send(MSG_BEZEL_PUT_ACK, encode(ack));
+        return;
+    }
+
     err[0] = '\0';
-    if (!pikobezel_write(static_cast<int>(m.media), m.name.c_str(),
-                         m.data.data(), m.data.size(), err, sizeof(err))) {
+    if (!pikobezel_write(static_cast<int>(bezel_recv_media_), bezel_recv_name_.c_str(),
+                         bezel_recv_buf_.data(), bezel_recv_buf_.size(), err, sizeof(err))) {
         ack.ok = false;
         ack.reason = err;
     } else {
         ack.ok = true;
-        app_->set_status("bezel " + m.name + " stored");
+        app_->set_status("bezel " + bezel_recv_name_ + " stored");
     }
+    bezel_recv_buf_.clear();
     send(MSG_BEZEL_PUT_ACK, encode(ack));
 }
 
@@ -1220,6 +1347,30 @@ void Connection::handle_bezel_set_rect(const std::string &payload)
     send(MSG_BEZEL_SET_RECT_ACK, encode(ack));
 }
 
+static std::string build_rom_record_line(const std::string &raw_line)
+{
+    std::string path = raw_line.substr(0, raw_line.find(FIELD_SEP));
+    struct stat st;
+    uint64_t size = (stat(path.c_str(), &st) == 0) ? static_cast<uint64_t>(st.st_size) : 0;
+    char sizebuf[32];
+    snprintf(sizebuf, sizeof(sizebuf), "%llu", static_cast<unsigned long long>(size));
+
+    std::string icon = field_at(raw_line, 4);
+    char iconbuf[32];
+    snprintf(iconbuf, sizeof(iconbuf), "%u", icon.empty() ? 0u : cached_file_crc32(icon));
+
+    return raw_line + FIELD_SEP + sizebuf + FIELD_SEP + iconbuf + "\n";
+}
+
+static bool path_wanted(const std::vector<std::string> &wanted, const std::string &path)
+{
+    for (size_t i = 0; i < wanted.size(); i++) {
+        if (wanted[i] == path)
+            return true;
+    }
+    return false;
+}
+
 void Connection::handle_rom_list(const std::string &payload)
 {
     (void)payload;
@@ -1240,21 +1391,95 @@ void Connection::handle_rom_list(const std::string &payload)
         start = stop + 1;
         if (line.empty())
             continue;
-
-        std::string path = line.substr(0, line.find(FIELD_SEP));
-        struct stat st;
-        uint64_t size = (stat(path.c_str(), &st) == 0) ? static_cast<uint64_t>(st.st_size) : 0;
-        char sizebuf[32];
-        snprintf(sizebuf, sizeof(sizebuf), "%llu", static_cast<unsigned long long>(size));
-
-        std::string icon = field_at(line, 4);
-        char iconbuf[32];
-        snprintf(iconbuf, sizeof(iconbuf), "%u", icon.empty() ? 0u : cached_file_crc32(icon));
-
-        ack.records += line + FIELD_SEP + sizebuf + FIELD_SEP + iconbuf + "\n";
+        ack.records += build_rom_record_line(line);
     }
 
     send(MSG_ROM_LIST_ACK, encode(ack));
+}
+
+void Connection::handle_rom_get(const std::string &payload)
+{
+    RomIconsMsg m;
+    if (!decode_rom_icons(payload, m)) { fail("malformed ROM_GET"); return; }
+
+    pikorom_db *db = pikorom_db_open();
+    pikorom_blob *recs = pikorom_db_records(db);
+    std::string raw(static_cast<const char *>(pikorom_blob_data(recs)),
+                    pikorom_blob_size(recs));
+    pikorom_blob_free(recs);
+    pikorom_db_close(db);
+
+    RomListAckMsg ack;
+    size_t start = 0;
+    while (start < raw.size()) {
+        size_t stop = raw.find('\n', start);
+        if (stop == std::string::npos)
+            stop = raw.size();
+        std::string line(raw, start, stop - start);
+        start = stop + 1;
+        if (line.empty())
+            continue;
+        std::string path = line.substr(0, line.find(FIELD_SEP));
+        if (path_wanted(m.paths, path))
+            ack.records += build_rom_record_line(line);
+    }
+
+    send(MSG_ROM_GET_ACK, encode(ack));
+}
+
+void Connection::handle_rom_ensure_delete(const std::string &payload)
+{
+    RomIconsMsg m;
+    if (!decode_rom_icons(payload, m)) { fail("malformed ROM_ENSURE_DELETE"); return; }
+
+    EnsureDeleteAckMsg ack;
+    char err[256];
+    uint32_t removed = 0;
+    for (size_t i = 0; i < m.paths.size(); i++) {
+        err[0] = '\0';
+        bool ok = pikorom_remove(m.paths[i].c_str(), err, sizeof(err));
+        if (ok) {
+            removed++;
+            std::string deleted_name = basename_of_path(m.paths[i]);
+            TransferMap &map = app_->transfer_map();
+            for (TransferMap::iterator it = map.begin(); it != map.end();) {
+                if (it->second.final_name == deleted_name)
+                    map.erase(it++);
+                else
+                    ++it;
+            }
+        }
+        ack.deleted.push_back(ok ? 1 : 0);
+    }
+    if (!m.paths.empty()) {
+        char status[64];
+        snprintf(status, sizeof(status), "deleted %u/%u entries",
+                 static_cast<unsigned>(removed), static_cast<unsigned>(m.paths.size()));
+        app_->set_status(status);
+    }
+    send(MSG_ROM_ENSURE_DELETE_ACK, encode(ack));
+}
+
+void Connection::handle_bezel_ensure_delete(const std::string &payload)
+{
+    RomIconsMsg m;
+    if (!decode_rom_icons(payload, m)) { fail("malformed BEZEL_ENSURE_DELETE"); return; }
+
+    EnsureDeleteAckMsg ack;
+    uint32_t removed = 0;
+    for (size_t i = 0; i < m.paths.size(); i++) {
+        bool ok = pikobezel_name_safe(m.paths[i].c_str()) && pikobezel_remove(m.paths[i].c_str());
+        if (ok)
+            removed++;
+        ack.deleted.push_back(ok ? 1 : 0);
+    }
+    if (!m.paths.empty()) {
+        char status[64];
+        snprintf(status, sizeof(status), "deleted %u/%u bezels",
+                 static_cast<unsigned>(removed), static_cast<unsigned>(m.paths.size()));
+        app_->set_status(status);
+    }
+    send(MSG_BEZEL_ENSURE_DELETE_ACK, encode(ack));
 }
 
 void Connection::handle_rom_delete(const std::string &payload)

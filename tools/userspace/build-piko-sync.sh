@@ -38,8 +38,8 @@ if [ "${PIKO_SYNC_SKIP_TESTS:-0}" = "0" ]; then
     if command -v "$HOSTCXX" >/dev/null 2>&1; then
         testdir="$(mktemp -d)"
         for t in protocol settings websocket device-info; do
-            "$HOSTCXX" -O2 -Wall -Wextra -o "$testdir/piko-sync-$t-test" \
-                "$SRC/tests/$t-test.cxx"
+            "$HOSTCXX" -O2 -Wall -Wextra -I"$REPO/userspace/src/libpikorom" \
+                -o "$testdir/piko-sync-$t-test" "$SRC/tests/$t-test.cxx"
             "$testdir/piko-sync-$t-test"
         done
         rm -rf "$testdir"

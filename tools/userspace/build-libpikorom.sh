@@ -3,7 +3,6 @@ set -eu
 
 REPO="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 SRC="$REPO/userspace/src/libpikorom"
-SYNCSRC="$REPO/userspace/src/piko-sync"
 OUT_LIB="${OUT_LIB:-$REPO/build/target/usr/lib}"
 STAGE="${STAGE:-$REPO/build/target}"
 TOOLCHAIN_BIN_DIR="${TOOLCHAIN_BIN_DIR:-$REPO/toolchain/x-tools/arm-unknown-linux-uclibcgnueabi/bin}"
@@ -13,8 +12,8 @@ SONAME=libpikorom.so.1
 
 [ -x "$CXX" ] || { echo "build-libpikorom.sh: no compiler at $CXX" >&2; exit 1; }
 [ -f "$SRC/pikorom.cxx" ] || { echo "build-libpikorom.sh: no $SRC/pikorom.cxx" >&2; exit 1; }
-[ -f "$SYNCSRC/emulation_db.h" ] || {
-    echo "build-libpikorom.sh: no $SYNCSRC/emulation_db.h" >&2
+[ -f "$SRC/emulation_db.h" ] || {
+    echo "build-libpikorom.sh: no $SRC/emulation_db.h" >&2
     exit 1
 }
 
@@ -23,7 +22,7 @@ if [ "${PIKOROM_SKIP_TESTS:-0}" = "0" ]; then
     HOSTCXX="${HOSTCXX:-g++}"
     if command -v "$HOSTCXX" >/dev/null 2>&1; then
         t="$(mktemp -d)"
-        "$HOSTCXX" -O2 -Wall -Wextra -I"$SRC" -I"$SYNCSRC" \
+        "$HOSTCXX" -O2 -Wall -Wextra -I"$SRC" \
             -o "$t/pikorom-test" "$SRC/tests/pikorom-test.cxx" "$SRC/pikorom.cxx" -lz
         "$t/pikorom-test"
         rm -rf "$t"
@@ -36,7 +35,7 @@ mkdir -p "$OUT_LIB"
 
 echo "==> building $SONAME"
 "$CXX" -O2 -Wall -Wextra -fPIC -shared \
-    -I"$SRC" -I"$SYNCSRC" -isystem "$STAGE/usr/include" \
+    -I"$SRC" -isystem "$STAGE/usr/include" \
     -o "$OUT_LIB/$SONAME" \
     "$SRC/pikorom.cxx" \
     -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" -lz \

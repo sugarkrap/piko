@@ -186,5 +186,5 @@ if [ -f "$REPO/build/target/bin/toasters" ]; then
     echo "    toasters: $REPO/build/target/bin/toasters ($(du -h "$REPO/build/target/bin/toasters" 2>/dev/null | cut -f1))"
 fi
 echo ""
-echo "    Deploy with tools/build-and-deploy.sh (or tools/chunked-deploy.sh)."
+echo "    Deploy with tools/build-and-deploy.sh."
 echo "    NOTE: the X11/matchbox stack is NOT built here -- see the header."

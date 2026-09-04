@@ -295,12 +295,15 @@ if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/bezels" ]; then
     echo "==> baking the shipped bezels (tools/userspace/build-bezels.sh)"
     "$REPO/tools/userspace/build-bezels.sh"
 fi
-if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/bezels" ]; then
-    echo "build-rootfs: build-bezels.sh succeeded but there is no $BEZEL_STAGE/usr/local/.zaurus/bezels" >&2
-    exit 1
-fi
+for d in bezels backgrounds; do
+    if [ ! -d "$BEZEL_STAGE/usr/local/.zaurus/$d" ]; then
+        echo "build-rootfs: build-bezels.sh succeeded but there is no $BEZEL_STAGE/usr/local/.zaurus/$d" >&2
+        exit 1
+    fi
+done
 cp -a "$BEZEL_STAGE/." "$OVERLAY/"
 echo "    bezels: /usr/local/.zaurus/bezels ($(find "$OVERLAY/usr/local/.zaurus/bezels" -name '*.pkbz' | wc -l) files)"
+echo "    backgrounds: /usr/local/.zaurus/backgrounds ($(find "$OVERLAY/usr/local/.zaurus/backgrounds" -name '*.pkbg' | wc -l) files)"
 
 TIMIDITY_STAGE="${TIMIDITY_STAGE:-$REPO/build/stage-timidity}"
 if [ ! -f "$TIMIDITY_STAGE/timidity.cfg" ]; then

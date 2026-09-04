@@ -102,8 +102,8 @@ else
     fi
     if ! "$PIKO_SYNC_DEPLOY" $PROBE_ARGS --probe "$TARGET"; then
         echo "FAILED: $TARGET is not reachable, or piko-sync-server is not open" >&2
-        echo "on the device -- deploy needs it open (unlike the old SSH-based" >&2
-        echo "chunked-deploy.sh). Open piko-sync-server from the desktop and retry." >&2
+        echo "on the device -- deploy needs it open. Open piko-sync-server from" >&2
+        echo "the desktop and retry." >&2
         echo "If the device is unreachable/unbootable, or you need to change" >&2
         echo "the bootstrap partition (mtd1/smf), use the recovery flash" >&2
         echo "procedure instead (SD card + recovery menu)." >&2

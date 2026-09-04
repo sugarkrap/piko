@@ -424,6 +424,14 @@ root_payload:
     mode: "0644"
     if_exists: "${REPO}/build/stage-bezels/usr/local/.zaurus/bezels"
   - type: mkdir
+    remote: /usr/local/.zaurus/backgrounds
+  - type: put_tree_from_dir
+    local_dir: "${REPO}/build/stage-bezels/usr/local/.zaurus/backgrounds"
+    remote_base: /usr/local/.zaurus/backgrounds
+    recursive: "true"
+    mode: "0644"
+    if_exists: "${REPO}/build/stage-bezels/usr/local/.zaurus/backgrounds"
+  - type: mkdir
     remote: /usr/share/timidity
   - type: put_tree_from_dir
     local_dir: "${REPO}/build/stage-timidity"

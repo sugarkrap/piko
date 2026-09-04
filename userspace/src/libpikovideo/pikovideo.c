@@ -40,6 +40,7 @@ static void (*trace_fn)(const char *msg);
 static struct fb_var_screeninfo saved_var;
 static int saved_valid;
 static int mode_applied;
+static int applied_driver;
 static int pll_applied;
 
 static void trace(const char *fmt, ...)
@@ -244,6 +245,7 @@ int pikovideo_apply(enum pikovideo_mode m, enum pikovideo_driver drv)
         if (!send_x_command(qvga ? "QVGA" : "VGA"))
             return 0;
         mode_applied = 1;
+        applied_driver = drv;
         if (!wait_for_x_qvga(qvga)) {
             trace("pikovideo_apply: X did not reach %s", qvga ? "QVGA" : "VGA");
             return 0;
@@ -254,6 +256,7 @@ int pikovideo_apply(enum pikovideo_mode m, enum pikovideo_driver drv)
         if (!ok)
             return 0;
         mode_applied = 1;
+        applied_driver = drv;
     }
 
     if (fast && set_fast_pll(1))
@@ -274,8 +277,15 @@ void pikovideo_restore(void)
         return;
     mode_applied = 0;
 
-    if (pikovideo_current_xres() <= QVGA_XRES)
-        send_x_command("VGA");
+    if (applied_driver == PIKOVIDEO_DRIVER_X11) {
+        if (!send_x_command("VGA")) {
+            trace("pikovideo_restore: could not ask X for VGA");
+            return;
+        }
+        if (!wait_for_x_qvga(0))
+            trace("pikovideo_restore: X did not reach VGA");
+        return;
+    }
     fb_set_size(DESKTOP_XRES, DESKTOP_YRES);
 }
 

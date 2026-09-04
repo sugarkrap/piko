@@ -15,6 +15,7 @@ STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-bezels}"
 CONVERTER="$REPO/tools/scripts/starman-to-pkbz.js"
 IMAGE_LIB="$REPO/tools/scripts/piko-image.js"
 OUT_DIR="$STAGE_DIR/usr/local/.zaurus/bezels"
+BG_DIR="$STAGE_DIR/usr/local/.zaurus/backgrounds"
 
 FORCE=0
 for arg in "$@"; do
@@ -66,14 +67,20 @@ fi
 
 echo "==> baking bezels into $OUT_DIR"
 rm -rf "$STAGE_DIR"
-mkdir -p "$OUT_DIR"
-node "$CONVERTER" "$BEZEL_ZIP" "$OUT_DIR"
+mkdir -p "$OUT_DIR" "$BG_DIR"
+node "$CONVERTER" "$BEZEL_ZIP" "$OUT_DIR" "$BG_DIR"
 
 count="$(find "$OUT_DIR" -name '*.pkbz' | wc -l)"
 if [ "$count" -eq 0 ]; then
     echo "tools/userspace/build-bezels.sh: the converter wrote no .pkbz files" >&2
     exit 1
 fi
+bgcount="$(find "$BG_DIR" -name '*.pkbg' | wc -l)"
+if [ "$bgcount" -eq 0 ]; then
+    echo "tools/userspace/build-bezels.sh: the converter wrote no .pkbg files" >&2
+    exit 1
+fi
 
 printf '%s' "$PIKO_STATE" > "$PIKO_STAMP"
-echo "==> done: $count file(s), $(du -sh "$OUT_DIR" | cut -f1)"
+echo "==> done: $count bezel(s) $(du -sh "$OUT_DIR" | cut -f1),"\
+     "$bgcount background(s) $(du -sh "$BG_DIR" | cut -f1)"

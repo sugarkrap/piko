@@ -147,6 +147,7 @@ static void prism2_host_roaming(local_info_t *local)
 	struct hfa384x_join_request req;
 	struct net_device *dev = local->dev;
 	struct hfa384x_hostscan_result *selected, *entry;
+	unsigned int want;
 	int i;
 	unsigned long flags;
 
@@ -167,12 +168,11 @@ static void prism2_host_roaming(local_info_t *local)
 		return;
 	}
 
-	selected = &local->last_scan_results[0];
+	selected = NULL;
 
 	if (local->preferred_ap[0] || local->preferred_ap[1] ||
 	    local->preferred_ap[2] || local->preferred_ap[3] ||
 	    local->preferred_ap[4] || local->preferred_ap[5]) {
-		
 		PDEBUG(DEBUG_EXTRA, "%s: Preferred AP BSSID " MACSTR "\n",
 		       dev->name, MAC2STR(local->preferred_ap));
 		for (i = 0; i < local->last_scan_results_count; i++) {
@@ -185,6 +185,31 @@ static void prism2_host_roaming(local_info_t *local)
 				break;
 			}
 		}
+	}
+
+	want = strlen(local->essid);
+
+	if (selected == NULL && want > 0) {
+		for (i = 0; i < local->last_scan_results_count; i++) {
+			entry = &local->last_scan_results[i];
+			if (le16_to_cpu(entry->ssid_len) == want &&
+			    memcmp(entry->ssid, local->essid, want) == 0) {
+				PDEBUG(DEBUG_EXTRA, "%s: using SSID selection "
+				       "(%s)\n", dev->name, local->essid);
+				selected = entry;
+				break;
+			}
+		}
+	}
+
+	if (selected == NULL && want == 0)
+		selected = &local->last_scan_results[0];
+
+	if (selected == NULL) {
+		spin_unlock_irqrestore(&local->lock, flags);
+		PDEBUG(DEBUG_EXTRA, "%s: no scan result matches SSID '%s' - "
+		       "not joining\n", dev->name, local->essid);
+		return;
 	}
 
 	memcpy(req.bssid, selected->bssid, 6);

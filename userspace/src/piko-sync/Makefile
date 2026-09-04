@@ -10,8 +10,11 @@ HOSTCXXFLAGS       ?= -O2 -Wall -Wextra
 HOST_FLTK_CXXFLAGS ?=
 HOST_FLTK_LDFLAGS  ?= -lfltk
 
-COMMON_HDRS := protocol.h emulation_db.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h jar_meta.h rom_detect.h sha1.h base64.h websocket.h
 PIKOROM_DIR := ../libpikorom
+HOSTCXXFLAGS += -I$(PIKOROM_DIR)
+COMMON_HDRS := protocol.h transfer_state.h transfer_queue.h transfer_table.h net_io.h icon_xpm.h settings.h sha1.h base64.h websocket.h \
+	$(PIKOROM_DIR)/emulation_db.h $(PIKOROM_DIR)/jar_meta.h $(PIKOROM_DIR)/rom_detect.h \
+	$(PIKOROM_DIR)/crc32.h $(PIKOROM_DIR)/piko_asset_format.h
 
 SERVER := $(TARGETBIN)/piko-sync-server
 CLIENT := $(HOSTBIN)/piko-sync-client
