@@ -1,0 +1,98 @@
+#!/bin/sh
+
+NET=/sys/class/net/wlan0
+PCMCIA=/sys/bus/pcmcia/devices
+SOCKETS=/sys/class/pcmcia_socket
+WIFI_UP=/etc/wifi-up.sh
+
+POLL_SECONDS=5
+THRESHOLD_SECONDS=30
+RETRY_SECONDS=5
+SETTLE_SECONDS=30
+
+stamp() {
+	date '+%Y-%m-%d %H:%M:%S'
+}
+
+uptime_seconds() {
+	read -r uptime rest < /proc/uptime
+	echo "${uptime%%.*}"
+}
+
+carrier() {
+	value=""
+	{ read -r value < "$NET/carrier"; } 2>/dev/null
+	echo "$value"
+}
+
+configured_ssid() {
+	sed -n 's/^WIFI_SSID="\(.*\)"$/\1/p' "$WIFI_UP"
+}
+
+wlan0_socket() {
+	socket=""
+	for path in "$PCMCIA"/*/net/wlan0; do
+		if test -d "$path"; then
+			relative="${path#$PCMCIA/}"
+			socket="${relative%%.*}"
+		fi
+	done
+	echo "$socket"
+}
+
+ssid_visible() {
+	iwlist wlan0 scanning 2>/dev/null | grep -qF "ESSID:\"$1\""
+}
+
+power_cycle() {
+	echo 1 > "$SOCKETS/pcmcia_socket$1/card_eject"
+	sleep 3
+	echo 1 > "$SOCKETS/pcmcia_socket$1/card_insert"
+}
+
+seconds_down=0
+outage_start=""
+cycled=0
+missed=0
+
+while true; do
+	sleep "$POLL_SECONDS"
+
+	state="$(carrier)"
+
+	if test "$state" = 0; then
+		if test -z "$outage_start"; then
+			outage_start="$(uptime_seconds)"
+		fi
+		seconds_down=$((seconds_down + POLL_SECONDS))
+	elif test "$state" = 1; then
+		if test "$cycled" = 1 || test "$missed" = 1; then
+			echo "$(stamp) hostapd: link restored after $(($(uptime_seconds) - outage_start))s"
+		fi
+		cycled=0
+		missed=0
+		outage_start=""
+		seconds_down=0
+	else
+		seconds_down=0
+	fi
+
+	if test "$seconds_down" -ge "$THRESHOLD_SECONDS"; then
+		ssid="$(configured_ssid)"
+		socket="$(wlan0_socket)"
+		elapsed=$(($(uptime_seconds) - outage_start))
+		if test -n "$ssid" && test -n "$socket" && ssid_visible "$ssid"; then
+			echo "$(stamp) hostapd: link down ${elapsed}s with $ssid visible, power cycling socket $socket"
+			power_cycle "$socket"
+			cycled=1
+			seconds_down=0
+			sleep "$SETTLE_SECONDS"
+		else
+			if test "$missed" = 0; then
+				echo "$(stamp) hostapd: link down ${elapsed}s, $ssid not visible, rescanning every ${RETRY_SECONDS}s"
+				missed=1
+			fi
+			seconds_down=$((THRESHOLD_SECONDS - RETRY_SECONDS))
+		fi
+	fi
+done

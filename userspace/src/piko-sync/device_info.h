@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "protocol.h"
+#include "crc32.h"
 
 namespace piko_sync {
 
@@ -164,47 +165,8 @@ inline bool read_whole_file(const std::string &path, std::string &out)
     return ok;
 }
 
-inline uint32_t file_crc32(const std::string &path)
-{
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f)
-        return 0;
-    Crc32 crc;
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
-        crc.update(buf, n);
-    fclose(f);
-    return crc.final_value();
-}
 
-struct FileCrcCacheEntry {
-    off_t size;
-    time_t mtime;
-    uint32_t crc;
-};
 
-inline uint32_t cached_file_crc32(const std::string &path)
-{
-    static std::map<std::string, FileCrcCacheEntry> cache;
-
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0) {
-        cache.erase(path);
-        return 0;
-    }
-
-    std::map<std::string, FileCrcCacheEntry>::iterator it = cache.find(path);
-    if (it != cache.end() && it->second.size == st.st_size && it->second.mtime == st.st_mtime)
-        return it->second.crc;
-
-    FileCrcCacheEntry entry;
-    entry.size = st.st_size;
-    entry.mtime = st.st_mtime;
-    entry.crc = file_crc32(path);
-    cache[path] = entry;
-    return entry.crc;
-}
 
 }
 

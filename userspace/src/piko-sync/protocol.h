@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "crc32.h"
+
 namespace piko_sync {
 
 const unsigned short DEFAULT_PORT = 7862;
@@ -91,7 +93,21 @@ enum MessageType {
     MSG_ROM_APPLY_ACK      = 61,
 
     MSG_BEZEL_GET_MANY     = 62,
-    MSG_BEZEL_MANY_INFO    = 63
+    MSG_BEZEL_MANY_INFO    = 63,
+
+    MSG_BG_LIST            = 64,
+    MSG_BG_LIST_ACK        = 65,
+
+    MSG_BG_GET             = 66,
+    MSG_BG_GET_ACK         = 67,
+
+    MSG_ROM_ENSURE_DELETE       = 68,
+    MSG_ROM_ENSURE_DELETE_ACK   = 69,
+    MSG_BEZEL_ENSURE_DELETE     = 70,
+    MSG_BEZEL_ENSURE_DELETE_ACK = 71,
+
+    MSG_ROM_GET                 = 72,
+    MSG_ROM_GET_ACK             = 73
 };
 
 enum PutPolicy {
@@ -183,39 +199,6 @@ inline bool get_str16(const std::string &in, size_t &pos, std::string &s)
     return true;
 }
 
-class Crc32 {
-public:
-    Crc32() : crc_(0xffffffffu) {}
-
-    void update(const char *data, size_t len)
-    {
-        const uint32_t *table = table_();
-        const unsigned char *p = reinterpret_cast<const unsigned char *>(data);
-        for (size_t i = 0; i < len; i++)
-            crc_ = table[(crc_ ^ p[i]) & 0xff] ^ (crc_ >> 8);
-    }
-
-    uint32_t final_value() const { return crc_ ^ 0xffffffffu; }
-
-private:
-    static const uint32_t *table_()
-    {
-        static uint32_t t[256];
-        static bool ready = false;
-        if (!ready) {
-            for (uint32_t i = 0; i < 256; i++) {
-                uint32_t c = i;
-                for (int k = 0; k < 8; k++)
-                    c = (c & 1) ? (0xedb88320u ^ (c >> 1)) : (c >> 1);
-                t[i] = c;
-            }
-            ready = true;
-        }
-        return t;
-    }
-
-    uint32_t crc_;
-};
 
 inline std::string encode_frame(uint32_t type, const std::string &payload)
 {
@@ -438,13 +421,16 @@ inline bool decode_file_complete(const std::string &p, FileCompleteMsg &m)
 struct FileCompleteAckMsg {
     bool ok;
     std::string reason;
+    std::string path;
     FileCompleteAckMsg() : ok(false) {}
 };
 inline std::string encode(const FileCompleteAckMsg &m)
 {
     std::string p;
     p.push_back(m.ok ? 1 : 0);
-    if (!m.ok)
+    if (m.ok)
+        put_str16(p, m.path);
+    else
         put_str16(p, m.reason);
     return p;
 }
@@ -453,10 +439,8 @@ inline bool decode_file_complete_ack(const std::string &p, FileCompleteAckMsg &m
     if (p.empty())
         return false;
     m.ok = p[0] != 0;
-    if (m.ok)
-        return true;
     size_t pos = 1;
-    return get_str16(p, pos, m.reason);
+    return get_str16(p, pos, m.ok ? m.path : m.reason);
 }
 
 struct ErrorMsg {
@@ -658,6 +642,30 @@ inline bool decode_free_space_ack(const std::string &p, FreeSpaceAckMsg &m)
     return get_u64(p, pos, m.free_bytes);
 }
 
+struct EnsureDeleteAckMsg {
+    std::vector<uint8_t> deleted;
+};
+inline std::string encode(const EnsureDeleteAckMsg &m)
+{
+    std::string p;
+    put_u16(p, static_cast<uint16_t>(m.deleted.size()));
+    for (size_t i = 0; i < m.deleted.size(); i++)
+        p += static_cast<char>(m.deleted[i]);
+    return p;
+}
+inline bool decode_ensure_delete_ack(const std::string &p, EnsureDeleteAckMsg &m)
+{
+    size_t pos = 0;
+    uint16_t count;
+    if (!get_u16(p, pos, count))
+        return false;
+    if (p.size() - pos < count)
+        return false;
+    for (uint16_t i = 0; i < count; i++)
+        m.deleted.push_back(static_cast<uint8_t>(p[pos + i]));
+    return true;
+}
+
 struct BezelListAckMsg {
     std::string records;
 };
@@ -676,6 +684,32 @@ inline bool decode_bezel_list_ack(const std::string &p, BezelListAckMsg &m)
     if (p.size() - off < n) return false;
     m.records.assign(p, off, n);
     return true;
+}
+
+const size_t MAX_BEZEL_BYTES = 8u * 1024u * 1024u;
+
+struct BezelPutMsg {
+    BezelPutMsg() : media(0), total(0) {}
+    std::string name;
+    uint32_t    media;
+    uint32_t    total;
+};
+inline std::string encode(const BezelPutMsg &m)
+{
+    std::string p;
+    put_str16(p, m.name);
+    put_u32(p, m.media);
+    put_u32(p, m.total);
+    return p;
+}
+inline bool decode_bezel_put(const std::string &p, BezelPutMsg &m)
+{
+    size_t pos = 0;
+    if (!get_str16(p, pos, m.name))
+        return false;
+    if (!get_u32(p, pos, m.media))
+        return false;
+    return get_u32(p, pos, m.total);
 }
 
 struct BezelBlobMsg {

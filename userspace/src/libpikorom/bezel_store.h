@@ -81,25 +81,24 @@ inline bool bezel_read_header_only(const std::string &path, PkbzHeader &h)
     FILE *f = fopen(path.c_str(), "rb");
     if (!f)
         return false;
-    char buf[512];
+    unsigned char buf[512];
     size_t n = fread(buf, 1, sizeof(buf), f);
     fclose(f);
-    std::string head(buf, n);
-    const unsigned char *p = (const unsigned char *)head.data();
-    if (n < PKBZ_HDR_FIXED)
+
+    struct pkbz_head raw;
+    if (!pkbz_parse_head(buf, n, &raw))
         return false;
-    if (p[0] != PKBZ_MAGIC0 || p[1] != PKBZ_MAGIC1
-        || p[2] != PKBZ_MAGIC2 || p[3] != PKBZ_MAGIC3)
-        return false;
-    h.version  = pkbz_get_u32(p + 4);
-    h.width    = pkbz_get_u32(p + 8);
-    h.height   = pkbz_get_u32(p + 12);
-    h.screen_x = pkbz_get_u32(p + 16);
-    h.screen_y = pkbz_get_u32(p + 20);
-    h.screen_w = pkbz_get_u32(p + 24);
-    h.screen_h = pkbz_get_u32(p + 28);
+    h.version  = raw.version;
+    h.width    = raw.width;
+    h.height   = raw.height;
+    h.screen_x = raw.screen_x;
+    h.screen_y = raw.screen_y;
+    h.screen_w = raw.screen_w;
+    h.screen_h = raw.screen_h;
+    h.offset_x = raw.offset_x;
+    h.offset_y = raw.offset_y;
     h.source.clear();
-    return h.version == PKBZ_VERSION && h.width > 0 && h.height > 0;
+    return true;
 }
 
 inline bool bezel_patch_rect(const std::string &path, unsigned x, unsigned y,
@@ -131,6 +130,7 @@ inline bool bezel_patch_rect(const std::string &path, unsigned x, unsigned y,
 struct StoredBezel {
     std::string name;
     int media;
+    unsigned int size;
     PkbzHeader master;
 };
 
@@ -148,9 +148,12 @@ inline void bezel_scan_media(int media, std::vector<StoredBezel> &out)
         if (fn.size() <= slen || fn.compare(fn.size() - slen, slen, suffix) != 0)
             continue;
         StoredBezel b;
+        std::string path = dir + "/" + fn;
+        struct stat st;
         b.name = fn.substr(0, fn.size() - slen);
         b.media = media;
-        if (bezel_read_header_only(dir + "/" + fn, b.master))
+        b.size = stat(path.c_str(), &st) == 0 ? (unsigned int)st.st_size : 0;
+        if (bezel_read_header_only(path, b.master))
             out.push_back(b);
     }
     closedir(d);
@@ -159,9 +162,9 @@ inline void bezel_scan_media(int media, std::vector<StoredBezel> &out)
 inline std::vector<StoredBezel> bezel_list_all()
 {
     std::vector<StoredBezel> out;
-    static const int media[] = { PART_SD, PART_CF, PART_NAND };
-    for (int i = 0; i < 3; i++) {
-        if (media[i] != PART_NAND && !media_present(media[i]))
+    static const int media[] = { PART_SD, PART_CF };
+    for (int i = 0; i < 2; i++) {
+        if (!media_present(media[i]))
             continue;
         bezel_scan_media(media[i], out);
     }
@@ -170,10 +173,10 @@ inline std::vector<StoredBezel> bezel_list_all()
 
 inline int bezel_media_of(const std::string &name)
 {
-    static const int media[] = { PART_SD, PART_CF, PART_NAND };
+    static const int media[] = { PART_SD, PART_CF };
     struct stat st;
-    for (int i = 0; i < 3; i++) {
-        if (media[i] != PART_NAND && !media_present(media[i]))
+    for (int i = 0; i < 2; i++) {
+        if (!media_present(media[i]))
             continue;
         if (stat(bezel_file_for(media[i], name).c_str(), &st) == 0)
             return media[i];
@@ -181,6 +184,6 @@ inline int bezel_media_of(const std::string &name)
     return -1;
 }
 
-} // namespace piko_sync
+}
 
 #endif

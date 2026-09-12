@@ -20,6 +20,7 @@ FONT_BAKER="$REPO/tools/scripts/font-to-pkfn.js"
 UI_BAKER="$REPO/tools/scripts/ui-bake.js"
 IMAGE_LIB="$REPO/tools/scripts/piko-image.js"
 ICON_CALENDAR="${ICON_CALENDAR:-$REPO/userspace/src/pikoemu/assets/calendar.png}"
+ICON_ERROR="${ICON_ERROR:-$REPO/userspace/src/pikoemu/assets/error.png}"
 
 SANS_SIZE="${SANS_SIZE:-13}"
 SANS_BOLD_SIZE="${SANS_BOLD_SIZE:-18}"
@@ -36,7 +37,7 @@ for arg in "$@"; do
     esac
 done
 
-for f in "$FONT_BAKER" "$UI_BAKER" "$IMAGE_LIB" "$ICON_CALENDAR"; do
+for f in "$FONT_BAKER" "$UI_BAKER" "$IMAGE_LIB" "$ICON_CALENDAR" "$ICON_ERROR"; do
     if [ ! -f "$f" ]; then
         echo "tools/userspace/build-emu-ui.sh: missing $f" >&2
         exit 1
@@ -44,7 +45,7 @@ for f in "$FONT_BAKER" "$UI_BAKER" "$IMAGE_LIB" "$ICON_CALENDAR"; do
 done
 
 PIKO_STAMP="$STAGE_DIR/.piko-stamp"
-PIKO_STATE="$(sha256sum "$0" "$FONT_BAKER" "$UI_BAKER" "$ICON_CALENDAR" "$IMAGE_LIB" \
+PIKO_STATE="$(sha256sum "$0" "$FONT_BAKER" "$UI_BAKER" "$ICON_CALENDAR" "$ICON_ERROR" "$IMAGE_LIB" \
     "$REPO/package-lock.json" | cut -d' ' -f1 | tr '\n' ' ')$FONT_SHA256"
 if [ "$FORCE" -eq 0 ] && [ -f "$PIKO_STAMP" ] \
    && [ "$(cat "$PIKO_STAMP")" = "$PIKO_STATE" ] && [ -d "$OUT_DIR" ]; then
@@ -98,7 +99,7 @@ mkdir -p "$OUT_DIR"
 
 node "$FONT_BAKER" --size "$SANS_SIZE"      "$FONT_DIR/LiberationSans-Regular.ttf" "$OUT_DIR/sans.pkfn"
 node "$FONT_BAKER" --size "$SANS_BOLD_SIZE" "$FONT_DIR/LiberationSans-Bold.ttf"    "$OUT_DIR/sans-bold.pkfn"
-node "$UI_BAKER" --icon calendar="$ICON_CALENDAR" "$OUT_DIR/notify.pkui"
+node "$UI_BAKER" --icon calendar="$ICON_CALENDAR" --icon error="$ICON_ERROR" "$OUT_DIR/notify.pkui"
 
 for f in sans.pkfn sans-bold.pkfn notify.pkui; do
     if [ ! -s "$OUT_DIR/$f" ]; then

@@ -89,3 +89,4 @@ usr/sbin/adduser
 usr/sbin/delgroup
 usr/sbin/deluser
 usr/sbin/fbset
+usr/sbin/udhcpd

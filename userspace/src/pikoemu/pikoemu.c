@@ -17,9 +17,10 @@
 #include "pikoemu_proto.h"
 #include "pikovideo.h"
 #include "pikoemu_ui.h"
+#include "piko_asset_format.h"
 
 #define PIKOEMU_PATHMAX 1024
-#define PIKOEMU_BEZEL_CACHE_REV "2"
+#define PIKOEMU_BEZEL_CACHE_REV "3"
 #define PIKOEMU_SCAN_STEP     4
 #define PIKOEMU_WATCH_MS      8000
 #define PIKOEMU_CHECK_MS      400
@@ -28,10 +29,12 @@ struct bezel_image {
     int w, h;
     int sx, sy, sw, sh;
     unsigned short *px;
+    unsigned char *al;
 };
 
 static SDL_Surface *screen;
 static int bezel_canvas_w, bezel_canvas_h;
+static int bezel_incompatible;
 static unsigned char *shared;
 static size_t shared_bytes;
 static size_t frame_bytes;
@@ -97,53 +100,114 @@ static unsigned int pkbz_u32(const unsigned char *p)
          | ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
 }
 
-static int pkbz_read(const char *path, struct bezel_image *b, char *stamp,
-                     size_t stamp_cap)
+static int skip_stamp(FILE *f, unsigned int slen, char *stamp, size_t stamp_cap)
 {
-    unsigned char hdr[36];
-    unsigned int slen;
+    if (stamp != NULL) {
+        size_t n = (slen < stamp_cap - 1) ? slen : stamp_cap - 1;
+        if (fread(stamp, 1, n, f) != n)
+            return 0;
+        stamp[n] = '\0';
+        if (slen > n && fseek(f, (long)(slen - n), SEEK_CUR) != 0)
+            return 0;
+        return 1;
+    }
+    return fseek(f, (long)slen, SEEK_CUR) == 0;
+}
+
+static int pkbz_read(const char *path, struct bezel_image *b)
+{
+    unsigned char hdr[PKBZ_HDR_FIXED];
+    struct pkbz_head head;
     size_t pixels;
     FILE *f = fopen(path, "rb");
 
     if (f == NULL)
         return 0;
     if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)
-        || memcmp(hdr, "PKBZ", 4) != 0 || pkbz_u32(hdr + 4) != 1) {
+        || !pkbz_parse_head(hdr, sizeof(hdr), &head)
+        || !skip_stamp(f, head.source_len, NULL, 0)) {
         fclose(f);
         return 0;
     }
-    b->w  = (int)pkbz_u32(hdr + 8);
-    b->h  = (int)pkbz_u32(hdr + 12);
-    b->sx = (int)pkbz_u32(hdr + 16);
-    b->sy = (int)pkbz_u32(hdr + 20);
-    b->sw = (int)pkbz_u32(hdr + 24);
-    b->sh = (int)pkbz_u32(hdr + 28);
-    slen  = pkbz_u32(hdr + 32);
-    if (b->w <= 0 || b->h <= 0 || b->sw <= 0 || b->sh <= 0) {
-        fclose(f);
-        return 0;
-    }
-    if (stamp != NULL) {
-        size_t n = (slen < stamp_cap - 1) ? slen : stamp_cap - 1;
-        if (fread(stamp, 1, n, f) != n) { fclose(f); return 0; }
-        stamp[n] = '\0';
-        if (slen > n && fseek(f, (long)(slen - n), SEEK_CUR) != 0) {
-            fclose(f);
-            return 0;
-        }
-    } else if (fseek(f, (long)slen, SEEK_CUR) != 0) {
-        fclose(f);
-        return 0;
-    }
+    b->w  = (int)head.width;
+    b->h  = (int)head.height;
+    b->sx = (int)head.screen_x;
+    b->sy = (int)head.screen_y;
+    b->sw = (int)head.screen_w;
+    b->sh = (int)head.screen_h;
     pixels = (size_t)b->w * b->h;
     b->px = (unsigned short *)malloc(pixels * 2);
-    if (b->px == NULL || fread(b->px, 2, pixels, f) != pixels) {
+    b->al = (unsigned char *)malloc(pixels);
+    if (b->px == NULL || b->al == NULL
+        || fread(b->px, 2, pixels, f) != pixels
+        || fread(b->al, 1, pixels, f) != pixels) {
         free(b->px);
+        free(b->al);
         b->px = NULL;
+        b->al = NULL;
         fclose(f);
         return 0;
     }
     fclose(f);
+    return 1;
+}
+
+static int pkbg_read(const char *path, int *w, int *h, unsigned short **px,
+                     char *stamp, size_t stamp_cap)
+{
+    unsigned char hdr[20];
+    size_t pixels;
+    FILE *f = fopen(path, "rb");
+
+    if (f == NULL)
+        return 0;
+    struct pkbg_head head;
+    if (fread(hdr, 1, sizeof(hdr), f) != sizeof(hdr)
+        || !pkbg_parse_head(hdr, sizeof(hdr), &head)
+        || !skip_stamp(f, head.source_len, stamp, stamp_cap)) {
+        fclose(f);
+        return 0;
+    }
+    *w = (int)head.width;
+    *h = (int)head.height;
+    pixels = (size_t)*w * *h;
+    *px = (unsigned short *)malloc(pixels * 2);
+    if (*px == NULL || fread(*px, 2, pixels, f) != pixels) {
+        free(*px);
+        *px = NULL;
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return 1;
+}
+
+static int background_load(const char *path, int *w, int *h, unsigned short **px)
+{
+    unsigned char head[512];
+    struct pkbg_head parsed;
+    size_t pixels, n;
+    FILE *f = fopen(path, "rb");
+
+    if (f == NULL)
+        return 0;
+    n = fread(head, 1, sizeof(head), f);
+    if (!pkbg_parse_head(head, n, &parsed)
+        || fseek(f, (long)parsed.pixel_offset, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
+    pixels = (size_t)parsed.width * parsed.height;
+    *px = (unsigned short *)malloc(pixels * 2);
+    if (*px == NULL || fread(*px, 2, pixels, f) != pixels) {
+        free(*px);
+        *px = NULL;
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    *w = (int)parsed.width;
+    *h = (int)parsed.height;
     return 1;
 }
 
@@ -155,11 +219,11 @@ static void pkbz_put_u32(unsigned char *p, unsigned int v)
     p[3] = (unsigned char)((v >> 24) & 0xFF);
 }
 
-static int pkbz_write(const char *path, const struct bezel_image *b,
+static int pkbg_write(const char *path, int w, int h, const unsigned short *px,
                       const char *stamp)
 {
-    unsigned char hdr[36];
-    size_t pixels = (size_t)b->w * b->h;
+    unsigned char hdr[20];
+    size_t pixels = (size_t)w * h;
     size_t slen = strlen(stamp);
     char tmp[PIKOEMU_PATHMAX + 8];
     FILE *f;
@@ -168,18 +232,14 @@ static int pkbz_write(const char *path, const struct bezel_image *b,
     f = fopen(tmp, "wb");
     if (f == NULL)
         return 0;
-    memcpy(hdr, "PKBZ", 4);
+    memcpy(hdr, "PKBG", 4);
     pkbz_put_u32(hdr + 4, 1);
-    pkbz_put_u32(hdr + 8, (unsigned int)b->w);
-    pkbz_put_u32(hdr + 12, (unsigned int)b->h);
-    pkbz_put_u32(hdr + 16, (unsigned int)b->sx);
-    pkbz_put_u32(hdr + 20, (unsigned int)b->sy);
-    pkbz_put_u32(hdr + 24, (unsigned int)b->sw);
-    pkbz_put_u32(hdr + 28, (unsigned int)b->sh);
-    pkbz_put_u32(hdr + 32, (unsigned int)slen);
+    pkbz_put_u32(hdr + 8, (unsigned int)w);
+    pkbz_put_u32(hdr + 12, (unsigned int)h);
+    pkbz_put_u32(hdr + 16, (unsigned int)slen);
     if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr)
         || fwrite(stamp, 1, slen, f) != slen
-        || fwrite(b->px, 2, pixels, f) != pixels) {
+        || fwrite(px, 2, pixels, f) != pixels) {
         fclose(f);
         unlink(tmp);
         return 0;
@@ -192,13 +252,28 @@ static int pkbz_write(const char *path, const struct bezel_image *b,
     return 1;
 }
 
+static size_t asset_roots(const struct pikoemu_cfg *c, char *zroot, size_t zcap,
+                          const char **roots)
+{
+    size_t n = 0;
+
+    pikorom_media_root_for(c->rom, zroot, zcap);
+    roots[n++] = zroot;
+    if (strcmp(zroot, "/usr/local/.zaurus") != 0)
+        roots[n++] = "/usr/local/.zaurus";
+    if (strcmp(zroot, "/mnt/card/.zaurus") != 0)
+        roots[n++] = "/mnt/card/.zaurus";
+    if (strcmp(zroot, "/mnt/cf/.zaurus") != 0)
+        roots[n++] = "/mnt/cf/.zaurus";
+    return n;
+}
+
 static int find_master(const struct pikoemu_cfg *c, char *out, size_t cap)
 {
     char zroot[64];
     const char *roots[4];
     struct stat st;
-
-    size_t i, n = 0;
+    size_t i, n;
 
     if (!c->has_bezel || c->bezel_image[0] == '\0')
         return 0;
@@ -207,15 +282,7 @@ static int find_master(const struct pikoemu_cfg *c, char *out, size_t cap)
         return stat(out, &st) == 0;
     }
 
-    pikorom_media_root_for(c->rom, zroot, sizeof(zroot));
-    roots[n++] = zroot;
-    if (strcmp(zroot, "/usr/local/.zaurus") != 0)
-        roots[n++] = "/usr/local/.zaurus";
-    if (strcmp(zroot, "/mnt/card/.zaurus") != 0)
-        roots[n++] = "/mnt/card/.zaurus";
-    if (strcmp(zroot, "/mnt/cf/.zaurus") != 0)
-        roots[n++] = "/mnt/cf/.zaurus";
-
+    n = asset_roots(c, zroot, sizeof(zroot), roots);
     for (i = 0; i < n; i++) {
         snprintf(out, cap, "%s/bezels/%s.pkbz", roots[i], c->bezel_image);
         if (stat(out, &st) == 0)
@@ -224,74 +291,54 @@ static int find_master(const struct pikoemu_cfg *c, char *out, size_t cap)
     return 0;
 }
 
-static int rotate_master(struct bezel_image *b)
-{
-    int w = b->w, h = b->h;
-    int sx = b->sx, sy = b->sy, sw = b->sw, sh = b->sh;
-    unsigned short *dst = (unsigned short *)malloc((size_t)w * h * 2);
-    int X, Y;
 
-    if (dst == NULL)
-        return 0;
-    for (Y = 0; Y < w; Y++) {
-        unsigned short *row = dst + (size_t)Y * h;
-        for (X = 0; X < h; X++)
-            row[X] = b->px[(size_t)X * w + (w - 1 - Y)];
+static int *span_table(int dstn, int srcn, double origin, double step)
+{
+    int *x0 = (int *)malloc((size_t)dstn * sizeof(int) * 2);
+    int *x1;
+    int i;
+
+    if (x0 == NULL)
+        return NULL;
+    x1 = x0 + dstn;
+    for (i = 0; i < dstn; i++) {
+        double s0 = ((double)i - origin) * step;
+        int a = (int)s0, e = (int)(s0 + step + 0.5);
+
+        if (e <= a) e = a + 1;
+        if (a < 0) a = 0;
+        if (e > srcn) e = srcn;
+        x0[i] = a;
+        x1[i] = (e > a) ? e : a;
     }
-    free(b->px);
-    b->px = dst;
-    b->w = h;
-    b->h = w;
-    b->sx = sy;
-    b->sy = w - sx - sw;
-    b->sw = sh;
-    b->sh = sw;
-    return 1;
+    return x0;
 }
 
-static int resize_bezel(const struct pikoemu_cfg *c,
-                        const struct bezel_image *src, struct bezel_image *dst)
+static void paint_background(const struct pikoemu_cfg *c, struct bezel_image *dst,
+                             const unsigned short *bg, int bgw, int bgh)
 {
-    double f = (double)bezel_canvas_w / src->sw;
-    double t = (double)bezel_canvas_h / src->sh;
-    double ox, oy, step;
+    double f, step, ox, oy;
     int *x0, *x1;
     int x, y;
 
-    if (t > f) f = t;
-    t = (double)c->screen_w / src->w; if (t > f) f = t;
-    t = (double)c->screen_h / src->h; if (t > f) f = t;
+    if (bg == NULL) {
+        memset(dst->px, 0, (size_t)dst->w * dst->h * 2);
+        return;
+    }
 
+    f = (double)c->screen_w / bgw;
+    if ((double)c->screen_h / bgh > f)
+        f = (double)c->screen_h / bgh;
     step = 1.0 / f;
-    ox = c->screen_w / 2.0 - (src->sx + src->sw / 2.0) * f;
-    oy = c->screen_h / 2.0 - (src->sy + src->sh / 2.0) * f;
+    ox = c->screen_w / 2.0 - bgw * f / 2.0;
+    oy = c->screen_h / 2.0 - bgh * f / 2.0;
 
-    dst->w = c->screen_w;
-    dst->h = c->screen_h;
-    dst->sw = (int)(src->sw * f + 0.5);
-    dst->sh = (int)(src->sh * f + 0.5);
-    dst->sx = (c->screen_w - dst->sw) / 2;
-    dst->sy = (c->screen_h - dst->sh) / 2;
-    dst->px = (unsigned short *)malloc((size_t)dst->w * dst->h * 2);
-    if (dst->px == NULL)
-        return 0;
-
-    x0 = (int *)malloc((size_t)dst->w * sizeof(int) * 2);
+    x0 = span_table(dst->w, bgw, ox, step);
     if (x0 == NULL) {
-        free(dst->px);
-        dst->px = NULL;
-        return 0;
+        memset(dst->px, 0, (size_t)dst->w * dst->h * 2);
+        return;
     }
     x1 = x0 + dst->w;
-    for (x = 0; x < dst->w; x++) {
-        double s0 = ((double)x - ox) * step;
-        int a = (int)s0, e = (int)(s0 + step + 0.5);
-        if (e <= a) e = a + 1;
-        if (a < 0) a = 0;
-        if (e > src->w) e = src->w;
-        x0[x] = a;
-        x1[x] = (e > a) ? e : a;
-    }
 
     for (y = 0; y < dst->h; y++) {
         double s0 = ((double)y - oy) * step;
@@ -300,7 +347,7 @@ static int resize_bezel(const struct pikoemu_cfg *c,
 
         if (yb <= ya) yb = ya + 1;
         if (ya < 0) ya = 0;
-        if (yb > src->h) yb = src->h;
+        if (yb > bgh) yb = bgh;
         if (yb <= ya) {
             memset(row, 0, (size_t)dst->w * 2);
             continue;
@@ -314,7 +361,7 @@ static int resize_bezel(const struct pikoemu_cfg *c,
                 continue;
             }
             for (sy = ya; sy < yb; sy++) {
-                const unsigned short *s = src->px + (size_t)sy * src->w;
+                const unsigned short *s = bg + (size_t)sy * bgw;
                 for (sx = x0[x]; sx < x1[x]; sx++) {
                     unsigned short p = s[sx];
                     r  += (p >> 11) & 0x1F;
@@ -327,6 +374,124 @@ static int resize_bezel(const struct pikoemu_cfg *c,
         }
     }
     free(x0);
+}
+
+static void blend_bezel(const struct pikoemu_cfg *c, struct bezel_image *dst,
+                        const struct bezel_image *src, double f)
+{
+    double step = 1.0 / f;
+    double ox = c->screen_w / 2.0 - (src->sx + src->sw / 2.0) * f;
+    double oy = c->screen_h / 2.0 - (src->sy + src->sh / 2.0) * f;
+    int *x0, *x1;
+    int x, y;
+
+    x0 = span_table(dst->w, src->w, ox, step);
+    if (x0 == NULL)
+        return;
+    x1 = x0 + dst->w;
+
+    for (y = 0; y < dst->h; y++) {
+        double s0 = ((double)y - oy) * step;
+        int ya = (int)s0, yb = (int)(s0 + step + 0.5);
+        unsigned short *row = dst->px + (size_t)y * dst->w;
+
+        if (yb <= ya) yb = ya + 1;
+        if (ya < 0) ya = 0;
+        if (yb > src->h) yb = src->h;
+        if (yb <= ya)
+            continue;
+        for (x = 0; x < dst->w; x++) {
+            unsigned int r = 0, g = 0, bl = 0, a = 0, n = 0;
+            unsigned int back, br, bg2, bb;
+            int sx, sy;
+
+            if (x1[x] <= x0[x])
+                continue;
+            for (sy = ya; sy < yb; sy++) {
+                const unsigned short *s = src->px + (size_t)sy * src->w;
+                const unsigned char *sa = src->al + (size_t)sy * src->w;
+                for (sx = x0[x]; sx < x1[x]; sx++) {
+                    unsigned short p = s[sx];
+                    unsigned int pa = sa[sx];
+                    r  += (((p >> 11) & 0x1F) * pa) / 255;
+                    g  += (((p >> 5) & 0x3F) * pa) / 255;
+                    bl += ((p & 0x1F) * pa) / 255;
+                    a  += pa;
+                    n++;
+                }
+            }
+            a /= n;
+            if (a == 0)
+                continue;
+            r = (r / n) * 255 / a;
+            g = (g / n) * 255 / a;
+            bl = (bl / n) * 255 / a;
+            if (r > 0x1F) r = 0x1F;
+            if (g > 0x3F) g = 0x3F;
+            if (bl > 0x1F) bl = 0x1F;
+            if (a >= 255) {
+                row[x] = (unsigned short)((r << 11) | (g << 5) | bl);
+                continue;
+            }
+            back = row[x];
+            br = (back >> 11) & 0x1F;
+            bg2 = (back >> 5) & 0x3F;
+            bb = back & 0x1F;
+            r  = (r * a + br * (255 - a)) / 255;
+            g  = (g * a + bg2 * (255 - a)) / 255;
+            bl = (bl * a + bb * (255 - a)) / 255;
+            row[x] = (unsigned short)((r << 11) | (g << 5) | bl);
+        }
+    }
+    free(x0);
+}
+
+static void blank_hole(const struct pikoemu_cfg *c, struct bezel_image *dst)
+{
+    int x0 = dst->sx, y0 = dst->sy;
+    int x1 = dst->sx + dst->sw, y1 = dst->sy + dst->sh;
+    int y;
+
+    if (bezel_canvas_w > dst->sw) {
+        x0 = (c->screen_w - bezel_canvas_w) / 2;
+        x1 = x0 + bezel_canvas_w;
+    }
+    if (bezel_canvas_h > dst->sh) {
+        y0 = (c->screen_h - bezel_canvas_h) / 2;
+        y1 = y0 + bezel_canvas_h;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > dst->w) x1 = dst->w;
+    if (y1 > dst->h) y1 = dst->h;
+
+    for (y = y0; y < y1; y++)
+        memset(dst->px + (size_t)y * dst->w + x0, 0, (size_t)(x1 - x0) * 2);
+}
+
+static int compose_bezel(const struct pikoemu_cfg *c, const struct bezel_image *src,
+                         const unsigned short *bg, int bgw, int bgh,
+                         struct bezel_image *dst)
+{
+    double f = (double)bezel_canvas_w / src->sw;
+    double t = (double)bezel_canvas_h / src->sh;
+
+    if (t > f) f = t;
+    if (f > 1.0) f = 1.0;
+
+    dst->w = c->screen_w;
+    dst->h = c->screen_h;
+    dst->sw = (int)(src->sw * f + 0.5);
+    dst->sh = (int)(src->sh * f + 0.5);
+    dst->sx = (c->screen_w - dst->sw) / 2;
+    dst->sy = (c->screen_h - dst->sh) / 2;
+    dst->px = (unsigned short *)malloc((size_t)dst->w * dst->h * 2);
+    if (dst->px == NULL)
+        return 0;
+
+    paint_background(c, dst, bg, bgw, bgh);
+    blend_bezel(c, dst, src, f);
+    blank_hole(c, dst);
     return 1;
 }
 
@@ -335,9 +500,14 @@ static int load_bezel(const struct pikoemu_cfg *c, struct bezel_image *b)
     char master[PIKOEMU_PATHMAX];
     char cache[PIKOEMU_PATHMAX];
     char dir[PIKOEMU_PATHMAX];
-    char want[128], got[160];
+    char bgname[PIKOEMU_MAXVAL];
+    char bgpath[PIKOEMU_PATHMAX];
+    char want[256], got[288];
     struct bezel_image raw;
-    struct stat st;
+    struct stat st, bgst;
+    unsigned short *bg = NULL;
+    int bgw = 0, bgh = 0;
+    int ok;
     char *slash;
 
     if (!find_master(c, master, sizeof(master)))
@@ -345,20 +515,31 @@ static int load_bezel(const struct pikoemu_cfg *c, struct bezel_image *b)
     if (stat(master, &st) != 0)
         return 0;
 
-    snprintf(want, sizeof(want), "%s:%lu:%lu:%dx%d:%dx%d", PIKOEMU_BEZEL_CACHE_REV,
+    bgpath[0] = '\0';
+    bgst.st_size = 0;
+    bgst.st_mtime = 0;
+    if (pikobg_for_bezel(c->bezel_image, bgname, sizeof(bgname))
+        && pikobg_path_for(bgname, bgpath, sizeof(bgpath))) {
+        if (stat(bgpath, &bgst) != 0)
+            bgpath[0] = '\0';
+    }
+
+    snprintf(want, sizeof(want), "%s:%lu:%lu:%lu:%lu:%dx%d:%dx%d",
+             PIKOEMU_BEZEL_CACHE_REV,
              (unsigned long)st.st_size, (unsigned long)st.st_mtime,
+             (unsigned long)bgst.st_size, (unsigned long)bgst.st_mtime,
              c->screen_w, c->screen_h, bezel_canvas_w, bezel_canvas_h);
 
     snprintf(dir, sizeof(dir), "%s", master);
     slash = strrchr(dir, '/');
     if (slash != NULL)
         *slash = '\0';
-    snprintf(cache, sizeof(cache), "%s/cache/%s-%dx%d-%dx%d.pkbz", dir,
+    snprintf(cache, sizeof(cache), "%s/cache/%s-%dx%d-%dx%d.pkbg", dir,
              c->bezel_image[0] == '/' ? "bezel" : c->bezel_image,
              c->screen_w, c->screen_h, bezel_canvas_w, bezel_canvas_h);
 
     got[0] = '\0';
-    if (pkbz_read(cache, b, got, sizeof(got))
+    if (pkbg_read(cache, &b->w, &b->h, &b->px, got, sizeof(got))
         && b->w == c->screen_w && b->h == c->screen_h
         && strcmp(got, want) == 0) {
         trace_out("bezel cache hit");
@@ -368,20 +549,29 @@ static int load_bezel(const struct pikoemu_cfg *c, struct bezel_image *b)
     b->px = NULL;
 
     memset(&raw, 0, sizeof(raw));
-    if (!pkbz_read(master, &raw, NULL, 0))
+    if (!pkbz_read(master, &raw))
         return 0;
-    if (bezel_canvas_w > bezel_canvas_h && raw.sh > raw.sw) {
-        if (!rotate_master(&raw)) {
-            free(raw.px);
-            return 0;
-        }
-        trace_out("bezel rotated 90 CCW for a landscape canvas");
-    }
-    if (!resize_bezel(c, &raw, b)) {
+    if (bezel_canvas_w > raw.sw || bezel_canvas_h > raw.sh) {
+        char msg[128];
+
+        snprintf(msg, sizeof(msg),
+                 "canvas %dx%d does not fit the %dx%d hole of %s, dropping it",
+                 bezel_canvas_w, bezel_canvas_h, raw.sw, raw.sh, c->bezel_image);
+        trace_out(msg);
+        bezel_incompatible = 1;
         free(raw.px);
+        free(raw.al);
         return 0;
     }
+    if (bgpath[0] != '\0' && !background_load(bgpath, &bgw, &bgh, &bg))
+        bg = NULL;
+
+    ok = compose_bezel(c, &raw, bg, bgw, bgh, b);
     free(raw.px);
+    free(raw.al);
+    free(bg);
+    if (!ok)
+        return 0;
 
     snprintf(dir, sizeof(dir), "%s", cache);
     slash = strrchr(dir, '/');
@@ -389,10 +579,10 @@ static int load_bezel(const struct pikoemu_cfg *c, struct bezel_image *b)
         *slash = '\0';
         mkdir(dir, 0755);
     }
-    if (pkbz_write(cache, b, want))
-        trace_out("bezel resized and cached");
+    if (pkbg_write(cache, b->w, b->h, b->px, want))
+        trace_out("bezel composed and cached");
     else
-        trace_out("bezel resized, cache not written");
+        trace_out("bezel composed, cache not written");
     return 1;
 }
 
@@ -881,6 +1071,10 @@ int main(int argc, char **argv)
             unsigned int now = SDL_GetTicks();
             int uw, uh;
 
+            if (bezel_incompatible) {
+                ui_notify("Warning", "Incompatible bezel set", "error", now);
+                bezel_incompatible = 0;
+            }
             if (ready && !warned && now - ready_at < PIKOEMU_WATCH_MS
                 && now - last_check >= PIKOEMU_CHECK_MS) {
                 last_check = now;

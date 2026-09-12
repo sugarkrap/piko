@@ -36,13 +36,12 @@ knowing before reading the code:
   The server always knows exactly how many bytes of a file it has
   durably written; a client that reconnects just re-offers the same
   file and is told where to seek to. No cookie, no client-side resume
-  state needed — see `chunked-deploy.sh` in the piko repo for the same
-  philosophy applied to one-shot `scp` transfers.
+  state needed.
 - **A whole-file CRC32 at the end, not per-chunk hashing.** Every chunk
   already crosses the wire inside TCP, which checksums it in flight; the
   CRC32 only has to catch what TCP can't (corruption after a byte was
   already durable). A mismatch means "resend the whole file," not
-  "resend one bad chunk" — again, `chunked-deploy.sh`'s tradeoff.
+  "resend one bad chunk".
 
 Resume is scoped to **within one running server process**: reconnecting
 after a dropped WiFi link resumes correctly; a server *restart* does not

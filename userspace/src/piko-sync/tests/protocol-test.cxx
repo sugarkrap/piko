@@ -1,6 +1,6 @@
 #include "../protocol.h"
-#include "../rom_detect.h"
-#include "../emulation_db.h"
+#include "rom_detect.h"
+#include "emulation_db.h"
 #include "../transfer_state.h"
 #include "../transfer_queue.h"
 
@@ -90,10 +90,11 @@ static void test_message_roundtrips()
     check(decode_file_complete(encode(fc), fc2), "file_complete decodes");
     check(fc2.crc32 == 0xdeadbeefu, "file_complete crc32");
 
-    FileCompleteAckMsg cok; cok.ok = true;
+    FileCompleteAckMsg cok; cok.ok = true; cok.path = "/mnt/card/Transfers/game.jar";
     FileCompleteAckMsg cok2;
     check(decode_file_complete_ack(encode(cok), cok2), "complete_ack (ok) decodes");
     check(cok2.ok, "complete_ack ok flag");
+    check_str(cok2.path, "/mnt/card/Transfers/game.jar", "complete_ack path");
 
     FileCompleteAckMsg cbad; cbad.ok = false; cbad.reason = "crc mismatch";
     FileCompleteAckMsg cbad2;
@@ -332,12 +333,12 @@ static void test_offer_new_file_no_collision()
 
 static void test_offer_collides_with_complete_file()
 {
-    printf("transfer_state: a name already fully on disk gets \"(1)\" appended\n");
+    printf("transfer_state: a name already fully on disk gets \"-1\" appended\n");
     TransferMap map;
     std::vector<std::string> existing;
     existing.push_back("photo.jpg");
     OfferDecision d = decide_offer(map, "photo.jpg", 1000, existing);
-    check_str(d.final_name, "photo (1).jpg", "extension kept after the collision suffix");
+    check_str(d.final_name, "photo-1.jpg", "extension kept after the collision suffix");
 }
 
 static void test_offer_collides_with_in_progress_transfer()
@@ -350,7 +351,7 @@ static void test_offer_collides_with_in_progress_transfer()
     OfferDecision b = decide_offer(map, "clip.mov", 9000, existing);
 
     check_str(a.final_name, "clip.mov", "first claimant keeps the plain name");
-    check_str(b.final_name, "clip (1).mov", "second, different-sized file gets renamed");
+    check_str(b.final_name, "clip-1.mov", "second, different-sized file gets renamed");
 }
 
 static void test_offer_same_key_resumes_same_final_name()
@@ -377,7 +378,7 @@ static void test_offer_dotfile_not_treated_as_pure_extension()
     std::vector<std::string> existing;
     existing.push_back(".bashrc");
     OfferDecision d = decide_offer(map, ".bashrc", 200, existing);
-    check_str(d.final_name, ".bashrc (1)", "suffix appended after the whole dotfile name");
+    check_str(d.final_name, ".bashrc-1", "suffix appended after the whole dotfile name");
 }
 
 static void test_queue_basic_progress()

@@ -43,7 +43,7 @@ inline std::string resolve_collision(const std::string &name,
         std::string candidate = name;
         if (n > 0) {
             char suffix[32];
-            snprintf(suffix, sizeof(suffix), " (%d)", n);
+            snprintf(suffix, sizeof(suffix), "-%d", n);
             candidate = base + suffix + ext;
         }
 

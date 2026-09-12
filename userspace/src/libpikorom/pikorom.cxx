@@ -17,7 +17,8 @@
 #include "jar_meta.h"
 #include "bezel_format.h"
 #include "bezel_store.h"
-#include "device_info.h"
+#include "background_store.h"
+#include "crc32.h"
 
 using namespace piko_sync;
 
@@ -166,6 +167,11 @@ struct pikorom_blob {
 struct pikorom_bezel_list {
     std::vector<StoredBezel> rows;
     std::vector<pikorom_bezel> view;
+};
+
+struct pikorom_bg_list {
+    std::vector<StoredBackground> rows;
+    std::vector<pikorom_background> view;
 };
 
 extern "C" {
@@ -723,6 +729,7 @@ pikorom_bezel_list *pikobezel_list(void)
     for (size_t i = 0; i < l->rows.size(); i++) {
         l->view[i].name = l->rows[i].name.c_str();
         l->view[i].media = l->rows[i].media;
+        l->view[i].size = l->rows[i].size;
         l->view[i].width = l->rows[i].master.width;
         l->view[i].height = l->rows[i].master.height;
         l->view[i].screen_x = l->rows[i].master.screen_x;
@@ -788,9 +795,13 @@ pikorom_blob *pikobezel_records(const pikorom_bezel_list *l)
     for (size_t i = 0; i < l->rows.size(); i++) {
         const PkbzHeader &h = l->rows[i].master;
         uint32_t crc = cached_file_crc32(bezel_file_for(l->rows[i].media, l->rows[i].name));
+        char tail[64];
         snprintf(buf, sizeof(buf), "|%u|%u|%u|%u|%u|%u|%u",
                  h.width, h.height, h.screen_x, h.screen_y, h.screen_w, h.screen_h, crc);
-        b->data += l->rows[i].name + buf + "\n";
+        snprintf(tail, sizeof(tail), "|%d|%u", l->rows[i].media, l->rows[i].size);
+        b->data += l->rows[i].name + buf + "|"
+                 + background_for_bezel(l->rows[i].name) + tail + "|"
+                 + bezel_file_for(l->rows[i].media, l->rows[i].name) + "\n";
     }
     return b;
 }
@@ -854,4 +865,105 @@ int pikobezel_set_rect(const char *name, unsigned int x, unsigned int y,
     return bezel_patch_rect(bezel_file_for(media, name), x, y, w, h) ? 1 : 0;
 }
 
+}
+
+pikorom_bg_list *pikobg_list(void)
+{
+    pikorom_bg_list *l = new pikorom_bg_list;
+    l->rows = background_list_all();
+    l->view.resize(l->rows.size());
+    for (size_t i = 0; i < l->rows.size(); i++) {
+        l->view[i].name = l->rows[i].name.c_str();
+        l->view[i].media = l->rows[i].media;
+        l->view[i].width = l->rows[i].head.width;
+        l->view[i].height = l->rows[i].head.height;
+    }
+    return l;
+}
+
+int pikobg_count(const pikorom_bg_list *l)
+{
+    return l ? static_cast<int>(l->view.size()) : 0;
+}
+
+const struct pikorom_background *pikobg_at(const pikorom_bg_list *l, int index)
+{
+    if (!l || index < 0 || index >= static_cast<int>(l->view.size()))
+        return 0;
+    return &l->view[index];
+}
+
+void pikobg_list_free(pikorom_bg_list *l)
+{
+    delete l;
+}
+
+int pikobg_name_safe(const char *name)
+{
+    return name && background_name_safe(name) ? 1 : 0;
+}
+
+int pikobg_path_for(const char *name, char *out, size_t outlen)
+{
+    if (!name || !background_name_safe(name) || !out || outlen == 0)
+        return 0;
+    int media = background_media_of(name);
+    if (media < 0)
+        return 0;
+    std::string path = background_file_for(media, name);
+    if (path.size() + 1 > outlen)
+        return 0;
+    memcpy(out, path.c_str(), path.size() + 1);
+    return 1;
+}
+
+pikorom_blob *pikobg_read(const char *name)
+{
+    char path[1024];
+    if (!pikobg_path_for(name, path, sizeof(path)))
+        return 0;
+    return pikorom_blob_read(path);
+}
+
+pikorom_blob *pikobg_records(const pikorom_bg_list *l)
+{
+    pikorom_blob *b = new pikorom_blob;
+    if (!l)
+        return b;
+    char buf[128];
+    for (size_t i = 0; i < l->rows.size(); i++) {
+        uint32_t crc = cached_file_crc32(background_file_for(l->rows[i].media,
+                                                             l->rows[i].name));
+        snprintf(buf, sizeof(buf), "|%u|%u|%u",
+                 l->rows[i].head.width, l->rows[i].head.height, crc);
+        b->data += l->rows[i].name + buf + "\n";
+    }
+    return b;
+}
+
+int pikobg_decode_header(const void *head, size_t len, unsigned int *w,
+                         unsigned int *h, size_t *pixel_offset)
+{
+    struct pkbg_head raw;
+    if (!head || !w || !h || !pixel_offset)
+        return 0;
+    if (!pkbg_parse_head(static_cast<const unsigned char *>(head), len, &raw))
+        return 0;
+    if (raw.pixel_offset > len)
+        return 0;
+    *w = raw.width;
+    *h = raw.height;
+    *pixel_offset = raw.pixel_offset;
+    return 1;
+}
+
+int pikobg_for_bezel(const char *bezel, char *out, size_t outlen)
+{
+    if (!bezel || !out || outlen == 0)
+        return 0;
+    std::string name = background_for_bezel(bezel);
+    if (name.empty() || name.size() + 1 > outlen)
+        return 0;
+    memcpy(out, name.c_str(), name.size() + 1);
+    return 1;
 }

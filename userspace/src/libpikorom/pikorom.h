@@ -32,6 +32,7 @@ struct pikorom_jar_meta {
 struct pikorom_bezel {
     const char  *name;
     int          media;
+    unsigned int size;
     unsigned int width, height;
     unsigned int screen_x, screen_y, screen_w, screen_h;
     const char  *source;
@@ -40,6 +41,14 @@ struct pikorom_bezel {
 typedef struct pikorom_db pikorom_db;
 typedef struct pikorom_blob pikorom_blob;
 typedef struct pikorom_bezel_list pikorom_bezel_list;
+typedef struct pikorom_bg_list pikorom_bg_list;
+
+struct pikorom_background {
+    const char  *name;
+    int          media;
+    unsigned int width;
+    unsigned int height;
+};
 
 const char *pikorom_media_name(int media);
 int         pikorom_media_of_path(const char *path);
@@ -105,6 +114,19 @@ int           pikobezel_write(int media, const char *name, const void *data, siz
 int           pikobezel_remove(const char *name);
 int           pikobezel_set_rect(const char *name, unsigned int x, unsigned int y,
                                  unsigned int w, unsigned int h);
+
+pikorom_bg_list                 *pikobg_list(void);
+int                              pikobg_count(const pikorom_bg_list *l);
+const struct pikorom_background *pikobg_at(const pikorom_bg_list *l, int index);
+void                             pikobg_list_free(pikorom_bg_list *l);
+
+int           pikobg_name_safe(const char *name);
+int           pikobg_path_for(const char *name, char *out, size_t outlen);
+pikorom_blob *pikobg_read(const char *name);
+pikorom_blob *pikobg_records(const pikorom_bg_list *l);
+int           pikobg_decode_header(const void *head, size_t len, unsigned int *w,
+                                   unsigned int *h, size_t *pixel_offset);
+int           pikobg_for_bezel(const char *bezel, char *out, size_t outlen);
 
 #ifdef __cplusplus
 }

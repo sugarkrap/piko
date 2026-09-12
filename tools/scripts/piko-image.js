@@ -227,13 +227,47 @@ const blit = (dst, src, x0, y0) => {
                 src.data.copy(dst.data, do_, so, so + 4);
                 continue;
             }
+            const da = dst.data[do_ + 3];
+            const oa = a + ((da * (255 - a)) / 255 | 0);
             for (let c = 0; c < 3; c++) {
-                dst.data[do_ + c] =
-                    (src.data[so + c] * a + dst.data[do_ + c] * (255 - a)) / 255 | 0;
+                const num = src.data[so + c] * a * 255 + dst.data[do_ + c] * da * (255 - a);
+                dst.data[do_ + c] = oa === 0 ? 0 : (num / (255 * oa) | 0);
             }
-            dst.data[do_ + 3] = 255;
+            dst.data[do_ + 3] = oa;
         }
     }
+};
+
+const alphaBbox = (img) => {
+    let minx = img.width, miny = img.height, maxx = -1, maxy = -1;
+    for (let y = 0; y < img.height; y++) {
+        for (let x = 0; x < img.width; x++) {
+            if (img.data[(y * img.width + x) * 4 + 3] === 0) continue;
+            if (x < minx) minx = x;
+            if (x > maxx) maxx = x;
+            if (y < miny) miny = y;
+            if (y > maxy) maxy = y;
+        }
+    }
+    if (maxx < minx || maxy < miny) return { x: 0, y: 0, w: img.width, h: img.height };
+    return { x: minx, y: miny, w: maxx - minx + 1, h: maxy - miny + 1 };
+};
+
+const crop = (img, rect) => {
+    const out = Buffer.alloc(rect.w * rect.h * 4);
+    for (let y = 0; y < rect.h; y++) {
+        img.data.copy(out, y * rect.w * 4,
+                      ((rect.y + y) * img.width + rect.x) * 4,
+                      ((rect.y + y) * img.width + rect.x + rect.w) * 4);
+    }
+    return { width: rect.w, height: rect.h, data: out };
+};
+
+const alpha8 = (img) => {
+    const out = Buffer.alloc(img.width * img.height);
+    for (let i = 0; i < img.width * img.height; i++)
+        out[i] = img.data[i * 4 + 3];
+    return out;
 };
 
 const rgb565 = (img) => {
@@ -280,11 +314,11 @@ const encodePNG = (img) => {
     ]);
 };
 
-const blank = (w, h, r = 0, g = 0, b = 0) => {
+const blank = (w, h, r = 0, g = 0, b = 0, a = 255) => {
     const data = Buffer.alloc(w * h * 4);
     for (let i = 0; i < w * h; i++) {
         const o = i * 4;
-        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = a;
     }
     return { width: w, height: h, data };
 };
@@ -292,4 +326,5 @@ const blank = (w, h, r = 0, g = 0, b = 0) => {
 module.exports = {
     decodePNG, decodeJPEG, decodeImage, encodePNG,
     resample, cover, blit, rgb565, blank,
+    alphaBbox, crop, alpha8,
 };
