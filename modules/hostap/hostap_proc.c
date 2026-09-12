@@ -382,15 +382,8 @@ void hostap_init_proc(local_info_t *local)
 
 void hostap_remove_proc(local_info_t *local)
 {
-	if (local->proc != NULL) {
-#ifndef PRISM2_NO_STATION_MODES
-#endif 
-#ifdef PRISM2_IO_DEBUG
-#endif 
-
-#ifndef PRISM2_NO_PROCFS_DEBUG
-#endif 
-	}
+	proc_remove(local->proc);
+	local->proc = NULL;
 }
 
 EXPORT_SYMBOL(hostap_init_proc);

@@ -81,7 +81,7 @@ inline bool ws_send_control(int fd, int opcode, const std::string &body, bool ma
     return write_all(fd, m.data(), m.size());
 }
 
-inline std::string wlan0_address()
+inline std::string interface_address(const char *name)
 {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0)
@@ -89,7 +89,7 @@ inline std::string wlan0_address()
 
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, "wlan0", IFNAMSIZ - 1);
+    strncpy(ifr.ifr_name, name, IFNAMSIZ - 1);
 
     std::string result;
     if (ioctl(fd, SIOCGIFADDR, &ifr) == 0) {

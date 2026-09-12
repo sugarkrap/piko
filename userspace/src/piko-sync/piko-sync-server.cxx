@@ -2157,16 +2157,26 @@ void ServerApp::scan_existing()
 
 void ServerApp::refresh_address()
 {
-    std::string ip = wlan0_address();
+    static const char *const interfaces[] = { "usb0", "wlan0" };
+    std::string addresses;
+    for (size_t i = 0; i < sizeof(interfaces) / sizeof(interfaces[0]); i++) {
+        std::string ip = interface_address(interfaces[i]);
+        if (!ip.empty()) {
+            char entry[64];
+            snprintf(entry, sizeof(entry), "%s%s:%u (%s)",
+                     addresses.empty() ? "" : ", ", ip.c_str(),
+                     static_cast<unsigned>(DEFAULT_PORT), interfaces[i]);
+            addresses += entry;
+        }
+    }
     char msg[256];
-    if (ip.empty()) {
-        snprintf(msg, sizeof(msg), "Waiting for WiFi (wlan0)...");
+    if (addresses.empty()) {
+        snprintf(msg, sizeof(msg), "Waiting for usb0 or wlan0...");
     } else if (listen_fd_ < 0) {
-        snprintf(msg, sizeof(msg), "%s -- could not start listening on port %u",
-                 ip.c_str(), static_cast<unsigned>(DEFAULT_PORT));
+        snprintf(msg, sizeof(msg), "%s -- could not start listening",
+                 addresses.c_str());
     } else {
-        snprintf(msg, sizeof(msg), "Listening on %s:%u", ip.c_str(),
-                 static_cast<unsigned>(DEFAULT_PORT));
+        snprintf(msg, sizeof(msg), "Listening on %s", addresses.c_str());
     }
     address_box_->copy_label(msg);
     address_box_->redraw();

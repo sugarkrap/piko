@@ -12,11 +12,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* The factory default shipped in the rootfs image -- read-only fallback
- * for a card that has never been calibrated. Calibrating always writes
- * to TOUCHSCREEN_CFG_CARD instead: piko-root.img is replaced wholesale
- * on every update, so anything written under /etc here would be lost
- * the moment the user drops a new update package on the card. */
 #define TOUCHSCREEN_CFG_DEFAULT  "/etc/piko/touchscreen.cfg"
 #define TOUCHSCREEN_CFG_CARD     "/mnt/card/.zaurus/etc/piko/touchscreen.cfg"
 #define TOUCHSCREEN_CFG_CARD_TMP "/mnt/card/.zaurus/etc/piko/touchscreen.cfg.new"

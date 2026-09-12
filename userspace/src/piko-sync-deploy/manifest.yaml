@@ -56,6 +56,18 @@ core_scripts:
     local: "${REPO}/rootfs/etc/wifi-up.sh"
     remote: /etc/wifi-up.sh
     mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/usr/sbin/hostapd"
+    remote: /usr/sbin/hostapd
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/usb0-up.sh"
+    remote: /etc/usb0-up.sh
+    mode: "0755"
+  - type: put_file
+    local: "${REPO}/rootfs/etc/udhcpd-usb0.conf"
+    remote: /etc/udhcpd-usb0.conf
+    mode: "0644"
   - type: mkdir
     remote: /usr/local/lib/phoneme/bin
   - type: put_file
