@@ -750,6 +750,8 @@ int main()
         check(desktop_rom_path(d) == r.path, "a launcher names the rom it came from");
         check(d.find("X-Piko-Media=SD\n") != std::string::npos,
               "a launcher names the media it came from");
+        check(d.find("X-Piko-Platform=SNES\n") != std::string::npos,
+              "a launcher names the platform the desktop files it under");
         check(desktop_rom_path("[Desktop Entry]\nExec=/usr/bin/st\n").empty(),
               "a launcher we did not write is left alone");
     }

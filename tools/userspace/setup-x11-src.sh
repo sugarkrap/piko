@@ -57,5 +57,19 @@ check_marker "$SRC/matchbox-panel" "system-monitor swap bar" \
     "applets/mb-applet-system-monitor.c" "CARD_SWAP_PREFIX"
 check_marker "$SRC/matchbox-panel" "wireless applet fixes" \
     "applets/mb-applet-wireless.c" "iface_address"
+check_marker "$SRC/matchbox-panel" "menu Emulation smart submenus" \
+    "applets/mb-applet-menu-launcher.c" "X-Piko-Platform"
+check_marker "$SRC/matchbox-desktop-classic" "flat paginated launcher" \
+    "src/mbdesktop.c" "mbdesktop_page_goto"
+check_marker "$SRC/matchbox-desktop-classic" "SD-card and install watch" \
+    "src/mbdesktop_watch.c" "mbdesktop_watch_wait"
+check_marker "$SRC/matchbox-desktop-classic" "repaint flush before select" \
+    "src/mbdesktop_watch.c" "XFlush (dpy)"
+check_marker "$SRC/matchbox-desktop-classic" "Emulation smart folders" \
+    "modules/dotdesktop.c" "insert_sorted_by_platform"
+check_marker "$SRC/matchbox-desktop-classic" "module unload frees and dlcloses" \
+    "src/mbdesktop.c" "dlclose(module_current->dl_handle)"
+check_marker "$SRC/matchbox-desktop-classic" "open folder kept across reloads" \
+    "src/mbdesktop.c" "restore_open_folder"
 
 echo "==> X11 submodules ready to configure"

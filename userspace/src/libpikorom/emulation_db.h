@@ -481,6 +481,7 @@ inline std::string desktop_contents(const RomEntry &e)
     out += "Terminal=false\n";
     out += "X-Piko-Rom=" + e.path + "\n";
     out += "X-Piko-Media=" + std::string(part_media_name(media_of_path(e.path))) + "\n";
+    out += "X-Piko-Platform=" + e.machine + "\n";
     out += "Categories=Game;Emulation;" + e.machine + ";\n";
     return out;
 }
