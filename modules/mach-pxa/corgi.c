@@ -46,6 +46,7 @@
 
 #include "pxa25x.h"
 #include <linux/platform_data/mmc-pxamci.h>
+#include <linux/platform_data/irda-pxaficp.h>
 #include "corgi.h"
 #include "sharpsl_pm.h"
 
@@ -757,6 +758,11 @@ static void corgi_restart(enum reboot_mode mode, const char *cmd)
 	pxa_restart(REBOOT_HARD, cmd);
 }
 
+static struct pxaficp_platform_data corgi_ficp_platform_data = {
+	.gpio_pwdown		= CORGI_GPIO_IR_ON,
+	.transceiver_cap	= IR_SIRMODE | IR_OFF,
+};
+
 static void __init corgi_init(void)
 {
 	pm_power_off = corgi_poweroff;
@@ -806,6 +812,7 @@ static void __init corgi_init(void)
 		gpiod_add_lookup_table(&corgi_mci_gpio_table);
 	gpiod_add_lookup_table(&corgi_audio_gpio_table);
 	pxa_set_mci_info(&corgi_mci_platform_data, NULL);
+	pxa_set_ficp_info(&corgi_ficp_platform_data);
 	pxa_set_i2c_info(NULL);
 	i2c_register_board_info(0, ARRAY_AND_SIZE(corgi_i2c_devices));
 

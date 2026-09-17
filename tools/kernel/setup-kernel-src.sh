@@ -66,6 +66,8 @@ copy_in() {
 
 echo "==> applying Corgi board files"
 copy_in "$REPO/modules/mach-pxa/corgi.c"    arch/arm/mach-pxa/corgi.c
+copy_in "$REPO/modules/mach-pxa/devices.c"  arch/arm/mach-pxa/devices.c
+copy_in "$REPO/modules/mach-pxa/pxa2xx.c"   arch/arm/mach-pxa/pxa2xx.c
 copy_in "$REPO/modules/mach-pxa/corgi_pm.c" arch/arm/mach-pxa/corgi_pm.c
 copy_in "$REPO/modules/mach-pxa/corgi.h"            arch/arm/mach-pxa/corgi.h
 
@@ -186,6 +188,33 @@ copy_in "$REPO/modules/wireless/Kconfig"  net/wireless/Kconfig
 copy_in "$REPO/modules/wireless/Makefile" net/wireless/Makefile
 copy_in "$REPO/modules/crypto/Kconfig"    crypto/Kconfig
 copy_in "$REPO/modules/crypto/Makefile"   crypto/Makefile
+
+echo "==> applying the IrDA stack (vendored from 4.16)"
+IRDA_NET_DEST=net/irda
+IRDA_DRV_DEST=drivers/net/irda
+for f in "$REPO"/modules/irda/net/*.c "$REPO"/modules/irda/net/Kconfig \
+         "$REPO"/modules/irda/net/Makefile; do
+    copy_in "$f" "$IRDA_NET_DEST/$(basename "$f")"
+done
+for f in "$REPO"/modules/irda/net/ircomm/*; do
+    copy_in "$f" "$IRDA_NET_DEST/ircomm/$(basename "$f")"
+done
+for f in "$REPO"/modules/irda/include/net/irda/*.h; do
+    copy_in "$f" "include/net/irda/$(basename "$f")"
+done
+copy_in "$REPO/modules/irda/include/uapi/linux/irda.h" \
+    include/uapi/linux/irda.h
+copy_in "$REPO/modules/irda/include/linux/platform_data/irda-pxaficp.h" \
+    include/linux/platform_data/irda-pxaficp.h
+for f in "$REPO"/modules/irda/drivers/*; do
+    copy_in "$f" "$IRDA_DRV_DEST/$(basename "$f")"
+done
+ensure_line_in_file "$KERNEL_DIR/net/Kconfig" \
+    'source "net/irda/Kconfig"'
+ensure_line_in_file "$KERNEL_DIR/net/Makefile" \
+    'obj-$(CONFIG_IRDA)		+= irda/'
+ensure_line_in_file "$KERNEL_DIR/drivers/net/Makefile" \
+    'obj-$(CONFIG_PXA_FICP)		+= irda/'
 
 echo "==> applying the Corgi ASoC sound driver"
 copy_in "$REPO/modules/sound-pxa/corgi.c"   sound/soc/pxa/corgi.c
