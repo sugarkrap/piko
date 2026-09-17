@@ -204,7 +204,7 @@ inline static void pxa_irda_fir_dma_rx_start(struct pxa_irda *si)
 	struct dma_async_tx_descriptor *tx;
 
 	tx = dmaengine_prep_slave_single(si->rxdma, si->dma_rx_buff_phy,
-					 IRDA_FRAME_SIZE_LIMIT, DMA_FROM_DEVICE,
+					 IRDA_FRAME_SIZE_LIMIT, DMA_DEV_TO_MEM,
 					 DMA_PREP_INTERRUPT);
 	if (!tx) {
 		dev_err(si->dev, "prep_slave_sg() failed\n");
@@ -221,7 +221,7 @@ inline static void pxa_irda_fir_dma_tx_start(struct pxa_irda *si)
 	struct dma_async_tx_descriptor *tx;
 
 	tx = dmaengine_prep_slave_single(si->txdma, si->dma_tx_buff_phy,
-					 si->dma_tx_buff_len, DMA_TO_DEVICE,
+					 si->dma_tx_buff_len, DMA_MEM_TO_DEV,
 					 DMA_PREP_INTERRUPT);
 	if (!tx) {
 		dev_err(si->dev, "prep_slave_sg() failed\n");
