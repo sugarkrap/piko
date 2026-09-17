@@ -1,0 +1,23 @@
+#!/bin/sh
+
+echo "== modules (irda, ircomm, ircomm_tty, pxaficp_ir?) =="
+lsmod | grep -E "irda|ircomm|pxaficp" || echo "none loaded -- run  irup"
+echo "== irda0 =="
+ifconfig irda0 2>/dev/null || echo "no irda0"
+echo "== tx/rx  (rx: bytes pkts ...  tx: bytes pkts ...) =="
+grep irda0 /proc/net/dev 2>/dev/null || echo "no irda0 in /proc/net/dev"
+echo "== discovery (peers seen, with their hint bits) =="
+cat /proc/net/irda/discovery 2>/dev/null || echo "no discovery log"
+echo "== irlap (link state, speed actually negotiated) =="
+cat /proc/net/irda/irlap 2>/dev/null || echo "no irlap"
+echo "== irlmp (lsaps) =="
+cat /proc/net/irda/irlmp 2>/dev/null || echo "no irlmp"
+echo "== ircomm =="
+cat /proc/net/irda/ircomm 2>/dev/null || echo "no ircomm"
+echo "== /dev/ircomm0 =="
+ls -l /dev/ircomm0 2>/dev/null || echo "missing -- ircomm-tty not loaded?"
+echo "== discovery enabled? =="
+cat /proc/sys/net/irda/discovery 2>/dev/null || echo "no discovery sysctl"
+echo "== recent kernel msgs (warnings?) =="
+dmesg | tail -n 20
+echo "== done =="
