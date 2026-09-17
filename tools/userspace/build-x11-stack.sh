@@ -394,6 +394,12 @@ if [ "$FULL_BUILD" -eq 1 ]; then
     FORCE_ARG=""
     [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
     sh "$REPO/tools/userspace/build-toasters.sh" $FORCE_ARG
+
+    echo ""
+    echo "==> building stroketest (tools/userspace/build-stroketest.sh)"
+    FORCE_ARG=""
+    [ "$FORCE" -eq 1 ] && FORCE_ARG="--force"
+    sh "$REPO/tools/userspace/build-stroketest.sh" $FORCE_ARG
 fi
 
 echo ""

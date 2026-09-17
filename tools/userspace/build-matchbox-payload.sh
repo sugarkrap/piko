@@ -47,6 +47,7 @@ XKBCOMP_BIN="${XKBCOMP_BIN:-$REPO/userspace/src/xkbcomp/xkbcomp}"
 XEV_BIN="${XEV_BIN:-$REPO/userspace/src/xev/xev}"
 ST_BIN="${ST_BIN:-$REPO/userspace/src/st/st}"
 TOASTERS_BIN="${TOASTERS_BIN:-$REPO/build/target/bin/toasters}"
+STROKETEST_BIN="${STROKETEST_BIN:-$REPO/build/target/bin/stroketest}"
 FLTKTEST_BIN="${FLTKTEST_BIN:-$STAGE/usr/bin/fltktest}"
 FBRUN_BIN="${FBRUN_BIN:-$STAGE/usr/bin/matchbox-apprun}"
 PIKOSTORE_BIN="${PIKOSTORE_BIN:-$STAGE/usr/bin/pikostore}"
@@ -110,6 +111,7 @@ BINS="$XSERVER_BIN:usr/local/bin/Xfbdev \
 $XKBCOMP_BIN:usr/bin/xkbcomp \
 $XEV_BIN:usr/local/bin/xev \
 $TOASTERS_BIN:usr/local/bin/toasters \
+$STROKETEST_BIN:usr/local/bin/stroketest \
 $FLTKTEST_BIN:usr/local/bin/fltktest \
 $PIKOSTORE_BIN:usr/local/bin/pikostore \
 $FOUND_BIN:usr/local/bin/found-file-browser \

@@ -6,10 +6,10 @@ DL_DIR="${DL_DIR:-$REPO/build/dl}"
 . "$REPO/tools/userspace/dl-cache.sh"
 piko_seed_dl_cache "$REPO" "$DL_DIR"
 
-BEZEL_VERSION="${BEZEL_VERSION:-v1.0.0}"
+BEZEL_VERSION="${BEZEL_VERSION:-v1.1.0}"
 BEZEL_ZIP="$DL_DIR/Starman99x-Mega-Bezel_$BEZEL_VERSION.zip"
 BEZEL_URL="https://github.com/Starman99x/Starman99x-shader-presets/releases/download/Starman99x-Mega-Bezel/Starman99x-Mega-Bezel_$BEZEL_VERSION.zip"
-BEZEL_SHA256="939105cb129e1b7509b690e4bde700290b451148291c13833b8dd2370338ab21"
+BEZEL_SHA256="d990e32aaed3b86566cd33d2b39f1b1d5f56d9af0216bf636d022d4386658fbd"
 
 STAGE_DIR="${STAGE_DIR:-$REPO/build/stage-bezels}"
 CONVERTER="$REPO/tools/scripts/starman-to-pkbz.js"
