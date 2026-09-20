@@ -36,6 +36,7 @@ kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
 "
 
 IRDA_MODULES="
+kernel/lib/crc/crc-ccitt.ko
 kernel/net/irda/irda.ko
 kernel/net/irda/ircomm/ircomm.ko
 kernel/net/irda/ircomm/ircomm-tty.ko

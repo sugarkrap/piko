@@ -764,14 +764,14 @@ static int pxa_irda_start(struct net_device *dev)
 	config.src_maxburst = 32;
 	config.dst_maxburst = 32;
 
-	si->rxdma = dma_request_chan(&dev->dev, "rx");
+	si->rxdma = dma_request_chan(si->dev, "rx");
 	if (IS_ERR(si->rxdma)) {
 		err = PTR_ERR(si->rxdma);
 		si->rxdma = NULL;
 		goto err_rx_dma;
 	}
 
-	si->txdma = dma_request_chan(&dev->dev, "tx");
+	si->txdma = dma_request_chan(si->dev, "tx");
 	if (IS_ERR(si->txdma)) {
 		err = PTR_ERR(si->txdma);
 		si->txdma = NULL;
