@@ -1,0 +1,59 @@
+#!/bin/sh
+
+IRDA_STACK="ircomm-tty ircomm pxaficp_ir irda"
+CIR_STACK="piko-cir-tx"
+
+mode_now() {
+	if test -d /sys/class/net/irda0; then
+		echo irda
+	elif test -c /dev/lirc0; then
+		echo blast
+	else
+		echo off
+	fi
+}
+
+drop() {
+	for m in $1; do
+		modprobe -r "$m" 2>/dev/null
+	done
+}
+
+case "${1:-status}" in
+	irda)
+		drop "$CIR_STACK"
+		exec /usr/sbin/irup
+		;;
+	blast)
+		drop "$IRDA_STACK"
+		if ! modprobe piko-cir-tx 2>/dev/null; then
+			echo "irmode: modprobe piko-cir-tx failed"
+			echo "irmode: the irda stack may still hold the gpios"
+			echo "irmode: check   lsmod | grep -E 'irda|ficp'   and   dmesg | tail"
+			exit 1
+		fi
+		if ! test -c /dev/lirc0; then
+			echo "irmode: loaded but no /dev/lirc0 -- check   dmesg | tail"
+			exit 1
+		fi
+		echo "blaster ready on /dev/lirc0 (38 kHz, 33% duty)"
+		if command -v ir-ctl >/dev/null 2>&1; then
+			echo "send:  ir-ctl -S nec:0x20df10ef"
+			echo "tune:  ir-ctl --carrier=36000 --duty-cycle=50 -S nec:0x20df10ef"
+		else
+			echo "no ir-ctl on this image -- write pulse/space pairs to /dev/lirc0"
+		fi
+		;;
+	off)
+		drop "$CIR_STACK"
+		drop "$IRDA_STACK"
+		echo "ir off, transceiver unpowered"
+		;;
+	status)
+		echo "ir mode: $(mode_now)"
+		;;
+	*)
+		echo "usage: irmode [irda|blast|off|status]"
+		exit 2
+		;;
+esac

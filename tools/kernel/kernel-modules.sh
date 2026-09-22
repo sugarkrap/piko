@@ -35,6 +35,11 @@ CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
 "
 
+CIR_MODULES="
+kernel/drivers/media/rc/rc-core.ko
+kernel/drivers/media/rc/piko-cir/piko-cir-tx.ko
+"
+
 IRDA_MODULES="
 kernel/lib/crc/crc-ccitt.ko
 kernel/net/irda/irda.ko

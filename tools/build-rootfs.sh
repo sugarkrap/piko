@@ -49,7 +49,8 @@ $SD_MODULES
 $NAND_MODULES
 $CPUFREQ_MODULES
 $USB_MODULES
-$IRDA_MODULES"
+$IRDA_MODULES
+$CIR_MODULES"
 for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
     dst="$OVERLAY/lib/modules/$KVER/$relpath"
