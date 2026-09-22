@@ -159,6 +159,7 @@ pkillx:usr/sbin/pkillx
 vol:usr/sbin/vol
 fbtext:usr/sbin/fbtext
 zramswap:usr/sbin/zramswap
+ir:usr/bin/ir
 kill:usr/bin/kill
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar

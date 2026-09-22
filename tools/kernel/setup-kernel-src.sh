@@ -216,7 +216,7 @@ ensure_line_in_file "$KERNEL_DIR/net/Makefile" \
 ensure_line_in_file "$KERNEL_DIR/drivers/net/Makefile" \
     'obj-$(CONFIG_PXA_FICP)		+= irda/'
 
-echo "==> applying the piko consumer IR transmitter"
+echo "==> applying the piko consumer IR driver"
 CIR_DEST=drivers/media/rc/piko-cir
 for f in "$REPO"/modules/cir/*; do
     copy_in "$f" "$CIR_DEST/$(basename "$f")"
@@ -224,7 +224,7 @@ done
 ensure_line_in_file "$KERNEL_DIR/drivers/media/rc/Kconfig" \
     'source "drivers/media/rc/piko-cir/Kconfig"'
 ensure_line_in_file "$KERNEL_DIR/drivers/media/rc/Makefile" \
-    'obj-$(CONFIG_IR_PIKO_CIR_TX) += piko-cir/'
+    'obj-$(CONFIG_IR_PIKO_CIR) += piko-cir/'
 
 echo "==> applying the Corgi ASoC sound driver"
 copy_in "$REPO/modules/sound-pxa/corgi.c"   sound/soc/pxa/corgi.c

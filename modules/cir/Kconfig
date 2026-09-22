@@ -1,11 +1,13 @@
-config IR_PIKO_CIR_TX
-	tristate "piko consumer IR transmitter (Zaurus IrDA transceiver)"
+config IR_PIKO_CIR
+	tristate "piko consumer IR (Zaurus IrDA transceiver)"
 	depends on RC_CORE && PXA25x
 	help
 	  Drives the Sharp Zaurus IrDA transceiver as a 38 kHz consumer
-	  infrared transmitter by bit-banging its TXD pin, so the device
-	  can act as a remote control. Mutually exclusive with pxaficp_ir,
-	  which owns the same pin and the same transceiver.
+	  infrared port, so the device can read remote controls and act
+	  as one. Transmit bit-bangs the transceiver's TXD pin; receive
+	  demodulates the carrier in software off an edge interrupt on
+	  RXD. Mutually exclusive with pxaficp_ir, which owns the same
+	  pins and the same transceiver.
 
 	  To compile this driver as a module, choose M here: the module
-	  will be called piko-cir-tx.
+	  will be called piko-cir.
