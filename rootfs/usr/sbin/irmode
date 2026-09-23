@@ -1,7 +1,8 @@
 #!/bin/sh
 
 IRDA_STACK="ircomm-tty ircomm pxaficp_ir irda"
-CIR_STACK="piko-cir"
+CIR_STACK="piko-cir ir-sanyo-decoder ir-sharp-decoder ir-sony-decoder ir-jvc-decoder ir-rc6-decoder ir-rc5-decoder ir-nec-decoder rc-core"
+CIR_DECODERS="ir-nec-decoder ir-rc5-decoder ir-rc6-decoder ir-jvc-decoder ir-sony-decoder ir-sharp-decoder ir-sanyo-decoder"
 
 mode_now() {
 	if test -d /sys/class/net/irda0; then
@@ -26,9 +27,17 @@ case "${1:-status}" in
 		;;
 	remote|blast)
 		drop "$IRDA_STACK"
+		if ! modprobe rc-core 2>/dev/null; then
+			echo "irmode: modprobe rc-core failed"
+			echo "irmode: check   dmesg | tail   and that /lib/modules/$(uname -r) has it"
+			exit 1
+		fi
+		for m in $CIR_DECODERS; do
+			modprobe "$m" 2>/dev/null || echo "irmode: no $m, raw capture still works"
+		done
 		if ! modprobe piko-cir 2>/dev/null; then
 			echo "irmode: modprobe piko-cir failed"
-			echo "irmode: the irda stack may still hold the gpios"
+			echo "irmode: the irda stack may still hold gpio 22"
 			echo "irmode: check   lsmod | grep -E 'irda|ficp'   and   dmesg | tail"
 			exit 1
 		fi
