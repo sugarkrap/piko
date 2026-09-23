@@ -24,7 +24,7 @@ static int rx_gpio = 46;
 static int pwdown_gpio = 22;
 static bool pwdown_inverted;
 static bool rx_active_low = true;
-static int carrier_gap = 150;
+static int carrier_gap = 250;
 static int rx_edges;
 
 module_param(tx_gpio, int, 0444);
