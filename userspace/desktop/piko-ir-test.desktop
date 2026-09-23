@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=IR test
+Comment=Switch IrDA and consumer IR, send a frame
+Exec=/usr/local/bin/piko-ir-test
+Icon=piko-ir-test.png
+Terminal=false
+Categories=Utility;

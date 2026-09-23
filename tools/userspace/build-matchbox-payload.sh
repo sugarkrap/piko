@@ -54,6 +54,7 @@ FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
 WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
 PIKO_SETTINGS_BIN="${PIKO_SETTINGS_BIN:-$STAGE/usr/bin/piko-settings}"
 PIKO_PLAYER_BIN="${PIKO_PLAYER_BIN:-$STAGE/usr/bin/piko-player}"
+PIKO_IR_TEST_BIN="${PIKO_IR_TEST_BIN:-$STAGE/usr/bin/piko-ir-test}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -116,6 +117,7 @@ $FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $PIKO_SETTINGS_BIN:usr/local/bin/piko-settings \
 $PIKO_PLAYER_BIN:usr/local/bin/piko-player \
+$PIKO_IR_TEST_BIN:usr/local/bin/piko-ir-test \
 $FBRUN_BIN:usr/sbin/matchbox-apprun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -175,7 +177,7 @@ for a in $applets; do
 done
 
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="piko-settings piko-player pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
+LAUNCHERS="piko-settings piko-player piko-ir-test pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else

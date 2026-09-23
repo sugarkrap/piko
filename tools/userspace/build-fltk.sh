@@ -285,6 +285,32 @@ else
     echo "==> skipping piko-player (no $PIKO_PLAYER_SRC)"
 fi
 
+PIKO_IR_TEST_SRC="$SRC/piko-ir-test.cxx"
+if [ -f "$PIKO_IR_TEST_SRC" ]; then
+    echo "==> building piko-ir-test"
+    ir_test_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -o "$STAGE/usr/bin/piko-ir-test" \
+        "$PIKO_IR_TEST_SRC" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk $ir_test_ldlibs
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-ir-test" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/userspace/build-fltk.sh: piko-ir-test does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-ir-test (no $PIKO_IR_TEST_SRC)"
+fi
+
 echo ""
 echo "==> done: FLTK staged in $STAGE"
 for f in "$STAGE"/usr/lib/libfltk*.so."$FL_DSO_VERSION"; do
