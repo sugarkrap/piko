@@ -8,6 +8,7 @@
 
 #define DEV		"/dev/lirc0"
 #define MAX_EDGES	1024
+#define MAX_TOTAL_US	1000000
 
 static int rx(int fd, unsigned int timeout_ms)
 {
@@ -55,11 +56,13 @@ static int rx(int fd, unsigned int timeout_ms)
 static unsigned int parse_edges(FILE *in, unsigned int *buf, unsigned int max)
 {
 	unsigned int count = 0;
+	unsigned long total = 0;
 	char line[128];
 
 	while (fgets(line, sizeof(line), in)) {
 		char *p = line;
 		unsigned long us;
+		int space = 0;
 
 		while (*p == ' ' || *p == '\t')
 			p++;
@@ -71,18 +74,34 @@ static unsigned int parse_edges(FILE *in, unsigned int *buf, unsigned int max)
 		}
 		if (!strncmp(p, "carrier", 7) || *p == '#' || *p == '\n' || *p == '\0')
 			continue;
-		if (!strncmp(p, "pulse", 5) || !strncmp(p, "space", 5))
+		if (!strncmp(p, "pulse", 5)) {
 			p += 5;
+		} else if (!strncmp(p, "space", 5)) {
+			p += 5;
+			space = 1;
+		}
+
+		if (space && !count)
+			continue;
 
 		us = strtoul(p, NULL, 10);
 		if (!us)
 			continue;
+
+		if (us > MAX_TOTAL_US || total + us > MAX_TOTAL_US) {
+			fprintf(stderr, "ir: edge %u is %lu us, over the %d us the kernel allows a frame\n",
+				count, us, MAX_TOTAL_US);
+			fprintf(stderr, "ir: sending the %u edges before it\n", count);
+			break;
+		}
 
 		if (count == max) {
 			fprintf(stderr, "ir: over %u edges, keeping the first %u\n",
 				max, max);
 			break;
 		}
+
+		total += us;
 		buf[count++] = (unsigned int)us;
 	}
 
