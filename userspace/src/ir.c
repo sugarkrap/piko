@@ -91,7 +91,8 @@ static unsigned int parse_edges(FILE *in, unsigned int *buf, unsigned int max)
 		if (us > MAX_TOTAL_US || total + us > MAX_TOTAL_US) {
 			fprintf(stderr, "ir: edge %u is %lu us, over the %d us the kernel allows a frame\n",
 				count, us, MAX_TOTAL_US);
-			fprintf(stderr, "ir: sending the %u edges before it\n", count);
+			fprintf(stderr, "ir: refusing the whole frame, this capture is malformed\n");
+			count = 0;
 			break;
 		}
 
