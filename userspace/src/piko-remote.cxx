@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "irstore.h"
@@ -27,6 +28,7 @@
 
 #define LIRC_DEV	"/dev/lirc0"
 #define IRMODE_BIN	"/usr/sbin/irmode"
+#define IRMODE_BUSY	3
 
 static Fl_Choice	*g_devices;
 static Fl_Scroll	*g_grid;
@@ -72,10 +74,24 @@ static void statusf(const char *fmt, ...)
 	status(buf);
 }
 
+static const char *irmode_bin(void)
+{
+	const char *env = getenv("PIKO_IRMODE");
+
+	return env && *env ? env : IRMODE_BIN;
+}
+
+static const char *lirc_dev(void)
+{
+	const char *env = getenv("PIKO_LIRC");
+
+	return env && *env ? env : LIRC_DEV;
+}
+
 static int lirc_open_lease(void)
 {
 	unsigned int mode = LIRC_MODE_PULSE;
-	int fd = open(LIRC_DEV, O_WRONLY | O_CLOEXEC);
+	int fd = open(lirc_dev(), O_WRONLY | O_CLOEXEC);
 
 	if (fd < 0)
 		return -1;
@@ -86,6 +102,71 @@ static int lirc_open_lease(void)
 	}
 
 	return fd;
+}
+
+static int run_cmd(const char *cmd, char *out, size_t n)
+{
+	FILE *pipe = popen(cmd, "r");
+	size_t used = 0;
+	int rc;
+
+	out[0] = '\0';
+
+	if (!pipe)
+		return -1;
+
+	while (used + 1 < n) {
+		size_t got = fread(out + used, 1, n - used - 1, pipe);
+
+		if (!got)
+			break;
+		used += got;
+	}
+	out[used] = '\0';
+
+	rc = pclose(pipe);
+
+	return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+}
+
+static void show_device_status(void)
+{
+	if (g_dev)
+		statusf("%s -- %u button%s", g_dev->label, g_dev->count,
+			g_dev->count == 1 ? "" : "s");
+	else
+		status("no device yet -- tap New");
+}
+
+static void note_refusal(const char *out)
+{
+	const char *p = out;
+
+	while (*p) {
+		const char *e = strchr(p, '\n');
+		size_t len = e ? (size_t)(e - p) : strlen(p);
+		char line[160];
+
+		while (len && (*p == ' ' || *p == '\t')) {
+			p++;
+			len--;
+		}
+
+		if (!strncmp(p, "pid ", 4) || !strncmp(p, "an irlap", 8)) {
+			if (len >= sizeof(line))
+				len = sizeof(line) - 1;
+			memcpy(line, p, len);
+			line[len] = '\0';
+			statusf("cannot take the ir port: %s", line);
+			return;
+		}
+
+		if (!e)
+			break;
+		p = e + 1;
+	}
+
+	status("cannot take the ir port -- see  irmode holders");
 }
 
 static void claim(void)
@@ -117,6 +198,7 @@ static int cmp_slug(const void *a, const void *b)
 }
 
 static void rebuild_grid(void);
+static void ensure_cir(void);
 
 static void button_cb(Fl_Widget *w, void *data)
 {
@@ -131,8 +213,13 @@ static void button_cb(Fl_Widget *w, void *data)
 	}
 
 	if (send_button(b)) {
-		statusf("cannot send: is %s loaded? try  irmode remote", LIRC_DEV);
-		return;
+		ensure_cir();
+		if (g_lirc < 0)
+			return;
+		if (send_button(b)) {
+			status("send failed -- check  dmesg | tail");
+			return;
+		}
 	}
 
 	statusf("sent %s (%u edges)", b->label, b->count);
@@ -277,8 +364,7 @@ static void select_device(const char *slug)
 	g_dev = slug ? ir_device_load(slug) : NULL;
 
 	if (g_dev)
-		statusf("%s -- %u button%s", g_dev->label, g_dev->count,
-			g_dev->count == 1 ? "" : "s");
+		show_device_status();
 
 	g_rename->activate();
 	g_delete->activate();
@@ -471,6 +557,42 @@ static void relayout(void)
 	rebuild_grid();
 }
 
+static void ensure_cir(void)
+{
+	char out[512];
+	char cmd[256];
+	int rc;
+
+	claim();
+	if (g_lirc >= 0) {
+		show_device_status();
+		return;
+	}
+
+	status("taking the ir port for consumer ir...");
+	Fl::check();
+
+	snprintf(cmd, sizeof(cmd), "%s remote 2>&1", irmode_bin());
+	rc = run_cmd(cmd, out, sizeof(out));
+
+	if (rc == IRMODE_BUSY) {
+		note_refusal(out);
+		return;
+	}
+	if (rc) {
+		statusf("irmode remote failed (%d) -- run it in a terminal",
+			rc);
+		return;
+	}
+
+	claim();
+
+	if (g_lirc < 0)
+		statusf("irmode ran but %s never appeared", lirc_dev());
+	else
+		show_device_status();
+}
+
 class RemoteWindow : public Fl_Double_Window {
 public:
 	RemoteWindow(int w, int h, const char *l)
@@ -534,9 +656,7 @@ int main(int argc, char **argv)
 	else
 		reload_devices(NULL);
 
-	claim();
-	if (g_lirc < 0)
-		statusf("no %s yet -- run  irmode remote", LIRC_DEV);
+	ensure_cir();
 
 	return Fl::run();
 }
