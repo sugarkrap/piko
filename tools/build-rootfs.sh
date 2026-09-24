@@ -160,6 +160,8 @@ vol:usr/sbin/vol
 fbtext:usr/sbin/fbtext
 zramswap:usr/sbin/zramswap
 ir:usr/bin/ir
+ird:usr/sbin/ird
+irctl:usr/bin/irctl
 kill:usr/bin/kill
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar

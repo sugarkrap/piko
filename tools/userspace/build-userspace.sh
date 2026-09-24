@@ -57,7 +57,7 @@ PIKO_TOOL_BIN="${PIKO_TOOL_BIN:-$REPO/build/target/bin}"
 mkdir -p "$PIKO_TOOL_BIN"
 
 for _tool in md5sum untar brightd piko-splash flipd kill mhz pkillx fbtext \
-             cardswap zramswap vol hwclock ntpsync ir; do
+             cardswap zramswap vol hwclock ntpsync ir ird irctl; do
     _src="$REPO/userspace/src/$_tool.c"
     _bin="$PIKO_TOOL_BIN/$_tool"
     if [ ! -f "$_src" ]; then

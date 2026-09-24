@@ -112,6 +112,9 @@ if ! test -f /etc/dropbear/dropbear_ed25519_host_key; then
 fi
 /usr/sbin/dropbear -R 2>/dev/null
 
+mkdir -p /var/run
+/usr/sbin/ird 2>/tmp/ird.err &
+
 echo ""
 echo "=== zaurus-refresh stage 2 ready -- log in at the console ==="
 echo ""
