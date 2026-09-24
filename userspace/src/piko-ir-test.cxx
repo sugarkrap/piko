@@ -17,7 +17,7 @@
 #define SEND_H          48
 #define STATUS_H        44
 
-#define IRMODE_BIN      "/usr/sbin/irmode"
+#define IRCTL_BIN       "/usr/bin/irctl"
 #define IR_BIN          "/usr/bin/ir"
 #define FRAME_PATH      "/mnt/card/frame1.ir"
 #define EDGES_PARAM     "/sys/module/piko_cir/parameters/rx_edges"
@@ -85,16 +85,17 @@ static std::string current_mode(void)
     std::string mode;
     size_t colon;
 
-    run_command(IRMODE_BIN " status", output);
+    run_command(IRCTL_BIN " status", output);
 
-    colon = output.find(':');
+    colon = output.find("mode=");
     if (colon == std::string::npos) {
         return mode;
     }
 
-    mode = output.substr(colon + 1);
-    while (!mode.empty() && (mode[0] == ' ' || mode[0] == '\t')) {
-        mode.erase(0, 1);
+    mode = output.substr(colon + 5);
+    colon = mode.find(' ');
+    if (colon != std::string::npos) {
+        mode.erase(colon);
     }
     colon = mode.find('\n');
     if (colon != std::string::npos) {
@@ -121,14 +122,14 @@ static void refresh(void)
     }
     g_status->label(g_status_text.c_str());
 
-    if (g_mode == "remote" && stat(FRAME_PATH, &frame_stat) == 0) {
+    if (g_mode == "blaster" && stat(FRAME_PATH, &frame_stat) == 0) {
         g_send->activate();
     } else {
         g_send->deactivate();
     }
 
     g_irda->value(g_mode == "irda");
-    g_remote->value(g_mode == "remote");
+    g_remote->value(g_mode == "blaster");
     g_off->value(g_mode == "off");
 }
 
@@ -159,7 +160,7 @@ static void done(void)
 
 static void switch_mode(const char *mode, const char *busy_text)
 {
-    std::string command = std::string(IRMODE_BIN " ") + mode + " 2>&1";
+    std::string command = std::string(IRCTL_BIN " ") + mode + " 2>&1";
     std::string output;
 
     busy(busy_text);
@@ -175,7 +176,7 @@ static void irda_cb(Fl_Widget *, void *)
 
 static void remote_cb(Fl_Widget *, void *)
 {
-    switch_mode("remote", "Loading the consumer IR stack...");
+    switch_mode("blaster", "Loading the consumer IR stack...");
 }
 
 static void off_cb(Fl_Widget *, void *)

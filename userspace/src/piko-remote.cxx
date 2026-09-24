@@ -28,7 +28,7 @@
 #define CELL_H		52
 
 #define LIRC_DEV	"/dev/lirc0"
-#define IRMODE_BIN	"/usr/sbin/irmode"
+#define IRCTL_BIN	"/usr/bin/irctl"
 #define ENABLE_W	104
 #define POLL_SECONDS	2.0
 
@@ -77,11 +77,11 @@ static void statusf(const char *fmt, ...)
 	status(buf);
 }
 
-static const char *irmode_bin(void)
+static const char *irctl_bin(void)
 {
-	const char *env = getenv("PIKO_IRMODE");
+	const char *env = getenv("PIKO_IRCTL");
 
-	return env && *env ? env : IRMODE_BIN;
+	return env && *env ? env : IRCTL_BIN;
 }
 
 static const char *lirc_dev(void)
@@ -180,7 +180,7 @@ static void button_cb(Fl_Widget *w, void *data)
 		if (errno == EBUSY || errno == EACCES)
 			status("ir port busy -- an irda transfer is running");
 		else if (errno == ENOENT || errno == ENXIO)
-			statusf("no %s -- run  irmode on", lirc_dev());
+			statusf("no %s -- run  irctl blaster", lirc_dev());
 		else
 			statusf("send failed: %s", strerror(errno));
 		return;
@@ -549,7 +549,7 @@ static void enable_cb(Fl_Widget *, void *)
 	status("turning infrared on...");
 	Fl::check();
 
-	snprintf(cmd, sizeof(cmd), "%s on 2>&1", irmode_bin());
+	snprintf(cmd, sizeof(cmd), "%s blaster 2>&1", irctl_bin());
 	rc = run_cmd(cmd, out, sizeof(out));
 
 	if (!ir_available()) {
@@ -560,7 +560,7 @@ static void enable_cb(Fl_Widget *, void *)
 		if (out[0])
 			statusf("%s", out);
 		else
-			statusf("irmode on failed (%d)", rc);
+			statusf("irctl blaster failed (%d)", rc);
 		return;
 	}
 

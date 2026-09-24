@@ -199,7 +199,7 @@ int main(int argc, char **argv)
 	fd = open(dev, (recv ? O_RDONLY : O_WRONLY) | O_CLOEXEC);
 	if (fd < 0) {
 		perror(dev);
-		fprintf(stderr, "ir: no lirc device -- run  irmode remote\n");
+		fprintf(stderr, "ir: no lirc device -- run  irctl blaster\n");
 		return 1;
 	}
 
