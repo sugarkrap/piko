@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo "== modules (irda, ircomm, ircomm_tty, pxaficp_ir?) =="
-lsmod | grep -E "irda|ircomm|pxaficp" || echo "none loaded -- run  irup"
+lsmod | grep -E "irda|ircomm|pxaficp" || echo "none loaded -- run  irctl irda"
 echo "== irda0 =="
 ifconfig irda0 2>/dev/null || echo "no irda0"
 echo "== tx/rx  (rx: bytes pkts ...  tx: bytes pkts ...) =="
