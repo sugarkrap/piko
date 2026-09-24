@@ -17,13 +17,13 @@
 
 #include "irstore.h"
 
-#define HEADER_H	52
-#define PAD		12
-#define ROW_H		40
-#define STATUS_H	36
-#define GAP		8
-#define COLS		5
-#define CELL_H		56
+#define PAD		8
+#define ROW_H		38
+#define STATUS_H	26
+#define PAGE_H		28
+#define IR_MAX_ROWS	32
+#define GAP		6
+#define CELL_H		52
 
 #define LIRC_DEV	"/dev/lirc0"
 #define IRMODE_BIN	"/usr/sbin/irmode"
@@ -33,6 +33,13 @@ static Fl_Scroll	*g_grid;
 static Fl_Box		*g_status;
 static Fl_Button	*g_rename;
 static Fl_Button	*g_delete;
+static Fl_Button	*g_main;
+static Fl_Button	*g_custom;
+static Fl_Button	*g_add;
+static Fl_Window	*g_win;
+
+enum { PAGE_MAIN, PAGE_CUSTOM };
+static int		 g_page = PAGE_MAIN;
 
 static struct ir_device	*g_dev;
 static int		 g_lirc = -1;
@@ -131,21 +138,83 @@ static void button_cb(Fl_Widget *w, void *data)
 	statusf("sent %s (%u edges)", b->label, b->count);
 }
 
+static int landscape(void)
+{
+	return g_grid->w() > g_grid->h();
+}
+
+static int slot_pos(const struct ir_slot *s, int *row, int *col, int *span)
+{
+	if (landscape()) {
+		*row = s->l_row;
+		*col = s->l_col;
+		*span = s->l_w;
+	} else {
+		*row = s->p_row;
+		*col = s->p_col;
+		*span = s->p_w;
+	}
+
+	return *row >= 0 && *col >= 0;
+}
+
+static void style_button(Fl_Button *btn, const struct ir_button *b)
+{
+	char safe[IR_NAME_MAX + IR_GLYPH_MAX + 4];
+
+	if (b->glyph[0])
+		snprintf(safe, sizeof(safe), "%s  %s", b->glyph, b->label);
+	else
+		fl_safe(b->label, safe, sizeof(safe));
+
+	btn->copy_label(safe);
+	btn->labelsize(13);
+
+	if (b->major) {
+		btn->color(fl_rgb_color(0xC0, 0x54, 0x44));
+		btn->labelcolor(FL_WHITE);
+		btn->labelfont(FL_HELVETICA_BOLD);
+	}
+
+	btn->callback(button_cb, (void *)b->key);
+}
+
 static void rebuild_grid(void)
 {
-	int w = g_grid->w() - Fl::scrollbar_size() - GAP;
-	int cell_w = (w - (COLS - 1) * GAP) / COLS;
-	int x0 = g_grid->x() + GAP / 2;
-	int y0 = g_grid->y() + GAP / 2;
+	int cols = landscape() ? IR_COLS_LANDSCAPE : IR_COLS_PORTRAIT;
+	int inner = g_grid->w() - Fl::scrollbar_size() - GAP * 2;
+	int cell_w = (inner - (cols - 1) * GAP) / cols;
+	int x0 = g_grid->x() + GAP;
+	int y0 = g_grid->y() + GAP;
 	unsigned int i;
+	int placed = 0;
+	char used[IR_MAX_ROWS];
+	int rowmap[IR_MAX_ROWS];
+	int shown = 0;
+
+	memset(used, 0, sizeof(used));
+
+	if (g_dev && g_page == PAGE_MAIN) {
+		for (i = 0; i < g_dev->count; i++) {
+			const struct ir_slot *sl = ir_slot_for(g_dev->buttons[i].key);
+			int row, col, span;
+
+			if (!sl || !slot_pos(sl, &row, &col, &span))
+				continue;
+			if (row >= 0 && row < IR_MAX_ROWS)
+				used[row] = 1;
+		}
+	}
+
+	for (i = 0; i < IR_MAX_ROWS; i++)
+		rowmap[i] = used[i] ? shown++ : -1;
 
 	g_grid->clear();
 	g_grid->begin();
 
-	if (!g_dev || !g_dev->count) {
-		Fl_Box *hint = new Fl_Box(x0, y0, w, CELL_H,
-					  g_dev ? "no buttons learned yet"
-						: "no device yet -- tap New");
+	if (!g_dev) {
+		Fl_Box *hint = new Fl_Box(x0, y0, inner, CELL_H,
+					  "no device yet -- tap New");
 		hint->labelsize(12);
 		hint->labelcolor(fl_rgb_color(0x70, 0x70, 0x70));
 		g_grid->end();
@@ -155,22 +224,51 @@ static void rebuild_grid(void)
 
 	for (i = 0; i < g_dev->count; i++) {
 		struct ir_button *b = &g_dev->buttons[i];
-		int col = (int)(i % COLS);
-		int row = (int)(i / COLS);
-		Fl_Button *btn = new Fl_Button(x0 + col * (cell_w + GAP),
-					       y0 + row * (CELL_H + GAP),
-					       cell_w, CELL_H);
+		const struct ir_slot *s = ir_slot_for(b->key);
+		int row, col, span;
+		Fl_Button *btn;
 
-		char safe[IR_NAME_MAX + 2];
+		if (g_page == PAGE_MAIN) {
+			if (!s || !slot_pos(s, &row, &col, &span))
+				continue;
+			if (row < 0 || row >= IR_MAX_ROWS
+			    || rowmap[row] < 0)
+				continue;
+			row = rowmap[row];
+		} else {
+			if (s)
+				continue;
+			row = placed / cols;
+			col = placed % cols;
+			span = 1;
+		}
 
-		fl_safe(b->label, safe, sizeof(safe));
-		btn->copy_label(safe);
-		btn->labelsize(13);
-		btn->callback(button_cb, (void *)b->key);
+		btn = new Fl_Button(x0 + col * (cell_w + GAP),
+				    y0 + row * (CELL_H + GAP),
+				    cell_w * span + GAP * (span - 1), CELL_H);
+		style_button(btn, b);
+		placed++;
+	}
+
+	if (!placed) {
+		Fl_Box *hint = new Fl_Box(x0, y0, inner, CELL_H,
+					  g_page == PAGE_MAIN
+					  ? "no standard buttons learned yet"
+					  : "no custom buttons yet");
+		hint->labelsize(12);
+		hint->labelcolor(fl_rgb_color(0x70, 0x70, 0x70));
 	}
 
 	g_grid->end();
 	g_grid->redraw();
+}
+
+static void page_cb(Fl_Widget *w, void *)
+{
+	g_page = (w == (Fl_Widget *)g_custom) ? PAGE_CUSTOM : PAGE_MAIN;
+	g_main->value(g_page == PAGE_MAIN);
+	g_custom->value(g_page == PAGE_CUSTOM);
+	rebuild_grid();
 }
 
 static void select_device(const char *slug)
@@ -341,70 +439,100 @@ static void delete_cb(Fl_Widget *, void *)
 	statusf("deleted %s", slug);
 }
 
+static void relayout(void)
+{
+	int w, h, y;
+	int edit_w = 56;
+	int choice_w;
+	int page_w = 96;
+
+	if (!g_win || !g_grid || !g_status)
+		return;
+
+	w = g_win->w();
+	h = g_win->h();
+	y = PAD;
+	choice_w = w - PAD * 2 - GAP * 3 - edit_w * 3;
+
+	g_devices->resize(PAD, y, choice_w, ROW_H);
+	g_add->resize(PAD + choice_w + GAP, y, edit_w, ROW_H);
+	g_rename->resize(PAD + choice_w + GAP * 2 + edit_w, y, edit_w, ROW_H);
+	g_delete->resize(PAD + choice_w + GAP * 3 + edit_w * 2, y, edit_w,
+			 ROW_H);
+
+	y += ROW_H + GAP;
+	g_main->resize(PAD, y, page_w, PAGE_H);
+	g_custom->resize(PAD + page_w + GAP, y, page_w, PAGE_H);
+
+	y += PAGE_H + GAP;
+	g_grid->resize(PAD, y, w - PAD * 2, h - y - STATUS_H - PAD);
+	g_status->resize(PAD, h - STATUS_H, w - PAD * 2, STATUS_H - 2);
+
+	rebuild_grid();
+}
+
+class RemoteWindow : public Fl_Double_Window {
+public:
+	RemoteWindow(int w, int h, const char *l)
+		: Fl_Double_Window(w, h, l) { }
+
+	void resize(int X, int Y, int W, int H) {
+		Fl_Double_Window::resize(X, Y, W, H);
+		relayout();
+	}
+};
+
 int main(int argc, char **argv)
 {
-	int win_w = Fl::w();
-	int win_h = Fl::h();
-	int row_y = HEADER_H + PAD;
-	int grid_y = row_y + ROW_H + PAD;
-	int grid_h = win_h - grid_y - STATUS_H - PAD;
-	int edit_w = (win_w - PAD * 2 - GAP * 3) / 6;
-	int choice_w = win_w - PAD * 2 - GAP * 3 - edit_w * 3;
+	RemoteWindow win(Fl::w(), Fl::h(), "Remote");
 
-	Fl_Double_Window win(win_w, win_h, "Remote");
+	g_win = &win;
 	win.begin();
 
-	Fl_Box *header = new Fl_Box(0, 0, win_w, HEADER_H);
-	header->box(FL_FLAT_BOX);
-	header->color(fl_rgb_color(0xF0, 0xF0, 0xEC));
-
-	Fl_Box *title = new Fl_Box(PAD, 6, win_w - PAD * 2, 22, "Remote");
-	title->labelfont(FL_HELVETICA_BOLD);
-	title->labelsize(16);
-	title->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-
-	Fl_Box *sub = new Fl_Box(PAD, 28, win_w - PAD * 2, 16,
-				 "learned infrared, one file per device");
-	sub->labelsize(11);
-	sub->labelcolor(fl_rgb_color(0x60, 0x60, 0x60));
-	sub->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
-
-	g_devices = new Fl_Choice(PAD, row_y, choice_w, ROW_H);
+	g_devices = new Fl_Choice(PAD, PAD, 100, ROW_H);
 	g_devices->callback(device_cb);
 
-	Fl_Button *add = new Fl_Button(PAD + choice_w + GAP, row_y, edit_w,
-				       ROW_H, "New");
-	add->callback(new_cb);
+	g_add = new Fl_Button(0, 0, 10, ROW_H, "New");
+	g_add->callback(new_cb);
 
-	g_rename = new Fl_Button(PAD + choice_w + GAP * 2 + edit_w, row_y,
-				 edit_w, ROW_H, "Name");
+	g_rename = new Fl_Button(0, 0, 10, ROW_H, "Name");
 	g_rename->callback(rename_cb);
 
-	g_delete = new Fl_Button(PAD + choice_w + GAP * 3 + edit_w * 2, row_y,
-				 edit_w, ROW_H, "Del");
+	g_delete = new Fl_Button(0, 0, 10, ROW_H, "Del");
 	g_delete->callback(delete_cb);
 
-	g_grid = new Fl_Scroll(PAD, grid_y, win_w - PAD * 2, grid_h);
+	g_main = new Fl_Button(0, 0, 10, PAGE_H, "Buttons");
+	g_main->type(FL_RADIO_BUTTON);
+	g_main->labelsize(12);
+	g_main->value(1);
+	g_main->callback(page_cb);
+
+	g_custom = new Fl_Button(0, 0, 10, PAGE_H, "Custom");
+	g_custom->type(FL_RADIO_BUTTON);
+	g_custom->labelsize(12);
+	g_custom->callback(page_cb);
+
+	g_grid = new Fl_Scroll(PAD, PAD, 100, 100);
 	g_grid->box(FL_DOWN_BOX);
 	g_grid->type(Fl_Scroll::VERTICAL);
 	g_grid->end();
 
-	g_status = new Fl_Box(PAD, win_h - STATUS_H, win_w - PAD * 2,
-			      STATUS_H - PAD / 2);
+	g_status = new Fl_Box(0, 0, 10, STATUS_H);
 	g_status->box(FL_FLAT_BOX);
-	g_status->labelsize(12);
+	g_status->labelsize(11);
 	g_status->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
 	win.end();
 	win.resizable(g_grid);
 	win.show(argc, argv);
 
-	if (ir_store_ensure()) {
+	relayout();
+
+	if (ir_store_ensure())
 		statusf("cannot open %s -- is the card mounted?",
 			ir_store_dir());
-	} else {
+	else
 		reload_devices(NULL);
-	}
 
 	claim();
 	if (g_lirc < 0)
