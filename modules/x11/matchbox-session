@@ -8,6 +8,7 @@ APPLETS="$APPLETS,mb-applet-wireless"
 APPLETS="$APPLETS,mb-applet-card"
 APPLETS="$APPLETS,mb-applet-pikaffeine"
 APPLETS="$APPLETS,mb-brightness"
+APPLETS="$APPLETS,mb-irda"
 APPLETS="$APPLETS,mb-applet-menu-launcher"
 APPLETS="$APPLETS,mb-applet-tasks"
 

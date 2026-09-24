@@ -18,6 +18,7 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
+D_IRDA="${D_IRDA:-/tmp/mb-stage-irda}"
 
 DEPLOY=0
 TARGET=""
@@ -96,7 +97,7 @@ ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.0"
 ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.1"
 
 for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
-         "$D_BRIGHT" "$D_PIKAFFEINE"; do
+         "$D_BRIGHT" "$D_PIKAFFEINE" "$D_IRDA"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first." >&2

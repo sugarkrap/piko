@@ -17,6 +17,7 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
+D_IRDA="${D_IRDA:-/tmp/mb-stage-irda}"
 
 FORCE=0
 SKIP_ST=0
@@ -35,7 +36,7 @@ FULL_BUILD=0
 libXau libXdmcp libxcb libX11 libXext libXpm pixman libxkbfile xserver xkbcomp xev \
 libXrender libXft libmatchbox matchbox-window-manager \
 matchbox-desktop-classic matchbox-panel matchbox-common mb-applet-card mb-volume \
-mb-brightness mb-applet-pikaffeine"
+mb-brightness mb-applet-pikaffeine mb-irda"
 
 if [ ! -d "$TOOLCHAIN_BIN_DIR" ]; then
     echo "FAILED: toolchain bin dir not found: $TOOLCHAIN_BIN_DIR" >&2
@@ -162,6 +163,7 @@ destdir_for() {
     mb-volume)                       echo "$D_VOLUME" ;;
     mb-brightness)                   echo "$D_BRIGHT" ;;
     mb-applet-pikaffeine)            echo "$D_PIKAFFEINE" ;;
+    mb-irda)                         echo "$D_IRDA" ;;
     *)                               echo "$STAGE" ;;
     esac
 }
@@ -195,6 +197,7 @@ marker_for() {
     mb-volume)                echo "$D_VOLUME/usr/bin/mb-volume" ;;
     mb-brightness)            echo "$D_BRIGHT/usr/bin/mb-brightness" ;;
     mb-applet-pikaffeine)     echo "$D_PIKAFFEINE/usr/bin/mb-applet-pikaffeine" ;;
+    mb-irda)                  echo "$D_IRDA/usr/bin/mb-irda" ;;
     *) echo "FAILED: no marker known for $1" >&2; exit 1 ;;
     esac
 }
@@ -208,7 +211,7 @@ submodule_dir_for() {
 
 uses_autotools() {
     case "$1" in
-    mb-applet-card|mb-volume|mb-brightness|mb-applet-pikaffeine) return 1 ;;
+    mb-applet-card|mb-volume|mb-brightness|mb-applet-pikaffeine|mb-irda) return 1 ;;
     *) return 0 ;;
     esac
 }
@@ -328,6 +331,10 @@ build_one() {
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
       mb-applet-pikaffeine)
+          [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
+          make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
+          ;;
+      mb-irda)
           [ "$FORCE" -eq 1 ] && make clean >/dev/null 2>&1
           make -j"$(nproc 2>/dev/null || echo 4)" CC="$CC"
           ;;
