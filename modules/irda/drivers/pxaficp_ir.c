@@ -740,6 +740,18 @@ static int pxa_irda_start(struct net_device *dev)
 
 	si->speed = 9600;
 
+	if (gpio_is_valid(si->pdata->gpio_pwdown)) {
+		err = gpio_request(si->pdata->gpio_pwdown, "IrDA switch");
+		if (err)
+			return err;
+		err = gpio_direction_output(si->pdata->gpio_pwdown,
+					!si->pdata->gpio_pwdown_inverted);
+		if (err) {
+			gpio_free(si->pdata->gpio_pwdown);
+			return err;
+		}
+	}
+
 	err = request_irq(si->uart_irq, pxa_irda_sir_irq, 0, dev->name, dev);
 	if (err)
 		goto err_irq1;
@@ -832,6 +844,8 @@ err_rx_dma:
 err_irq2:
 	free_irq(si->uart_irq, dev);
 err_irq1:
+	if (gpio_is_valid(si->pdata->gpio_pwdown))
+		gpio_free(si->pdata->gpio_pwdown);
 
 	return err;
 }
@@ -843,6 +857,9 @@ static int pxa_irda_stop(struct net_device *dev)
 	netif_stop_queue(dev);
 
 	pxa_irda_shutdown(si);
+
+	if (gpio_is_valid(si->pdata->gpio_pwdown))
+		gpio_free(si->pdata->gpio_pwdown);
 
 	/* Stop IrLAP */
 	if (si->irlap) {
@@ -982,18 +999,6 @@ static int pxa_irda_probe(struct platform_device *pdev)
 	if (err)
 		goto err_mem_5;
 
-	if (gpio_is_valid(si->pdata->gpio_pwdown)) {
-		err = gpio_request(si->pdata->gpio_pwdown, "IrDA switch");
-		if (err)
-			goto err_startup;
-		err = gpio_direction_output(si->pdata->gpio_pwdown,
-					!si->pdata->gpio_pwdown_inverted);
-		if (err) {
-			gpio_free(si->pdata->gpio_pwdown);
-			goto err_startup;
-		}
-	}
-
 	if (si->pdata->startup) {
 		err = si->pdata->startup(si->dev);
 		if (err)
@@ -1044,8 +1049,6 @@ static void pxa_irda_remove(struct platform_device *_dev)
 	if (dev) {
 		struct pxa_irda *si = netdev_priv(dev);
 		unregister_netdev(dev);
-		if (gpio_is_valid(si->pdata->gpio_pwdown))
-			gpio_free(si->pdata->gpio_pwdown);
 		if (si->pdata->shutdown)
 			si->pdata->shutdown(si->dev);
 		kfree(si->tx_buff.head);

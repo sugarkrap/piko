@@ -1,23 +1,20 @@
 #!/bin/sh
 
-IRDA_STACK="ircomm-tty ircomm pxaficp_ir irda"
-CIR_STACK="piko-cir ir-sanyo-decoder ir-sharp-decoder ir-sony-decoder ir-jvc-decoder ir-rc6-decoder ir-rc5-decoder ir-nec-decoder rc-core"
-CIR_DECODERS="ir-nec-decoder ir-rc5-decoder ir-rc6-decoder ir-jvc-decoder ir-sony-decoder ir-sharp-decoder ir-sanyo-decoder"
+IRDA_LOAD="irda pxaficp_ir ircomm ircomm-tty"
+IRDA_DROP="ircomm-tty ircomm pxaficp_ir irda"
+CIR_LOAD="rc-core ir-nec-decoder ir-rc5-decoder ir-rc6-decoder ir-jvc-decoder ir-sony-decoder ir-sharp-decoder ir-sanyo-decoder piko-cir"
+CIR_DROP="piko-cir ir-sanyo-decoder ir-sharp-decoder ir-sony-decoder ir-jvc-decoder ir-rc6-decoder ir-rc5-decoder ir-nec-decoder rc-core"
 
 CIR_DEV="${IRMODE_CIR_DEV:-/dev/lirc0}"
-IRDA_DEV="${IRMODE_IRDA_DEV:-/dev/ircomm0}"
-IRLAP="${IRMODE_IRLAP:-/proc/net/irda/irlap}"
 
-BUSY=3
-
-mode_now() {
-	if test -d /sys/class/net/irda0; then
-		echo irda
-	elif test -c "$CIR_DEV"; then
-		echo remote
-	else
-		echo off
-	fi
+load() {
+	for m in $1; do
+		if ! modprobe "$m" 2>/dev/null; then
+			echo "irmode: modprobe $m failed"
+			echo "irmode: check  dmesg | tail  and /lib/modules/$(uname -r)"
+			return 1
+		fi
+	done
 }
 
 drop() {
@@ -26,93 +23,25 @@ drop() {
 	done
 }
 
-blind() {
-	if test "$(id -u 2>/dev/null || echo 0)" != 0; then
-		echo "irmode: not root, so other processes' open files are invisible"
-		echo "irmode: a device in use may go undetected"
-	fi
-}
-
-dev_holders() {
-	_dev="$1"
-	test -e "$_dev" || return 0
-	for _p in /proc/[0-9]*; do
-		_pid="${_p#/proc/}"
-		test "$_pid" = "$$" && continue
-		test -d "$_p/fd" || continue
-		ls -l "$_p/fd" 2>/dev/null | grep -q -- " -> $_dev\$" || continue
-		echo "  pid $_pid ($(cat "$_p/comm" 2>/dev/null || echo unknown)) holds $_dev"
-	done
-}
-
-irda_linked() {
-	test -r "$IRLAP" || return 1
-	grep "state: " "$IRLAP" 2>/dev/null | grep -qvE "LAP_NDM|LAP_OFFLINE"
-}
-
-cir_users() {
-	dev_holders "$CIR_DEV"
-}
-
-irda_users() {
-	dev_holders "$IRDA_DEV"
-	if irda_linked; then
-		echo "  an irlap link is up ($(grep 'state: ' "$IRLAP" | sed 's/.*state: //' | tr '\n' ' ' | sed 's/ *$//'))"
-	fi
-}
-
-refuse() {
-	echo "irmode: will not switch, $1 is in use:"
-	echo "$2"
-	echo "irmode: stop that first, then try again"
-	exit "$BUSY"
-}
-
 case "${1:-status}" in
-	irda)
-		blind
-		users="$(cir_users)"
-		if test -n "$users"; then
-			refuse "consumer ir" "$users"
-		fi
-		drop "$CIR_STACK"
-		exec /usr/sbin/irup
-		;;
-	remote|blast)
-		blind
-		users="$(irda_users)"
-		if test -n "$users"; then
-			refuse "irda" "$users"
-		fi
-		drop "$IRDA_STACK"
-		if ! modprobe rc-core 2>/dev/null; then
-			echo "irmode: modprobe rc-core failed"
-			echo "irmode: check   dmesg | tail   and that /lib/modules/$(uname -r) has it"
-			exit 1
-		fi
-		for m in $CIR_DECODERS; do
-			modprobe "$m" 2>/dev/null || echo "irmode: no $m, raw capture still works"
-		done
-		if ! modprobe piko-cir 2>/dev/null; then
-			echo "irmode: modprobe piko-cir failed"
-			echo "irmode: the irda stack may still hold gpio 22"
-			echo "irmode: check   lsmod | grep -E 'irda|ficp'   and   dmesg | tail"
-			exit 1
-		fi
+	on)
+		load "$IRDA_LOAD" || exit 1
+		load "$CIR_LOAD" || exit 1
 		if ! test -c "$CIR_DEV"; then
-			echo "irmode: loaded but no $CIR_DEV -- check   dmesg | tail"
+			echo "irmode: loaded but no $CIR_DEV -- check  dmesg | tail"
 			exit 1
 		fi
-		echo "consumer ir ready on $CIR_DEV (38 kHz, 33% duty)"
+		echo "ir on. both stacks loaded, neither holds the port."
 		echo ""
-		echo "record:  ir rx > /mnt/card/play.ir     then press a button, ^C"
-		echo "replay:  ir tx /mnt/card/play.ir"
-		echo "tune:    ir tx -c 36000 -d 50 /mnt/card/play.ir"
-		echo ""
-		echo "if ir rx prints nothing, press a button and read the edge counter:"
-		echo "  cat /sys/module/piko_cir/parameters/rx_edges"
-		echo "  0        the transceiver never saw the carrier at all"
-		echo "  hundreds it did, and only the timing is wrong -- try  irmode gap 250"
+		echo "blast:     ir tx frame.ir        (takes the port for the frame)"
+		echo "learn:     ir rx > frame.ir      (holds it until you stop)"
+		echo "transfer:  irup                  (holds it until irda0 goes down)"
+		;;
+	off)
+		drop "$CIR_DROP"
+		ifconfig irda0 down 2>/dev/null
+		drop "$IRDA_DROP"
+		echo "ir off, both stacks unloaded"
 		;;
 	gap)
 		if test -z "${2:-}"; then
@@ -126,39 +55,29 @@ case "${1:-status}" in
 		fi
 		echo "carrier gap now ${2}us"
 		;;
-	holders)
-		blind
-		echo "consumer ir ($CIR_DEV):"
-		users="$(cir_users)"
-		test -n "$users" && echo "$users" || echo "  nobody"
-		echo "irda ($IRDA_DEV):"
-		users="$(irda_users)"
-		test -n "$users" && echo "$users" || echo "  nobody"
-		;;
-	off)
-		blind
-		users="$(cir_users; irda_users)"
-		if test -n "$users"; then
-			refuse "the ir port" "$users"
-		fi
-		drop "$CIR_STACK"
-		drop "$IRDA_STACK"
-		echo "ir off, transceiver unpowered"
-		;;
 	status)
-		echo "ir mode: $(mode_now)"
-		if test -r /sys/module/piko_cir/parameters/rx_edges; then
-			echo "rx edges: $(cat /sys/module/piko_cir/parameters/rx_edges)"
-			echo "carrier gap: $(cat /sys/module/piko_cir/parameters/carrier_gap)us"
+		if test -d /sys/class/net/irda0; then
+			echo "irda:  loaded"
+		else
+			echo "irda:  not loaded"
 		fi
-		users="$(cir_users; irda_users)"
-		if test -n "$users"; then
-			echo "in use by:"
-			echo "$users"
+		if test -c "$CIR_DEV"; then
+			echo "cir:   loaded ($CIR_DEV)"
+		else
+			echo "cir:   not loaded"
+		fi
+		if ifconfig irda0 2>/dev/null | grep -q "UP"; then
+			echo "port:  held by irda (irda0 is up)"
+		else
+			echo "port:  free unless something has $CIR_DEV open"
+		fi
+		if test -r /sys/module/piko_cir/parameters/rx_edges; then
+			echo "edges: $(cat /sys/module/piko_cir/parameters/rx_edges)"
+			echo "gap:   $(cat /sys/module/piko_cir/parameters/carrier_gap)us"
 		fi
 		;;
 	*)
-		echo "usage: irmode [irda|remote|off|status|holders|gap [us]]"
+		echo "usage: irmode [on|off|status|gap [us]]"
 		exit 2
 		;;
 esac

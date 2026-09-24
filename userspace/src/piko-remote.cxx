@@ -6,6 +6,7 @@
 #include <FL/Fl_Scroll.H>
 #include <FL/fl_ask.H>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <linux/lirc.h>
@@ -13,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "irstore.h"
@@ -27,8 +27,6 @@
 #define CELL_H		52
 
 #define LIRC_DEV	"/dev/lirc0"
-#define IRMODE_BIN	"/usr/sbin/irmode"
-#define IRMODE_BUSY	3
 
 static Fl_Choice	*g_devices;
 static Fl_Scroll	*g_grid;
@@ -44,7 +42,6 @@ enum { PAGE_MAIN, PAGE_CUSTOM };
 static int		 g_page = PAGE_MAIN;
 
 static struct ir_device	*g_dev;
-static int		 g_lirc = -1;
 static char		 g_slugs[IR_MAX_DEVICES][IR_NAME_MAX];
 static int		 g_nslugs;
 
@@ -74,13 +71,6 @@ static void statusf(const char *fmt, ...)
 	status(buf);
 }
 
-static const char *irmode_bin(void)
-{
-	const char *env = getenv("PIKO_IRMODE");
-
-	return env && *env ? env : IRMODE_BIN;
-}
-
 static const char *lirc_dev(void)
 {
 	const char *env = getenv("PIKO_LIRC");
@@ -88,46 +78,7 @@ static const char *lirc_dev(void)
 	return env && *env ? env : LIRC_DEV;
 }
 
-static int lirc_open_lease(void)
-{
-	unsigned int mode = LIRC_MODE_PULSE;
-	int fd = open(lirc_dev(), O_WRONLY | O_CLOEXEC);
 
-	if (fd < 0)
-		return -1;
-
-	if (ioctl(fd, LIRC_SET_SEND_MODE, &mode) < 0) {
-		close(fd);
-		return -1;
-	}
-
-	return fd;
-}
-
-static int run_cmd(const char *cmd, char *out, size_t n)
-{
-	FILE *pipe = popen(cmd, "r");
-	size_t used = 0;
-	int rc;
-
-	out[0] = '\0';
-
-	if (!pipe)
-		return -1;
-
-	while (used + 1 < n) {
-		size_t got = fread(out + used, 1, n - used - 1, pipe);
-
-		if (!got)
-			break;
-		used += got;
-	}
-	out[used] = '\0';
-
-	rc = pclose(pipe);
-
-	return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
-}
 
 static void show_device_status(void)
 {
@@ -138,58 +89,29 @@ static void show_device_status(void)
 		status("no device yet -- tap New");
 }
 
-static void note_refusal(const char *out)
-{
-	const char *p = out;
 
-	while (*p) {
-		const char *e = strchr(p, '\n');
-		size_t len = e ? (size_t)(e - p) : strlen(p);
-		char line[160];
-
-		while (len && (*p == ' ' || *p == '\t')) {
-			p++;
-			len--;
-		}
-
-		if (!strncmp(p, "pid ", 4) || !strncmp(p, "an irlap", 8)) {
-			if (len >= sizeof(line))
-				len = sizeof(line) - 1;
-			memcpy(line, p, len);
-			line[len] = '\0';
-			statusf("cannot take the ir port: %s", line);
-			return;
-		}
-
-		if (!e)
-			break;
-		p = e + 1;
-	}
-
-	status("cannot take the ir port -- see  irmode holders");
-}
-
-static void claim(void)
-{
-	if (g_lirc >= 0)
-		return;
-
-	g_lirc = lirc_open_lease();
-}
 
 static int send_button(const struct ir_button *b)
 {
-	ssize_t want;
+	unsigned int mode = LIRC_MODE_PULSE;
+	ssize_t want = (ssize_t)(b->count * sizeof(b->edges[0]));
+	int fd = open(lirc_dev(), O_WRONLY | O_CLOEXEC);
+	int err;
 
-	if (g_lirc < 0) {
-		claim();
-		if (g_lirc < 0)
-			return -1;
+	if (fd < 0)
+		return -1;
+
+	if (ioctl(fd, LIRC_SET_SEND_MODE, &mode) < 0 ||
+	    write(fd, b->edges, want) != want) {
+		err = errno;
+		close(fd);
+		errno = err;
+		return -1;
 	}
 
-	want = (ssize_t)(b->count * sizeof(b->edges[0]));
+	close(fd);
 
-	return write(g_lirc, b->edges, want) == want ? 0 : -1;
+	return 0;
 }
 
 static int cmp_slug(const void *a, const void *b)
@@ -198,7 +120,6 @@ static int cmp_slug(const void *a, const void *b)
 }
 
 static void rebuild_grid(void);
-static void ensure_cir(void);
 
 static void button_cb(Fl_Widget *w, void *data)
 {
@@ -213,13 +134,13 @@ static void button_cb(Fl_Widget *w, void *data)
 	}
 
 	if (send_button(b)) {
-		ensure_cir();
-		if (g_lirc < 0)
-			return;
-		if (send_button(b)) {
-			status("send failed -- check  dmesg | tail");
-			return;
-		}
+		if (errno == EBUSY || errno == EACCES)
+			status("ir port busy -- an irda transfer is running");
+		else if (errno == ENOENT || errno == ENXIO)
+			statusf("no %s -- run  irmode on", lirc_dev());
+		else
+			statusf("send failed: %s", strerror(errno));
+		return;
 	}
 
 	statusf("sent %s (%u edges)", b->label, b->count);
@@ -557,41 +478,6 @@ static void relayout(void)
 	rebuild_grid();
 }
 
-static void ensure_cir(void)
-{
-	char out[512];
-	char cmd[256];
-	int rc;
-
-	claim();
-	if (g_lirc >= 0) {
-		show_device_status();
-		return;
-	}
-
-	status("taking the ir port for consumer ir...");
-	Fl::check();
-
-	snprintf(cmd, sizeof(cmd), "%s remote 2>&1", irmode_bin());
-	rc = run_cmd(cmd, out, sizeof(out));
-
-	if (rc == IRMODE_BUSY) {
-		note_refusal(out);
-		return;
-	}
-	if (rc) {
-		statusf("irmode remote failed (%d) -- run it in a terminal",
-			rc);
-		return;
-	}
-
-	claim();
-
-	if (g_lirc < 0)
-		statusf("irmode ran but %s never appeared", lirc_dev());
-	else
-		show_device_status();
-}
 
 class RemoteWindow : public Fl_Double_Window {
 public:
@@ -656,7 +542,7 @@ int main(int argc, char **argv)
 	else
 		reload_devices(NULL);
 
-	ensure_cir();
+	show_device_status();
 
 	return Fl::run();
 }

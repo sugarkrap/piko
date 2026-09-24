@@ -25,6 +25,7 @@ static int pwdown_gpio = 22;
 static bool pwdown_inverted;
 static bool rx_active_low = true;
 static int carrier_gap = 250;
+static int settle_us = 1000;
 static int rx_edges;
 
 module_param(tx_gpio, int, 0444);
@@ -33,6 +34,7 @@ module_param(pwdown_gpio, int, 0444);
 module_param(pwdown_inverted, bool, 0444);
 module_param(rx_active_low, bool, 0444);
 module_param(carrier_gap, int, 0644);
+module_param(settle_us, int, 0644);
 module_param(rx_edges, int, 0644);
 
 struct piko_cir {
@@ -253,6 +255,94 @@ out:
 	return ret;
 }
 
+static int piko_cir_claim(struct rc_dev *dev)
+{
+	struct piko_cir *cir = dev->priv;
+	int err;
+
+	if (gpio_is_valid(pwdown_gpio)) {
+		err = gpio_request(pwdown_gpio, "piko cir power");
+		if (err) {
+			pr_info(DRIVER_NAME ": gpio %d busy, irda has the port\n",
+				pwdown_gpio);
+			return err;
+		}
+	}
+
+	err = gpio_request(tx_gpio, "piko cir tx");
+	if (err)
+		goto err_pwdown;
+
+	err = gpio_request(rx_gpio, "piko cir rx");
+	if (err)
+		goto err_tx;
+
+	pxa2xx_transceiver_mode(NULL, IR_OFF);
+
+	if (gpio_is_valid(pwdown_gpio)) {
+		err = gpio_direction_output(pwdown_gpio,
+					    !false ^ !!pwdown_inverted);
+		if (err)
+			goto err_rx;
+	}
+
+	err = gpio_direction_output(tx_gpio, 0);
+	if (err)
+		goto err_rx;
+
+	err = gpio_direction_input(rx_gpio);
+	if (err)
+		goto err_rx;
+
+	err = gpio_to_irq(rx_gpio);
+	if (err < 0)
+		goto err_rx;
+	cir->irq = err;
+
+	cir->last_edge = ktime_get();
+	cir->in_pulse = false;
+
+	err = request_irq(cir->irq, piko_cir_rx_irq,
+			  rx_active_low ? IRQF_TRIGGER_FALLING
+					: IRQF_TRIGGER_RISING,
+			  DRIVER_NAME, cir);
+	if (err)
+		goto err_rx;
+
+	piko_cir_power(true);
+
+	if (settle_us > 0)
+		usleep_range(settle_us, settle_us * 2);
+
+	return 0;
+
+err_rx:
+	gpio_free(rx_gpio);
+err_tx:
+	gpio_free(tx_gpio);
+err_pwdown:
+	if (gpio_is_valid(pwdown_gpio))
+		gpio_free(pwdown_gpio);
+
+	return err;
+}
+
+static void piko_cir_release(struct rc_dev *dev)
+{
+	struct piko_cir *cir = dev->priv;
+
+	free_irq(cir->irq, cir);
+	hrtimer_cancel(&cir->gap);
+
+	gpio_set_value(tx_gpio, 0);
+	piko_cir_power(false);
+
+	gpio_free(rx_gpio);
+	gpio_free(tx_gpio);
+	if (gpio_is_valid(pwdown_gpio))
+		gpio_free(pwdown_gpio);
+}
+
 static int __init piko_cir_init(void)
 {
 	struct rc_dev *rcdev;
@@ -268,53 +358,10 @@ static int __init piko_cir_init(void)
 	hrtimer_setup(&piko_cir->gap, piko_cir_gap, CLOCK_MONOTONIC,
 		      HRTIMER_MODE_REL);
 
-	if (gpio_is_valid(pwdown_gpio)) {
-		err = gpio_request(pwdown_gpio, "piko cir power");
-		if (err) {
-			pr_err(DRIVER_NAME ": gpio %d busy, run  irmode off  first\n",
-			       pwdown_gpio);
-			goto err_free;
-		}
-	}
-
-	err = gpio_request(tx_gpio, "piko cir tx");
-	if (err) {
-		pr_err(DRIVER_NAME ": gpio %d busy\n", tx_gpio);
-		goto err_pwdown_gpio;
-	}
-
-	err = gpio_request(rx_gpio, "piko cir rx");
-	if (err) {
-		pr_err(DRIVER_NAME ": gpio %d busy\n", rx_gpio);
-		goto err_tx_gpio;
-	}
-
-	pxa2xx_transceiver_mode(NULL, IR_OFF);
-
-	if (gpio_is_valid(pwdown_gpio)) {
-		err = gpio_direction_output(pwdown_gpio,
-					    !false ^ !!pwdown_inverted);
-		if (err)
-			goto err_rx_gpio;
-	}
-
-	err = gpio_direction_output(tx_gpio, 0);
-	if (err)
-		goto err_rx_gpio;
-
-	err = gpio_direction_input(rx_gpio);
-	if (err)
-		goto err_rx_gpio;
-
-	err = gpio_to_irq(rx_gpio);
-	if (err < 0)
-		goto err_rx_gpio;
-	piko_cir->irq = err;
-
 	rcdev = rc_allocate_device(RC_DRIVER_IR_RAW);
 	if (!rcdev) {
 		err = -ENOMEM;
-		goto err_rx_gpio;
+		goto err_free;
 	}
 
 	rcdev->priv = piko_cir;
@@ -331,6 +378,8 @@ static int __init piko_cir_init(void)
 	rcdev->min_timeout = 1;
 	rcdev->timeout = IR_DEFAULT_TIMEOUT;
 	rcdev->max_timeout = 10 * IR_DEFAULT_TIMEOUT;
+	rcdev->open = piko_cir_claim;
+	rcdev->close = piko_cir_release;
 	rcdev->tx_ir = piko_cir_tx;
 	rcdev->s_tx_carrier = piko_cir_set_carrier;
 	rcdev->s_tx_duty_cycle = piko_cir_set_duty_cycle;
@@ -340,35 +389,15 @@ static int __init piko_cir_init(void)
 		goto err_rcdev;
 
 	piko_cir->rcdev = rcdev;
-	piko_cir_power(true);
-	piko_cir->last_edge = ktime_get();
 
-	err = request_irq(piko_cir->irq, piko_cir_rx_irq,
-			  rx_active_low ? IRQF_TRIGGER_FALLING
-					: IRQF_TRIGGER_RISING,
-			  DRIVER_NAME, piko_cir);
-	if (err)
-		goto err_power;
-
-	pr_info(DRIVER_NAME ": tx gpio %d at %u Hz %u%%, rx gpio %d irq %d gap %d us\n",
-		tx_gpio, piko_cir->carrier, piko_cir->duty_cycle,
-		rx_gpio, piko_cir->irq, piko_cir_gap_us());
+	pr_info(DRIVER_NAME ": tx gpio %d, rx gpio %d, %u Hz at %u%%, gap %d us\n",
+		tx_gpio, rx_gpio, piko_cir->carrier, piko_cir->duty_cycle,
+		piko_cir_gap_us());
 
 	return 0;
 
-err_power:
-	piko_cir_power(false);
-	rc_unregister_device(rcdev);
-	rcdev = NULL;
 err_rcdev:
 	rc_free_device(rcdev);
-err_rx_gpio:
-	gpio_free(rx_gpio);
-err_tx_gpio:
-	gpio_free(tx_gpio);
-err_pwdown_gpio:
-	if (gpio_is_valid(pwdown_gpio))
-		gpio_free(pwdown_gpio);
 err_free:
 	kfree(piko_cir);
 	piko_cir = NULL;
@@ -378,18 +407,7 @@ err_free:
 
 static void __exit piko_cir_exit(void)
 {
-	free_irq(piko_cir->irq, piko_cir);
-	hrtimer_cancel(&piko_cir->gap);
-
-	gpio_set_value(tx_gpio, 0);
-	piko_cir_power(false);
-
 	rc_unregister_device(piko_cir->rcdev);
-
-	if (gpio_is_valid(pwdown_gpio))
-		gpio_free(pwdown_gpio);
-	gpio_free(rx_gpio);
-	gpio_free(tx_gpio);
 
 	kfree(piko_cir);
 	piko_cir = NULL;
