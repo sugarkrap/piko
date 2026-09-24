@@ -33,9 +33,22 @@
 
 #define SOCK_DEFAULT "/var/run/ird.sock"
 
-#define BUBBLE_W       184
+/* The bubble sizes itself to its text (see measure_bubble). mb-volume
+ * hardcodes a width because a slider track needs room to be draggable;
+ * every row here is a box and a short label, so a fixed width just leaves
+ * a slab of empty yellow to the right of the longest one. Measuring is
+ * also what matchbox-panel does for its own message bubble -- widest run
+ * of text plus twice the margin, with no floor under it
+ * (matchbox-panel/src/msg.c:746) -- and BUBBLE_MARGIN is its
+ * MSG_TEXT_MARGIN, so the two come out with the same gutters.
+ *
+ * ROW_SPACING matches mb-volume's, so stacked rows have the same rhythm in
+ * both bubbles. GROUP_SPACING separates the mode radios from the Discovery
+ * checkbox: they are different settings, and at ROW_SPACING alone the
+ * break did not read as one. */
 #define BUBBLE_MARGIN   10
-#define ROW_SPACING      6
+#define ROW_SPACING      8
+#define GROUP_SPACING   12
 #define BOX_SIZE        14
 #define BOX_TEXT_GAP     6
 
@@ -48,6 +61,12 @@ enum { MODE_OFF, MODE_IRDA, MODE_BLASTER, MODE_COUNT };
 static const char *ModeVerb[MODE_COUNT]  = { "off", "irda", "blaster" };
 static const char *ModeLabel[MODE_COUNT] = { "Off", "IrDA", "Blaster" };
 
+/* Named so measure_bubble and bubble_redraw cannot drift: the width is
+ * derived from these strings, so a label edited in only one of the two
+ * places would size the bubble to text it no longer draws. */
+#define BUBBLE_TITLE    "Infrared"
+#define DISCOVERY_LABEL "Discovery"
+
 static MBTrayApp     *App;
 static MBPixbuf      *Pb;
 static MBPixbufImage *Icon, *IconScaled;
@@ -58,7 +77,7 @@ static MBColor   *BubbleBgCol, *BubbleFgCol;
 static Window     BubbleWin = None;
 static MBDrawable *BubbleDrw;
 static Bool       BubbleOpen = False;
-static int        BubbleH;
+static int        BubbleW, BubbleH;
 static int        RowY[MODE_COUNT];
 static int        DiscoveryY;
 
@@ -231,30 +250,67 @@ draw_rect_border (MBPixbufImage *img, int x, int y, int w, int h,
     }
 }
 
-/* A radio is mb-volume's checkbox with its corners knocked off and a
- * smaller filled centre, so the two read as different controls without
- * introducing a second drawing style. */
+/* Radios are round, checkboxes are square -- the rest of the ROM draws its
+ * radios with Fl_Round_Button (matchbox-apprun.cxx:918), and a tray bubble
+ * is not the place to invent a second convention.
+ *
+ * Distances are kept in doubled integer units (2 units == 1 pixel) so the
+ * centre of an even-sized box lands on an exact value and no libm call is
+ * needed: for BOX_SIZE 14 the centre is 13/2 in real pixels, which is 13 in
+ * these units.
+ *
+ * The two deltas below are the whole widget, so they are worth being
+ * explicit about. RING_DELTA 2 is one real pixel of ring, matching
+ * draw_rect_border's single-pixel checkbox outline -- a thicker ring would
+ * make the radios read as bolder than the checkbox sitting under them.
+ * DOT_DELTA 6 is the smallest dot that still rasterises round at this size:
+ * at 8 the dot is four pixels across and comes out an exact square, which
+ * is the one shape a radio must not be when a real checkbox is on screen
+ * to compare it against. */
+#define RING_DELTA 2
+#define DOT_DELTA  6
+
+static void
+draw_circle (MBPixbufImage *img, int x, int y, int size, int filled,
+	     unsigned char r, unsigned char g, unsigned char b)
+{
+  int outer = size - 1;
+  int inner = outer - RING_DELTA;
+  int dot   = outer - DOT_DELTA;
+  int px, py;
+
+  for (py = 0; py < size; py++)
+    {
+      for (px = 0; px < size; px++)
+	{
+	  int dx = (2 * px) - outer;
+	  int dy = (2 * py) - outer;
+	  int d2 = (dx * dx) + (dy * dy);
+
+	  if (d2 <= outer * outer && d2 > inner * inner)
+	    mb_pixbuf_img_plot_pixel (Pb, img, x + px, y + py, r, g, b);
+	  else if (filled && d2 <= dot * dot)
+	    mb_pixbuf_img_plot_pixel (Pb, img, x + px, y + py, r, g, b);
+	}
+    }
+}
+
 static void
 draw_box (MBPixbufImage *img, int y, int filled, int radio,
 	  unsigned char r, unsigned char g, unsigned char b)
 {
   int x = BUBBLE_MARGIN;
 
-  draw_rect_border (img, x, y, BOX_SIZE, BOX_SIZE, r, g, b);
-
   if (radio)
     {
-      mb_pixbuf_img_plot_pixel (Pb, img, x, y, 0, 0, 0);
-      mb_pixbuf_img_plot_pixel (Pb, img, x + BOX_SIZE - 1, y, 0, 0, 0);
-      mb_pixbuf_img_plot_pixel (Pb, img, x, y + BOX_SIZE - 1, 0, 0, 0);
-      mb_pixbuf_img_plot_pixel (Pb, img, x + BOX_SIZE - 1, y + BOX_SIZE - 1,
-				0, 0, 0);
+      draw_circle (img, x, y, BOX_SIZE, filled, r, g, b);
+      return;
     }
 
+  draw_rect_border (img, x, y, BOX_SIZE, BOX_SIZE, r, g, b);
+
   if (filled)
-    fill_rect (img, x + (radio ? 4 : 3), y + (radio ? 4 : 3),
-	       BOX_SIZE - (radio ? 8 : 6), BOX_SIZE - (radio ? 8 : 6),
-	       r, g, b);
+    fill_rect (img, x + 3, y + 3, BOX_SIZE - 6, BOX_SIZE - 6, r, g, b);
 }
 
 static void
@@ -262,7 +318,7 @@ render_row_text (int y, const char *text)
 {
   mb_font_render_simple (MsgFont, BubbleDrw,
 			 BUBBLE_MARGIN + BOX_SIZE + BOX_TEXT_GAP, y - 1,
-			 BUBBLE_W - (2 * BUBBLE_MARGIN) - BOX_SIZE
+			 BubbleW - (2 * BUBBLE_MARGIN) - BOX_SIZE
 			   - BOX_TEXT_GAP,
 			 (unsigned char *) text, MB_ENCODING_UTF8, 0);
 }
@@ -284,9 +340,9 @@ bubble_redraw (void)
   fg_g = mb_col_green (BubbleFgCol);
   fg_b = mb_col_blue (BubbleFgCol);
 
-  img = mb_pixbuf_img_rgba_new (Pb, BUBBLE_W, BubbleH);
+  img = mb_pixbuf_img_rgba_new (Pb, BubbleW, BubbleH);
   mb_pixbuf_img_fill (Pb, img, bg_r, bg_g, bg_b, 255);
-  draw_rect_border (img, 0, 0, BUBBLE_W, BubbleH, fg_r, fg_g, fg_b);
+  draw_rect_border (img, 0, 0, BubbleW, BubbleH, fg_r, fg_g, fg_b);
 
   for (i = 0; i < MODE_COUNT; i++)
     draw_box (img, RowY[i], i == CurMode, 1, fg_r, fg_g, fg_b);
@@ -300,18 +356,18 @@ bubble_redraw (void)
   mb_font_set_color (MsgFont, BubbleFgCol);
 
   mb_font_render_simple (MsgFont, BubbleDrw, BUBBLE_MARGIN, BUBBLE_MARGIN,
-			 BUBBLE_W - (2 * BUBBLE_MARGIN),
-			 (unsigned char *) "Infrared", MB_ENCODING_UTF8, 0);
+			 BubbleW - (2 * BUBBLE_MARGIN),
+			 (unsigned char *) BUBBLE_TITLE, MB_ENCODING_UTF8, 0);
 
   for (i = 0; i < MODE_COUNT; i++)
     render_row_text (RowY[i], ModeLabel[i]);
 
-  render_row_text (DiscoveryY, "Discovery");
+  render_row_text (DiscoveryY, DISCOVERY_LABEL);
 
   XCopyArea (mb_tray_app_xdisplay (App), mb_drawable_pixmap (BubbleDrw),
 	     BubbleWin, DefaultGC (mb_tray_app_xdisplay (App),
 				   mb_tray_app_xscreen (App)),
-	     0, 0, BUBBLE_W, BubbleH, 0, 0);
+	     0, 0, BubbleW, BubbleH, 0, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -373,6 +429,56 @@ load_theme_colours (Display *dpy, Window root)
 }
 
 /* ------------------------------------------------------------------ */
+/* bubble layout                                                        */
+
+static int
+text_w (const char *text)
+{
+  return mb_font_get_txt_width (MsgFont, (unsigned char *) text,
+				strlen (text), MB_ENCODING_UTF8);
+}
+
+/* Lays the bubble out around the text it is actually going to draw, and
+ * leaves the result in BubbleW/BubbleH/RowY/DiscoveryY. Called once per
+ * open rather than cached: the font comes from the theme, and the theme
+ * can change between two opens -- load_theme_colours re-reads on every
+ * open for the same reason. */
+static void
+measure_bubble (int row_h)
+{
+  int widest = text_w (BUBBLE_TITLE);
+  int y, i;
+
+  /* The title sits flush against the left margin; every other row is
+   * indented past its box, so add the indent before taking the max. */
+  for (i = 0; i < MODE_COUNT; i++)
+    {
+      int w = BOX_SIZE + BOX_TEXT_GAP + text_w (ModeLabel[i]);
+      if (w > widest)
+	widest = w;
+    }
+
+  {
+    int w = BOX_SIZE + BOX_TEXT_GAP + text_w (DISCOVERY_LABEL);
+    if (w > widest)
+      widest = w;
+  }
+
+  BubbleW = widest + (2 * BUBBLE_MARGIN);
+
+  y = BUBBLE_MARGIN + row_h + ROW_SPACING;
+  for (i = 0; i < MODE_COUNT; i++)
+    {
+      RowY[i] = y;
+      y += BOX_SIZE + ROW_SPACING;
+    }
+
+  /* y already carries one ROW_SPACING past the last radio. */
+  DiscoveryY = y + (GROUP_SPACING - ROW_SPACING);
+  BubbleH = DiscoveryY + BOX_SIZE + BUBBLE_MARGIN;
+}
+
+/* ------------------------------------------------------------------ */
 /* bubble lifecycle                                                     */
 
 static void
@@ -405,7 +511,7 @@ open_bubble (void)
   XSetWindowAttributes attr;
   long winmask;
   Atom type_atom, splash_atom;
-  int  abs_x, abs_y, bx, by, row_h, y, i;
+  int  abs_x, abs_y, bx, by, row_h;
 
   if (BubbleOpen)
     {
@@ -418,15 +524,7 @@ open_bubble (void)
 
   row_h = mb_font_get_height (MsgFont);
 
-  y = BUBBLE_MARGIN + row_h + ROW_SPACING;
-  for (i = 0; i < MODE_COUNT; i++)
-    {
-      RowY[i] = y;
-      y += BOX_SIZE + ROW_SPACING;
-    }
-  y += ROW_SPACING;
-  DiscoveryY = y;
-  BubbleH = DiscoveryY + BOX_SIZE + BUBBLE_MARGIN;
+  measure_bubble (row_h);
 
   mb_tray_app_get_absolute_coords (App, &abs_x, &abs_y);
 
@@ -434,7 +532,7 @@ open_bubble (void)
     {
       by = abs_y;
       bx = (abs_x > DisplayWidth (dpy, scr) / 2)
-	? abs_x - BUBBLE_W - 2
+	? abs_x - BubbleW - 2
 	: abs_x + mb_tray_app_width (App) + 2;
     }
   else
@@ -446,8 +544,8 @@ open_bubble (void)
     }
 
   if (bx < 0) bx = 0;
-  if (bx + BUBBLE_W > DisplayWidth (dpy, scr))
-    bx = DisplayWidth (dpy, scr) - BUBBLE_W;
+  if (bx + BubbleW > DisplayWidth (dpy, scr))
+    bx = DisplayWidth (dpy, scr) - BubbleW;
   if (by < 0) by = 0;
 
   attr.event_mask = ButtonPressMask | ButtonReleaseMask | ExposureMask
@@ -456,7 +554,7 @@ open_bubble (void)
   attr.override_redirect = True;
   winmask = CWBackPixel | CWEventMask | CWOverrideRedirect;
 
-  BubbleWin = XCreateWindow (dpy, root, bx, by, BUBBLE_W, BubbleH, 0,
+  BubbleWin = XCreateWindow (dpy, root, bx, by, BubbleW, BubbleH, 0,
 			     CopyFromParent, CopyFromParent, CopyFromParent,
 			     winmask, &attr);
 
@@ -465,7 +563,7 @@ open_bubble (void)
   XChangeProperty (dpy, BubbleWin, type_atom, XA_ATOM, 32, PropModeReplace,
 		   (unsigned char *) &splash_atom, 1);
 
-  BubbleDrw = mb_drawable_new (Pb, BUBBLE_W, BubbleH);
+  BubbleDrw = mb_drawable_new (Pb, BubbleW, BubbleH);
 
   XMapRaised (dpy, BubbleWin);
 
@@ -483,7 +581,7 @@ bubble_button_press (int x, int y)
 {
   int i;
 
-  if (x < BUBBLE_MARGIN || x >= BUBBLE_W - BUBBLE_MARGIN)
+  if (x < BUBBLE_MARGIN || x >= BubbleW - BUBBLE_MARGIN)
     return;
 
   for (i = 0; i < MODE_COUNT; i++)
