@@ -311,6 +311,38 @@ else
     echo "==> skipping piko-ir-test (no $PIKO_IR_TEST_SRC)"
 fi
 
+PIKO_REMOTE_SRC="$SRC/piko-remote.cxx"
+IRSTORE_SRC="$SRC/irstore.c"
+if [ -f "$PIKO_REMOTE_SRC" ] && [ -f "$IRSTORE_SRC" ]; then
+    echo "==> building piko-remote"
+    remote_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
+    mkdir -p "$STAGE/usr/bin"
+    "$CC" -O2 -Wall -Wextra -c \
+        -o "$STAGE/irstore.o" \
+        "$IRSTORE_SRC"
+    "$CXX" -O2 -Wall -Wextra \
+        -isystem "$STAGE/usr/include" \
+        -I "$SRC" \
+        -o "$STAGE/usr/bin/piko-remote" \
+        "$PIKO_REMOTE_SRC" "$STAGE/irstore.o" \
+        -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
+        -lfltk $remote_ldlibs
+    rm -f "$STAGE/irstore.o"
+
+    needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-remote" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
+    echo "    NEEDED: $needed"
+    case " $needed " in
+        *" libfltk.so.$FL_DSO_VERSION "*) : ;;
+        *)
+            echo "tools/userspace/build-fltk.sh: piko-remote does not NEED libfltk.so.$FL_DSO_VERSION" >&2
+            echo "-- it linked statically or against the wrong library." >&2
+            exit 1
+            ;;
+    esac
+else
+    echo "==> skipping piko-remote (no $PIKO_REMOTE_SRC)"
+fi
+
 echo ""
 echo "==> done: FLTK staged in $STAGE"
 for f in "$STAGE"/usr/lib/libfltk*.so."$FL_DSO_VERSION"; do
