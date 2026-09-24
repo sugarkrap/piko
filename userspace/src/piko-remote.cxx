@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "irstore.h"
@@ -27,6 +28,9 @@
 #define CELL_H		52
 
 #define LIRC_DEV	"/dev/lirc0"
+#define IRMODE_BIN	"/usr/sbin/irmode"
+#define ENABLE_W	104
+#define POLL_SECONDS	2.0
 
 static Fl_Choice	*g_devices;
 static Fl_Scroll	*g_grid;
@@ -36,7 +40,9 @@ static Fl_Button	*g_delete;
 static Fl_Button	*g_main;
 static Fl_Button	*g_custom;
 static Fl_Button	*g_add;
+static Fl_Button	*g_enable;
 static Fl_Window	*g_win;
+static int		 g_ir_on;
 
 enum { PAGE_MAIN, PAGE_CUSTOM };
 static int		 g_page = PAGE_MAIN;
@@ -71,6 +77,13 @@ static void statusf(const char *fmt, ...)
 	status(buf);
 }
 
+static const char *irmode_bin(void)
+{
+	const char *env = getenv("PIKO_IRMODE");
+
+	return env && *env ? env : IRMODE_BIN;
+}
+
 static const char *lirc_dev(void)
 {
 	const char *env = getenv("PIKO_LIRC");
@@ -90,6 +103,36 @@ static void show_device_status(void)
 }
 
 
+
+static int ir_available(void)
+{
+	return access(lirc_dev(), F_OK) == 0;
+}
+
+static int run_cmd(const char *cmd, char *out, size_t n)
+{
+	FILE *pipe = popen(cmd, "r");
+	size_t used = 0;
+	int rc;
+
+	out[0] = '\0';
+
+	if (!pipe)
+		return -1;
+
+	while (used + 1 < n) {
+		size_t got = fread(out + used, 1, n - used - 1, pipe);
+
+		if (!got)
+			break;
+		used += got;
+	}
+	out[used] = '\0';
+
+	rc = pclose(pipe);
+
+	return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+}
 
 static int send_button(const struct ir_button *b)
 {
@@ -255,6 +298,8 @@ static void rebuild_grid(void)
 				    y0 + row * (CELL_H + GAP),
 				    cell_w * span + GAP * (span - 1), CELL_H);
 		style_button(btn, b);
+		if (!g_ir_on)
+			btn->deactivate();
 		placed++;
 	}
 
@@ -473,11 +518,70 @@ static void relayout(void)
 
 	y += PAGE_H + GAP;
 	g_grid->resize(PAD, y, w - PAD * 2, h - y - STATUS_H - PAD);
-	g_status->resize(PAD, h - STATUS_H, w - PAD * 2, STATUS_H - 2);
+	g_enable->resize(w - PAD - ENABLE_W, h - STATUS_H, ENABLE_W,
+			 STATUS_H - 2);
+	g_status->resize(PAD, h - STATUS_H,
+			 w - PAD * 2 - (g_ir_on ? 0 : ENABLE_W + GAP),
+			 STATUS_H - 2);
 
 	rebuild_grid();
 }
 
+
+static void apply_ir_state(int on)
+{
+	g_ir_on = on;
+
+	if (on)
+		g_enable->hide();
+	else
+		g_enable->show();
+
+	relayout();
+}
+
+static void enable_cb(Fl_Widget *, void *)
+{
+	char out[512];
+	char cmd[256];
+	int rc;
+
+	status("turning infrared on...");
+	Fl::check();
+
+	snprintf(cmd, sizeof(cmd), "%s on 2>&1", irmode_bin());
+	rc = run_cmd(cmd, out, sizeof(out));
+
+	if (!ir_available()) {
+		char *nl = strchr(out, '\n');
+
+		if (nl)
+			*nl = '\0';
+		if (out[0])
+			statusf("%s", out);
+		else
+			statusf("irmode on failed (%d)", rc);
+		return;
+	}
+
+	apply_ir_state(1);
+	show_device_status();
+}
+
+static void poll_cb(void *)
+{
+	int on = ir_available();
+
+	if (on != g_ir_on) {
+		apply_ir_state(on);
+		if (on)
+			show_device_status();
+		else
+			status("infrared was turned off");
+	}
+
+	Fl::repeat_timeout(POLL_SECONDS, poll_cb);
+}
 
 class RemoteWindow : public Fl_Double_Window {
 public:
@@ -525,6 +629,10 @@ int main(int argc, char **argv)
 	g_grid->type(Fl_Scroll::VERTICAL);
 	g_grid->end();
 
+	g_enable = new Fl_Button(0, 0, ENABLE_W, STATUS_H - 2, "Enable IR");
+	g_enable->labelsize(11);
+	g_enable->callback(enable_cb);
+
 	g_status = new Fl_Box(0, 0, 10, STATUS_H);
 	g_status->box(FL_FLAT_BOX);
 	g_status->labelsize(11);
@@ -542,7 +650,17 @@ int main(int argc, char **argv)
 	else
 		reload_devices(NULL);
 
+	apply_ir_state(ir_available());
 	show_device_status();
+
+	Fl::add_timeout(POLL_SECONDS, poll_cb);
+
+	if (!g_ir_on) {
+		Fl::check();
+		if (fl_choice("Infrared is off.\nTurn it on now?",
+			      "Leave it off", "Turn on", 0) == 1)
+			enable_cb(NULL, NULL);
+	}
 
 	return Fl::run();
 }
