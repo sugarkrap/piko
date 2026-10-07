@@ -48,7 +48,9 @@ WIFI_PCMCIA_SD_MODULES="$WIFI_MODULES
 $SD_MODULES
 $NAND_MODULES
 $CPUFREQ_MODULES
-$USB_MODULES"
+$USB_MODULES
+$IRDA_MODULES
+$CIR_MODULES"
 for relpath in $WIFI_PCMCIA_SD_MODULES; do
     src_rel="$(echo "$relpath" | sed 's#^kernel/##')"
     dst="$OVERLAY/lib/modules/$KVER/$relpath"
@@ -157,6 +159,9 @@ pkillx:usr/sbin/pkillx
 vol:usr/sbin/vol
 fbtext:usr/sbin/fbtext
 zramswap:usr/sbin/zramswap
+ir:usr/bin/ir
+ird:usr/sbin/ird
+irctl:usr/bin/irctl
 kill:usr/bin/kill
 md5sum:usr/bin/md5sum
 untar:usr/local/bin/untar

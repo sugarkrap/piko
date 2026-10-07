@@ -1,0 +1,890 @@
+#include <FL/Fl.H>
+#include <FL/Fl_Double_Window.H>
+#include <FL/Fl_Box.H>
+#include <FL/Fl_Button.H>
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_Scroll.H>
+#include <FL/fl_ask.H>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <linux/lirc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "irstore.h"
+
+#define PAD		8
+#define ROW_H		38
+#define STATUS_H	26
+#define PAGE_H		28
+#define IR_MAX_ROWS	32
+#define GAP		6
+#define CELL_H		52
+
+#define LIRC_DEV	"/dev/lirc0"
+#define IRCTL_BIN	"/usr/bin/irctl"
+#define ENABLE_W	104
+#define POLL_SECONDS	2.0
+#define CLOSE_W		96
+#define DEBUG_ENV	"PIKO_REMOTE_DEBUG"
+#define DEBUG_LOG	"/tmp/piko-remote.log"
+#define RX_EDGES_PARAM	"/sys/module/piko_cir/parameters/rx_edges"
+
+static Fl_Choice	*g_devices;
+static Fl_Scroll	*g_grid;
+static Fl_Box		*g_status;
+static Fl_Button	*g_rename;
+static Fl_Button	*g_delete;
+static Fl_Button	*g_main;
+static Fl_Button	*g_custom;
+static Fl_Button	*g_add;
+static Fl_Button	*g_enable;
+static Fl_Button	*g_learn;
+static Fl_Double_Window	*g_reader;
+static Fl_Box		*g_reader_frames;
+static Fl_Button	*g_reader_close;
+static int		 g_reader_fd = -1;
+static unsigned int	 g_reader_count;
+static unsigned int	 g_reader_pulses;
+static FILE		*g_debug;
+static unsigned int	 g_frame[IR_MAX_EDGES];
+static unsigned int	 g_frame_len;
+static unsigned int	 g_frame_dropped;
+static long		 g_rx_edges_mark = -1;
+static Fl_Window	*g_win;
+static int		 g_ir_on;
+
+enum { PAGE_MAIN, PAGE_CUSTOM };
+static int		 g_page = PAGE_MAIN;
+
+static struct ir_device	*g_dev;
+static char		 g_slugs[IR_MAX_DEVICES][IR_NAME_MAX];
+static int		 g_nslugs;
+
+static void fl_safe(const char *in, char *out, size_t n)
+{
+	if (in && *in == '@')
+		snprintf(out, n, "@%s", in);
+	else
+		snprintf(out, n, "%s", in ? in : "");
+}
+
+static void status(const char *text)
+{
+	g_status->copy_label(text);
+	g_status->redraw();
+}
+
+static void statusf(const char *fmt, ...)
+{
+	char buf[256];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	status(buf);
+}
+
+static const char *irctl_bin(void)
+{
+	const char *env = getenv("PIKO_IRCTL");
+
+	return env && *env ? env : IRCTL_BIN;
+}
+
+static const char *lirc_dev(void)
+{
+	const char *env = getenv("PIKO_LIRC");
+
+	return env && *env ? env : LIRC_DEV;
+}
+
+
+
+static void show_device_status(void)
+{
+	if (g_dev)
+		statusf("%s -- %u button%s", g_dev->label, g_dev->count,
+			g_dev->count == 1 ? "" : "s");
+	else
+		status("no device yet -- tap New");
+}
+
+
+
+static int ir_available(void)
+{
+	return access(lirc_dev(), F_OK) == 0;
+}
+
+static int run_cmd(const char *cmd, char *out, size_t n)
+{
+	FILE *pipe = popen(cmd, "r");
+	size_t used = 0;
+	int rc;
+
+	out[0] = '\0';
+
+	if (!pipe)
+		return -1;
+
+	while (used + 1 < n) {
+		size_t got = fread(out + used, 1, n - used - 1, pipe);
+
+		if (!got)
+			break;
+		used += got;
+	}
+	out[used] = '\0';
+
+	rc = pclose(pipe);
+
+	return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+}
+
+static int send_button(const struct ir_button *b)
+{
+	unsigned int mode = LIRC_MODE_PULSE;
+	ssize_t want = (ssize_t)(b->count * sizeof(b->edges[0]));
+	int fd = open(lirc_dev(), O_WRONLY | O_CLOEXEC);
+	int err;
+
+	if (fd < 0)
+		return -1;
+
+	if (ioctl(fd, LIRC_SET_SEND_MODE, &mode) < 0 ||
+	    write(fd, b->edges, want) != want) {
+		err = errno;
+		close(fd);
+		errno = err;
+		return -1;
+	}
+
+	close(fd);
+
+	return 0;
+}
+
+static int cmp_slug(const void *a, const void *b)
+{
+	return strcmp((const char *)a, (const char *)b);
+}
+
+static void rebuild_grid(void);
+
+static void button_cb(Fl_Widget *w, void *data)
+{
+	const char *key = (const char *)data;
+	struct ir_button *b = ir_device_find(g_dev, key);
+
+	(void)w;
+
+	if (!b) {
+		status("that button is gone");
+		return;
+	}
+
+	if (send_button(b)) {
+		if (errno == EBUSY || errno == EACCES)
+			status("ir port busy -- an irda transfer is running");
+		else if (errno == ENOENT || errno == ENXIO)
+			statusf("no %s -- run  irctl blaster", lirc_dev());
+		else
+			statusf("send failed: %s", strerror(errno));
+		return;
+	}
+
+	statusf("sent %s (%u edges)", b->label, b->count);
+}
+
+static int landscape(void)
+{
+	return g_grid->w() > g_grid->h();
+}
+
+static int slot_pos(const struct ir_slot *s, int *row, int *col, int *span)
+{
+	if (landscape()) {
+		*row = s->l_row;
+		*col = s->l_col;
+		*span = s->l_w;
+	} else {
+		*row = s->p_row;
+		*col = s->p_col;
+		*span = s->p_w;
+	}
+
+	return *row >= 0 && *col >= 0;
+}
+
+static void style_button(Fl_Button *btn, const struct ir_button *b)
+{
+	char safe[IR_NAME_MAX + IR_GLYPH_MAX + 4];
+
+	if (b->glyph[0])
+		snprintf(safe, sizeof(safe), "%s  %s", b->glyph, b->label);
+	else
+		fl_safe(b->label, safe, sizeof(safe));
+
+	btn->copy_label(safe);
+	btn->labelsize(13);
+
+	if (b->major) {
+		btn->color(fl_rgb_color(0xC0, 0x54, 0x44));
+		btn->labelcolor(FL_WHITE);
+		btn->labelfont(FL_HELVETICA_BOLD);
+	}
+
+	btn->callback(button_cb, (void *)b->key);
+}
+
+static void rebuild_grid(void)
+{
+	int cols = landscape() ? IR_COLS_LANDSCAPE : IR_COLS_PORTRAIT;
+	int inner = g_grid->w() - Fl::scrollbar_size() - GAP * 2;
+	int cell_w = (inner - (cols - 1) * GAP) / cols;
+	int x0 = g_grid->x() + GAP;
+	int y0 = g_grid->y() + GAP;
+	unsigned int i;
+	int placed = 0;
+	char used[IR_MAX_ROWS];
+	int rowmap[IR_MAX_ROWS];
+	int shown = 0;
+
+	memset(used, 0, sizeof(used));
+
+	if (g_dev && g_page == PAGE_MAIN) {
+		for (i = 0; i < g_dev->count; i++) {
+			const struct ir_slot *sl = ir_slot_for(g_dev->buttons[i].key);
+			int row, col, span;
+
+			if (!sl || !slot_pos(sl, &row, &col, &span))
+				continue;
+			if (row >= 0 && row < IR_MAX_ROWS)
+				used[row] = 1;
+		}
+	}
+
+	for (i = 0; i < IR_MAX_ROWS; i++)
+		rowmap[i] = used[i] ? shown++ : -1;
+
+	g_grid->clear();
+	g_grid->begin();
+
+	if (!g_dev) {
+		Fl_Box *hint = new Fl_Box(x0, y0, inner, CELL_H,
+					  "no device yet -- tap New");
+		hint->labelsize(12);
+		hint->labelcolor(fl_rgb_color(0x70, 0x70, 0x70));
+		g_grid->end();
+		g_grid->redraw();
+		return;
+	}
+
+	for (i = 0; i < g_dev->count; i++) {
+		struct ir_button *b = &g_dev->buttons[i];
+		const struct ir_slot *s = ir_slot_for(b->key);
+		int row, col, span;
+		Fl_Button *btn;
+
+		if (g_page == PAGE_MAIN) {
+			if (!s || !slot_pos(s, &row, &col, &span))
+				continue;
+			if (row < 0 || row >= IR_MAX_ROWS
+			    || rowmap[row] < 0)
+				continue;
+			row = rowmap[row];
+		} else {
+			if (s)
+				continue;
+			row = placed / cols;
+			col = placed % cols;
+			span = 1;
+		}
+
+		btn = new Fl_Button(x0 + col * (cell_w + GAP),
+				    y0 + row * (CELL_H + GAP),
+				    cell_w * span + GAP * (span - 1), CELL_H);
+		style_button(btn, b);
+		if (!g_ir_on)
+			btn->deactivate();
+		placed++;
+	}
+
+	if (!placed) {
+		Fl_Box *hint = new Fl_Box(x0, y0, inner, CELL_H,
+					  g_page == PAGE_MAIN
+					  ? "no standard buttons learned yet"
+					  : "no custom buttons yet");
+		hint->labelsize(12);
+		hint->labelcolor(fl_rgb_color(0x70, 0x70, 0x70));
+	}
+
+	g_grid->end();
+	g_grid->redraw();
+}
+
+static void page_cb(Fl_Widget *w, void *)
+{
+	g_page = (w == (Fl_Widget *)g_custom) ? PAGE_CUSTOM : PAGE_MAIN;
+	g_main->value(g_page == PAGE_MAIN);
+	g_custom->value(g_page == PAGE_CUSTOM);
+	rebuild_grid();
+}
+
+static void sync_learn(void)
+{
+	if (g_dev && g_ir_on)
+		g_learn->activate();
+	else
+		g_learn->deactivate();
+}
+
+static void select_device(const char *slug)
+{
+	ir_device_free(g_dev);
+	g_dev = slug ? ir_device_load(slug) : NULL;
+
+	if (g_dev)
+		show_device_status();
+
+	g_rename->activate();
+	g_delete->activate();
+
+	if (!g_dev) {
+		g_rename->deactivate();
+		g_delete->deactivate();
+	}
+
+	sync_learn();
+	rebuild_grid();
+}
+
+static void reload_devices(const char *want)
+{
+	char slugs[IR_MAX_DEVICES][IR_NAME_MAX];
+	int n = ir_store_list(slugs, IR_MAX_DEVICES);
+	int pick = 0;
+	int i;
+
+	qsort(slugs, (size_t)n, IR_NAME_MAX, cmp_slug);
+
+	g_devices->clear();
+	g_nslugs = n;
+
+	for (i = 0; i < n; i++) {
+		struct ir_device *d = ir_device_load(slugs[i]);
+		int idx;
+
+		snprintf(g_slugs[i], IR_NAME_MAX, "%s", slugs[i]);
+
+		char safe[IR_NAME_MAX + 2];
+
+		fl_safe(d && d->label[0] ? d->label : slugs[i], safe,
+			sizeof(safe));
+
+		idx = g_devices->add("?", 0, (Fl_Callback *)0);
+		g_devices->replace(idx, safe);
+
+		if (want && !strcmp(slugs[i], want))
+			pick = i;
+
+		ir_device_free(d);
+	}
+
+	if (!n) {
+		g_devices->value(-1);
+		select_device(NULL);
+		return;
+	}
+
+	g_devices->value(pick);
+	select_device(g_slugs[pick]);
+}
+
+static void device_cb(Fl_Widget *, void *)
+{
+	int v = g_devices->value();
+
+	if (v < 0 || v >= g_nslugs)
+		return;
+
+	select_device(g_slugs[v]);
+}
+
+static int slug_taken(const char *slug)
+{
+	char slugs[IR_MAX_DEVICES][IR_NAME_MAX];
+	int n = ir_store_list(slugs, IR_MAX_DEVICES);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		if (!strcmp(slugs[i], slug))
+			return 1;
+	}
+
+	return 0;
+}
+
+static void unique_slug(const char *label, char *out, size_t n)
+{
+	char base[IR_NAME_MAX - 4];
+	int tries = 2;
+
+	ir_slug(label, base, sizeof(base));
+	snprintf(out, n, "%s", base);
+
+	while (slug_taken(out) && tries < 100)
+		snprintf(out, n, "%s-%d", base, tries++);
+}
+
+static void new_cb(Fl_Widget *, void *)
+{
+	const char *name = fl_input("%s", "hi-fi", "Name the device");
+	struct ir_device *dev;
+
+	if (!name || !*name)
+		return;
+
+	dev = ir_device_new(name);
+	if (!dev) {
+		status("out of memory");
+		return;
+	}
+
+	unique_slug(name, dev->slug, sizeof(dev->slug));
+
+	if (ir_device_save(dev)) {
+		statusf("cannot write to %s", ir_store_dir());
+		ir_device_free(dev);
+		return;
+	}
+
+	reload_devices(dev->slug);
+	statusf("created %s", dev->label);
+	ir_device_free(dev);
+}
+
+static void rename_cb(Fl_Widget *, void *)
+{
+	const char *name;
+
+	if (!g_dev)
+		return;
+
+	name = fl_input("%s", g_dev->label, "Rename the device");
+	if (!name || !*name)
+		return;
+
+	ir_device_relabel(g_dev, name);
+
+	if (ir_device_save(g_dev)) {
+		statusf("cannot write to %s", ir_store_dir());
+		return;
+	}
+
+	reload_devices(g_dev->slug);
+}
+
+static void delete_cb(Fl_Widget *, void *)
+{
+	char slug[IR_NAME_MAX];
+
+	if (!g_dev)
+		return;
+
+	if (fl_choice("Delete %s and everything it has learned?",
+		      "Cancel", "Delete", 0, g_dev->label) != 1)
+		return;
+
+	snprintf(slug, sizeof(slug), "%s", g_dev->slug);
+
+	if (ir_device_delete(slug)) {
+		status("could not delete it");
+		return;
+	}
+
+	reload_devices(NULL);
+	statusf("deleted %s", slug);
+}
+
+static void relayout(void)
+{
+	int w, h, y;
+	int edit_w = 56;
+	int edits = 4;
+	int choice_w;
+	int page_w = 96;
+
+	if (!g_win || !g_grid || !g_status)
+		return;
+
+	w = g_win->w();
+	h = g_win->h();
+	y = PAD;
+	choice_w = w - PAD * 2 - GAP * edits - edit_w * edits;
+
+	g_devices->resize(PAD, y, choice_w, ROW_H);
+	g_add->resize(PAD + choice_w + GAP, y, edit_w, ROW_H);
+	g_rename->resize(PAD + choice_w + GAP * 2 + edit_w, y, edit_w, ROW_H);
+	g_delete->resize(PAD + choice_w + GAP * 3 + edit_w * 2, y, edit_w,
+			 ROW_H);
+	g_learn->resize(PAD + choice_w + GAP * 4 + edit_w * 3, y, edit_w,
+			ROW_H);
+
+	y += ROW_H + GAP;
+	g_main->resize(PAD, y, page_w, PAGE_H);
+	g_custom->resize(PAD + page_w + GAP, y, page_w, PAGE_H);
+
+	y += PAGE_H + GAP;
+	g_grid->resize(PAD, y, w - PAD * 2, h - y - STATUS_H - PAD);
+	g_enable->resize(w - PAD - ENABLE_W, h - STATUS_H, ENABLE_W,
+			 STATUS_H - 2);
+	g_status->resize(PAD, h - STATUS_H,
+			 w - PAD * 2 - (g_ir_on ? 0 : ENABLE_W + GAP),
+			 STATUS_H - 2);
+
+	rebuild_grid();
+}
+
+
+static void apply_ir_state(int on)
+{
+	g_ir_on = on;
+
+	if (on)
+		g_enable->hide();
+	else
+		g_enable->show();
+
+	sync_learn();
+	relayout();
+}
+
+static void enable_cb(Fl_Widget *, void *)
+{
+	char out[512];
+	char cmd[256];
+	int rc;
+
+	status("turning infrared on...");
+	Fl::check();
+
+	snprintf(cmd, sizeof(cmd), "%s blaster 2>&1", irctl_bin());
+	rc = run_cmd(cmd, out, sizeof(out));
+
+	if (!ir_available()) {
+		char *nl = strchr(out, '\n');
+
+		if (nl)
+			*nl = '\0';
+		if (out[0])
+			statusf("%s", out);
+		else
+			statusf("irctl blaster failed (%d)", rc);
+		return;
+	}
+
+	apply_ir_state(1);
+	show_device_status();
+}
+
+static void poll_cb(void *)
+{
+	int on = ir_available();
+
+	if (on != g_ir_on) {
+		apply_ir_state(on);
+		if (on)
+			show_device_status();
+		else
+			status("infrared was turned off");
+	}
+
+	Fl::repeat_timeout(POLL_SECONDS, poll_cb);
+}
+
+static void reader_stop(void)
+{
+	if (g_reader_fd < 0)
+		return;
+
+	Fl::remove_fd(g_reader_fd);
+	close(g_reader_fd);
+	g_reader_fd = -1;
+}
+
+static void reader_show_count(void)
+{
+	char text[64];
+
+	snprintf(text, sizeof(text), "%u frame%s detected", g_reader_count,
+		 g_reader_count == 1 ? "" : "s");
+	g_reader_frames->copy_label(text);
+}
+
+static void debug_open(void)
+{
+	const char *v = getenv(DEBUG_ENV);
+
+	if (!v || strcmp(v, "1"))
+		return;
+
+	if (isatty(STDERR_FILENO))
+		g_debug = stderr;
+	else
+		g_debug = fopen(DEBUG_LOG, "a");
+}
+
+static long read_rx_edges(void)
+{
+	FILE *f = fopen(RX_EDGES_PARAM, "r");
+	long v = -1;
+
+	if (!f)
+		return -1;
+
+	if (fscanf(f, "%ld", &v) != 1)
+		v = -1;
+	fclose(f);
+
+	return v;
+}
+
+static void frame_keep(unsigned int word)
+{
+	if (g_frame_len < IR_MAX_EDGES)
+		g_frame[g_frame_len++] = word;
+	else
+		g_frame_dropped++;
+}
+
+static void frame_log(unsigned int silence)
+{
+	unsigned long total = 0;
+	long now = read_rx_edges();
+	char delta[32];
+	unsigned int i;
+
+	if (now >= 0 && g_rx_edges_mark >= 0)
+		snprintf(delta, sizeof(delta), "+%ld", now - g_rx_edges_mark);
+	else
+		snprintf(delta, sizeof(delta), "?");
+	g_rx_edges_mark = now;
+
+	for (i = 0; i < g_frame_len; i++)
+		total += g_frame[i] & LIRC_VALUE_MASK;
+
+	fprintf(g_debug, "# frame %u: %u edges%s, %lu us, closed by %u us of silence, rx_edges %s\n",
+		g_reader_count, g_frame_len,
+		g_frame_dropped ? " (truncated)" : "", total, silence, delta);
+
+	for (i = 0; i < g_frame_len; i++)
+		fprintf(g_debug, "%s %u\n",
+			(g_frame[i] & LIRC_MODE2_MASK) == LIRC_MODE2_PULSE
+			? "pulse" : "space",
+			g_frame[i] & LIRC_VALUE_MASK);
+
+	fputc('\n', g_debug);
+	fflush(g_debug);
+}
+
+static void reader_take(const unsigned int *words, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		unsigned int kind = words[i] & LIRC_MODE2_MASK;
+
+		if (kind == LIRC_MODE2_PULSE) {
+			g_reader_pulses++;
+			frame_keep(words[i]);
+		} else if (kind == LIRC_MODE2_SPACE && g_reader_pulses) {
+			frame_keep(words[i]);
+		} else if (kind == LIRC_MODE2_TIMEOUT && g_reader_pulses) {
+			g_reader_count++;
+			if (g_debug)
+				frame_log(words[i] & LIRC_VALUE_MASK);
+			g_reader_pulses = 0;
+			g_frame_len = 0;
+			g_frame_dropped = 0;
+		}
+	}
+
+	reader_show_count();
+}
+
+static void reader_cb(int fd, void *)
+{
+	unsigned int words[64];
+	ssize_t n = read(fd, words, sizeof(words));
+
+	if (n > 0) {
+		reader_take(words, (size_t)n / sizeof(words[0]));
+		return;
+	}
+
+	if (n < 0 && (errno == EAGAIN || errno == EINTR))
+		return;
+
+	reader_stop();
+	status("infrared stopped while reading");
+}
+
+static void reader_close_cb(Fl_Widget *, void *)
+{
+	reader_stop();
+	g_reader->hide();
+	show_device_status();
+}
+
+static void reader_build(void)
+{
+	g_reader = new Fl_Double_Window(g_win->w(), g_win->h(), "Learn");
+	g_reader->border(0);
+	g_reader->set_modal();
+	g_reader->callback(reader_close_cb);
+
+	g_reader_frames = new Fl_Box(PAD, PAD, 10, ROW_H);
+	g_reader_frames->labelsize(16);
+
+	g_reader_close = new Fl_Button(0, 0, CLOSE_W, ROW_H, "Close");
+	g_reader_close->callback(reader_close_cb);
+
+	g_reader->end();
+}
+
+static void learn_cb(Fl_Widget *, void *)
+{
+	unsigned int mode = LIRC_MODE_MODE2;
+	int fd = open(lirc_dev(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	int w = g_win->w();
+	int h = g_win->h();
+
+	if (fd < 0) {
+		statusf("cannot read %s: %s", lirc_dev(), strerror(errno));
+		return;
+	}
+
+	if (ioctl(fd, LIRC_SET_REC_MODE, &mode) < 0) {
+		statusf("cannot receive: %s", strerror(errno));
+		close(fd);
+		return;
+	}
+
+	if (!g_reader)
+		reader_build();
+
+	g_reader->resize(g_win->x(), g_win->y(), w, h);
+	g_reader_frames->resize(PAD, PAD, w - PAD * 2,
+				h - PAD * 3 - ROW_H);
+	g_reader_close->resize(w - PAD - CLOSE_W, h - PAD - ROW_H, CLOSE_W,
+			       ROW_H);
+
+	g_reader_count = 0;
+	g_reader_pulses = 0;
+	g_frame_len = 0;
+	g_frame_dropped = 0;
+	g_rx_edges_mark = read_rx_edges();
+	reader_show_count();
+
+	g_reader_fd = fd;
+	Fl::add_fd(fd, FL_READ, reader_cb);
+
+	g_reader->show();
+}
+
+class RemoteWindow : public Fl_Double_Window {
+public:
+	RemoteWindow(int w, int h, const char *l)
+		: Fl_Double_Window(w, h, l) { }
+
+	void resize(int X, int Y, int W, int H) {
+		Fl_Double_Window::resize(X, Y, W, H);
+		relayout();
+	}
+};
+
+int main(int argc, char **argv)
+{
+	RemoteWindow win(Fl::w(), Fl::h(), "Remote");
+
+	debug_open();
+
+	g_win = &win;
+	win.begin();
+
+	g_devices = new Fl_Choice(PAD, PAD, 100, ROW_H);
+	g_devices->callback(device_cb);
+
+	g_add = new Fl_Button(0, 0, 10, ROW_H, "New");
+	g_add->callback(new_cb);
+
+	g_rename = new Fl_Button(0, 0, 10, ROW_H, "Name");
+	g_rename->callback(rename_cb);
+
+	g_delete = new Fl_Button(0, 0, 10, ROW_H, "Del");
+	g_delete->callback(delete_cb);
+
+	g_learn = new Fl_Button(0, 0, 10, ROW_H, "Learn");
+	g_learn->callback(learn_cb);
+
+	g_main = new Fl_Button(0, 0, 10, PAGE_H, "Buttons");
+	g_main->type(FL_RADIO_BUTTON);
+	g_main->labelsize(12);
+	g_main->value(1);
+	g_main->callback(page_cb);
+
+	g_custom = new Fl_Button(0, 0, 10, PAGE_H, "Custom");
+	g_custom->type(FL_RADIO_BUTTON);
+	g_custom->labelsize(12);
+	g_custom->callback(page_cb);
+
+	g_grid = new Fl_Scroll(PAD, PAD, 100, 100);
+	g_grid->box(FL_DOWN_BOX);
+	g_grid->type(Fl_Scroll::VERTICAL);
+	g_grid->end();
+
+	g_enable = new Fl_Button(0, 0, ENABLE_W, STATUS_H - 2, "Enable IR");
+	g_enable->labelsize(11);
+	g_enable->callback(enable_cb);
+
+	g_status = new Fl_Box(0, 0, 10, STATUS_H);
+	g_status->box(FL_FLAT_BOX);
+	g_status->labelsize(11);
+	g_status->align(FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
+
+	win.end();
+	win.resizable(g_grid);
+	win.show(argc, argv);
+
+	relayout();
+
+	if (ir_store_ensure())
+		statusf("cannot open %s -- is the card mounted?",
+			ir_store_dir());
+	else
+		reload_devices(NULL);
+
+	apply_ir_state(ir_available());
+	show_device_status();
+
+	Fl::add_timeout(POLL_SECONDS, poll_cb);
+
+	if (!g_ir_on) {
+		Fl::check();
+		if (fl_choice("Infrared is off.\nTurn it on now?",
+			      "Leave it off", "Turn on", 0) == 1)
+			enable_cb(NULL, NULL);
+	}
+
+	return Fl::run();
+}
