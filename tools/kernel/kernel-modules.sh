@@ -35,4 +35,24 @@ CPUFREQ_MODULES="
 kernel/drivers/cpufreq/pxa2xx-cpufreq.ko
 "
 
+CIR_MODULES="
+kernel/drivers/media/rc/rc-core.ko
+kernel/drivers/media/rc/ir-nec-decoder.ko
+kernel/drivers/media/rc/ir-rc5-decoder.ko
+kernel/drivers/media/rc/ir-rc6-decoder.ko
+kernel/drivers/media/rc/ir-jvc-decoder.ko
+kernel/drivers/media/rc/ir-sony-decoder.ko
+kernel/drivers/media/rc/ir-sharp-decoder.ko
+kernel/drivers/media/rc/ir-sanyo-decoder.ko
+kernel/drivers/media/rc/piko-cir/piko-cir.ko
+"
+
+IRDA_MODULES="
+kernel/lib/crc/crc-ccitt.ko
+kernel/net/irda/irda.ko
+kernel/net/irda/ircomm/ircomm.ko
+kernel/net/irda/ircomm/ircomm-tty.ko
+kernel/drivers/net/irda/pxaficp_ir.ko
+"
+
 USB_MODULES=""

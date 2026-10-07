@@ -18,6 +18,7 @@ D_CARD="${D_CARD:-/tmp/mb-stage-card}"
 D_VOLUME="${D_VOLUME:-/tmp/mb-stage-volume}"
 D_BRIGHT="${D_BRIGHT:-/tmp/mb-stage-brightness}"
 D_PIKAFFEINE="${D_PIKAFFEINE:-/tmp/mb-stage-pikaffeine}"
+D_IRDA="${D_IRDA:-/tmp/mb-stage-irda}"
 
 DEPLOY=0
 TARGET=""
@@ -54,6 +55,8 @@ FOUND_BIN="${FOUND_BIN:-$STAGE/usr/bin/found-file-browser}"
 WALLPAPER_PICKER_BIN="${WALLPAPER_PICKER_BIN:-$STAGE/usr/bin/mb-wallpaper-picker}"
 PIKO_SETTINGS_BIN="${PIKO_SETTINGS_BIN:-$STAGE/usr/bin/piko-settings}"
 PIKO_PLAYER_BIN="${PIKO_PLAYER_BIN:-$STAGE/usr/bin/piko-player}"
+PIKO_IR_TEST_BIN="${PIKO_IR_TEST_BIN:-$STAGE/usr/bin/piko-ir-test}"
+PIKO_REMOTE_BIN="${PIKO_REMOTE_BIN:-$STAGE/usr/bin/piko-remote}"
 
 echo "==> assembling into $PAYLOAD"
 rm -rf "$PAYLOAD"
@@ -94,7 +97,7 @@ ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.0"
 ln -sf "$UCLIBC_C_REAL"  "$PAYLOAD/lib/libc.so.1"
 
 for d in "$D_WM" "$D_DESKTOP" "$D_PANEL" "$D_COMMON" "$D_CARD" "$D_VOLUME" \
-         "$D_BRIGHT" "$D_PIKAFFEINE"; do
+         "$D_BRIGHT" "$D_PIKAFFEINE" "$D_IRDA"; do
     if [ ! -d "$d" ]; then
         echo "FAILED: missing component DESTDIR: $d" >&2
         echo "Build that component first." >&2
@@ -116,6 +119,8 @@ $FOUND_BIN:usr/local/bin/found-file-browser \
 $WALLPAPER_PICKER_BIN:usr/local/bin/mb-wallpaper-picker \
 $PIKO_SETTINGS_BIN:usr/local/bin/piko-settings \
 $PIKO_PLAYER_BIN:usr/local/bin/piko-player \
+$PIKO_IR_TEST_BIN:usr/local/bin/piko-ir-test \
+$PIKO_REMOTE_BIN:usr/local/bin/piko-remote \
 $FBRUN_BIN:usr/sbin/matchbox-apprun"
 if [ "$SKIP_ST" -eq 0 ]; then
     BINS="$BINS $ST_BIN:usr/local/bin/st"
@@ -175,7 +180,7 @@ for a in $applets; do
 done
 
 mkdir -p "$PAYLOAD/usr/share/applications" "$PAYLOAD/usr/share/pixmaps"
-LAUNCHERS="piko-settings piko-player pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
+LAUNCHERS="piko-settings piko-player piko-remote piko-ir-test pikalibrate pikostore found-file-browser mb-wallpaper-picker suspend reboot gototty"
 if [ "$SKIP_ST" -eq 0 ]; then
     LAUNCHERS="st xev $LAUNCHERS"
 else

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Infrared
+Comment=Turn infrared on, pick a mode, toggle discovery
+Exec=/usr/bin/mb-irda
+Icon=mb-irda.png
+Terminal=false
+Categories=Utility;

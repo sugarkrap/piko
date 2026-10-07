@@ -98,6 +98,13 @@ if test -x /usr/sbin/flipd; then
 	trap - HUP
 fi
 
+if test -x /usr/sbin/ird; then
+	mkdir -p /var/run
+	trap "" HUP
+	/usr/sbin/ird 2>/tmp/ird.err &
+	trap - HUP
+fi
+
 if test -x /usr/sbin/hostapd; then
 	trap "" HUP
 	/usr/sbin/hostapd >>/tmp/hostapd.log 2>&1 &
