@@ -112,3 +112,6 @@
 	path = userspace/src/phoneme
 	url = https://github.com/sugarkrap/phoneME-GP2X-SDL.git
 	branch = master
+[submodule "userspace/src/pierogi"]
+	path = userspace/src/pierogi
+	url = https://github.com/jpietrzak8/Pierogi

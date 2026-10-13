@@ -311,23 +311,56 @@ else
     echo "==> skipping piko-ir-test (no $PIKO_IR_TEST_SRC)"
 fi
 
-PIKO_REMOTE_SRC="$SRC/piko-remote.cxx"
-IRSTORE_SRC="$SRC/irstore.c"
-if [ -f "$PIKO_REMOTE_SRC" ] && [ -f "$IRSTORE_SRC" ]; then
+PIKO_REMOTE_DIR="$SRC/piko-remote"
+PIEROGI_DIR="$SRC/pierogi"
+if [ -f "$PIKO_REMOTE_DIR/piko-remote.cxx" ]; then
+    if [ ! -f "$PIEROGI_DIR/pirkeysetmanager.cpp" ]; then
+        echo "tools/userspace/build-fltk.sh: $PIEROGI_DIR is not checked out" >&2
+        echo "Run: git submodule update --init userspace/src/pierogi" >&2
+        exit 1
+    fi
+
     echo "==> building piko-remote"
     remote_ldlibs="$(sed -n 's/^LDLIBS[[:space:]]*=[[:space:]]*//p' "$FLTK_SRC_DIR/makeinclude")"
-    mkdir -p "$STAGE/usr/bin"
-    "$CC" -O2 -Wall -Wextra -c \
-        -o "$STAGE/irstore.o" \
-        "$IRSTORE_SRC"
-    "$CXX" -O2 -Wall -Wextra \
+    work="$REPO/build/piko-remote"
+    rm -rf "$work"
+    mkdir -p "$work/obj" "$STAGE/usr/bin"
+
+    cp -R "$PIEROGI_DIR/keysets" "$PIEROGI_DIR/protocols" "$work/"
+    cp "$PIEROGI_DIR"/*.h \
+       "$PIEROGI_DIR/pirkeysetmetadata.cpp" \
+       "$PIEROGI_DIR/pirackeyset.cpp" \
+       "$PIEROGI_DIR/pirinfraredled.cpp" \
+       "$PIEROGI_DIR/pirmakenames.cpp" \
+       "$PIEROGI_DIR/pirkeynames.cpp" \
+       "$PIEROGI_DIR/pirdeviceinfo.cpp" \
+       "$PIEROGI_DIR/pirdevicetypenames.cpp" \
+       "$work/"
+    cp "$PIKO_REMOTE_DIR"/overlay/*.h "$work/"
+    sed -i 's/^#define PIEROGI_OVERHEAD_HACK .*/#define PIEROGI_OVERHEAD_HACK 0/' \
+        "$work/protocols/pirprotocol.cpp"
+    if ! grep -q '^#define PIEROGI_OVERHEAD_HACK 0$' "$work/protocols/pirprotocol.cpp"; then
+        echo "tools/userspace/build-fltk.sh: pierogi no longer defines PIEROGI_OVERHEAD_HACK" >&2
+        exit 1
+    fi
+    "$PIKO_REMOTE_DIR/gen-keysets.sh" "$PIEROGI_DIR" > "$work/keysets.cxx"
+
+    (cd "$work" && ls *.cpp keysets/*.cpp protocols/*.cpp keysets.cxx) |
+        CXX="$CXX" WORK="$work" QT="$PIKO_REMOTE_DIR/qt" \
+        xargs -P "$JOBS" -I{} sh -c '
+            obj="$WORK/obj/$(echo "$1" | tr / _).o"
+            "$CXX" -O2 -std=c++11 -w -c -I "$WORK" -I "$QT" \
+                -o "$obj" "$WORK/$1"
+        ' sh {}
+
+    "$CXX" -O2 -std=c++11 -Wall -Wextra \
         -isystem "$STAGE/usr/include" \
-        -I "$SRC" \
+        -I "$work" -I "$PIKO_REMOTE_DIR/qt" \
         -o "$STAGE/usr/bin/piko-remote" \
-        "$PIKO_REMOTE_SRC" "$STAGE/irstore.o" \
+        "$PIKO_REMOTE_DIR/piko-remote.cxx" "$PIKO_REMOTE_DIR/remote.cxx" \
+        "$work"/obj/*.o \
         -L"$STAGE/usr/lib" -Wl,-rpath-link="$STAGE/usr/lib" \
-        -lfltk $remote_ldlibs
-    rm -f "$STAGE/irstore.o"
+        -lfltk $remote_ldlibs -lpthread
 
     needed="$("$HOST-readelf" -d "$STAGE/usr/bin/piko-remote" | grep -oE '\[lib[^]]+\]' | tr -d '[]' | tr '\n' ' ')"
     echo "    NEEDED: $needed"
@@ -340,7 +373,7 @@ if [ -f "$PIKO_REMOTE_SRC" ] && [ -f "$IRSTORE_SRC" ]; then
             ;;
     esac
 else
-    echo "==> skipping piko-remote (no $PIKO_REMOTE_SRC)"
+    echo "==> skipping piko-remote (no $PIKO_REMOTE_DIR/piko-remote.cxx)"
 fi
 
 echo ""

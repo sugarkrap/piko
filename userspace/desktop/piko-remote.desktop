@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Remote
-Comment=Learned infrared remote control
+Comment=Universal infrared remote control
 Exec=/usr/local/bin/piko-remote
 Icon=piko-remote.png
 Terminal=false
