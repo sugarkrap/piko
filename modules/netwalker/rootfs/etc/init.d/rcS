@@ -1,0 +1,23 @@
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+hostname netwalker
+
+for bl in /sys/class/backlight/*; do
+	test -f "$bl/max_brightness" && cat "$bl/max_brightness" > "$bl/brightness"
+done
+
+{
+	echo
+	echo "piko on the sharp netwalker pc-z1"
+	echo
+	uname -a
+	grep -E '^(model name|Hardware)' /proc/cpuinfo
+	test -f /sys/class/graphics/fb0/virtual_size && echo "fb0 $(cat /sys/class/graphics/fb0/virtual_size) $(cat /sys/class/graphics/fb0/bits_per_pixel)bpp"
+	free
+	echo
+} > /dev/tty1

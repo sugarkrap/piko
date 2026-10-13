@@ -1,0 +1,4 @@
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+export TERM=linux
+export PS1='\h:\w\$ '

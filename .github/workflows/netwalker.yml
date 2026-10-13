@@ -1,0 +1,48 @@
+name: netwalker sd card
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [test/netwalker]
+
+env:
+  KERNEL_VERSION: "7.1.4"
+
+jobs:
+  sd-card:
+    name: sd card
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+              build-essential gcc-arm-linux-gnueabihf bc bison flex \
+              libssl-dev libelf-dev cpio xz-utils bzip2
+
+      - name: cache the kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: build/kernel/dl
+          key: kernel-tarball-${{ env.KERNEL_VERSION }}
+
+      - name: build the sd card tarball
+        run: ./tools/netwalker/build-sd-card.sh
+
+      - name: summarize
+        run: |
+          echo '### netwalker.tar.gz' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tar -tzvf build/netwalker.tar.gz >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          cat build/netwalker/sd/boot/boot.conf >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netwalker-${{ github.run_number }}
+          path: build/netwalker.tar.gz
+          if-no-files-found: error
