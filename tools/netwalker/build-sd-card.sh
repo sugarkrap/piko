@@ -9,6 +9,8 @@ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 BUILD="${BUILD:-$REPO/build/netwalker}"
 DL_DIR="${DL_DIR:-$REPO/build/kernel/dl}"
 OUT_TARBALL="${OUT_TARBALL:-$REPO/build/netwalker.tar.gz}"
+OUT_IMAGE="${OUT_IMAGE:-$REPO/build/netwalker.img}"
+IMAGE_MB="${IMAGE_MB:-64}"
 
 KERNEL_TARBALL="$DL_DIR/linux-$KERNEL_VERSION.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz"
@@ -99,3 +101,16 @@ echo "/boot/zImage $CMDLINE" > "$SD_DIR/boot/boot.conf"
 tar -C "$SD_DIR" --owner=0 --group=0 -czf "$OUT_TARBALL" boot
 echo "==> $OUT_TARBALL"
 tar -tzvf "$OUT_TARBALL"
+
+echo "==> building the ${IMAGE_MB}MiB sd card image"
+PART_START=1
+PART_SECTORS=$((IMAGE_MB * 2048 - PART_START))
+PART_BLOCKS=$((PART_SECTORS / 8))
+rm -f "$OUT_IMAGE" "$OUT_IMAGE.xz"
+truncate -s "${IMAGE_MB}M" "$OUT_IMAGE"
+printf 'label: dos\nstart=%s, size=%s, type=83, bootable\n' "$PART_START" "$PART_SECTORS" \
+    | sfdisk --quiet --no-reread --no-tell-kernel "$OUT_IMAGE"
+mke2fs -q -F -t ext2 -b 4096 -I 128 -O none -L netwalker -E root_owner=0:0,offset=$((PART_START * 512)) \
+    -d "$SD_DIR" "$OUT_IMAGE" "$PART_BLOCKS"
+xz -T0 -9 "$OUT_IMAGE"
+echo "==> $OUT_IMAGE.xz"
